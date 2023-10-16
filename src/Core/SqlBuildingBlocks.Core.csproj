@@ -1,0 +1,20 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <LangVersion>11.0</LangVersion>
+	<Nullable>enable</Nullable>
+    <RootNamespace>SqlBuildingBlocks</RootNamespace>
+	<Product>Extensible SQL parsing library for multiple databases based on Irony's SQLGrammar.</Product>
+	<PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Link="README.md" Pack="true" PackagePath="\" />
+	  
+	<PackageReference Include="Irony" />
+	<PackageReference Include="System.ValueTuple" />
+  </ItemGroup>  
+	
+</Project>

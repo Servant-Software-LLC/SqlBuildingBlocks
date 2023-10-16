@@ -1,0 +1,17 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <LangVersion>11.0</LangVersion>
+	<Nullable>enable</Nullable>
+	<PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\..\README.md" Link="README.md" Pack="true" PackagePath="\" />
+
+    <ProjectReference Include="..\..\Core\SqlBuildingBlocks.Core.csproj" />
+  </ItemGroup>
+
+</Project>
