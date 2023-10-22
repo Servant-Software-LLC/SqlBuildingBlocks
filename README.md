@@ -19,7 +19,7 @@ SqlBuildingBlocks breaks down SQL into fundamental 'building blocks', or NonTerm
 Our roadmap for SqlBuildingBlocks includes developing custom grammars for popular database technologies such as SQL Server, MySQL and PostgreSQL.  Furthermore, we are working on a general all-purpose query engine which is still in its infancy. Stay tuned for these exciting updates!
 
 ## Contributing
-We're open to contributions from the community. More details about how to contribute will be shared soon. In the meantime, feel free to explore the repository, and we appreciate your patience.
+We're open to contributions from the community. Contributions are welcome. Please refer to our [contributing guidelines](CONTRIBUTING.md) for more information.
 
 ## License
 This project is licensed under the terms of the MIT license. For more information, please see the [LICENSE](LICENSE) file.
