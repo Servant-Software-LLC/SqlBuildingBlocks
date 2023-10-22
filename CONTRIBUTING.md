@@ -1,10 +1,10 @@
-# Contributing to [FileBased.DataProviders]
+# Contributing to SqlBuildingBlocks
 
-First off, thank you for considering contributing to [FileBased.DataProviders]. It's people like you that make [FileBased.DataProviders] such a great tool.
+First off, thank you for considering contributing to SqlBuildingBlocks. It's people like you that make SqlBuildingBlocks such a great tool.
 
 ## Where to Start?
 
-* If you want to report a bug, ensure the report was not already submitted by checking our [issues list](https://github.com/Servant-Software-LLC/FileBased.DataProviders/issues).
+* If you want to report a bug, ensure the report was not already submitted by checking our [issues list](https://github.com/Servant-Software-LLC/SqlBuildingBlocks/issues).
 
 * If you have a feature request, you can also first check if it's already been requested in the issues. If not, feel free to open a new feature request with a clear title and description.
 
