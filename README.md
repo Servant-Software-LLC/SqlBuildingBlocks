@@ -1,7 +1,8 @@
 # SqlBuildingBlocks
+[![Build](https://github.com/Servant-Software-LLC/SqlBuildingBlocks/actions/workflows/main.yml/badge.svg)](https://github.com/Servant-Software-LLC/SqlBuildingBlocks/actions/workflows/main.yml)
 
 ## Project Status
-**IMPORTANT NOTE:** This project is currently under development and not yet viable for production use. It is a work in progress, and we appreciate your patience and interest.
+**IMPORTANT NOTE:** This project is currently under development and not yet viable for production use. It is a work in progress, and we appreciate your patience, help and/or interest.
 
 ## Overview
 SqlBuildingBlocks is an extensible open-source library, designed to parse SQL into manageable, logical classes tailored to different database technologies. It's built upon Irony's SQLGrammar example and leverages design patterns like Factory and Strategy for customization of SQL parsing, making it an excellent tool for working with SQL across multiple databases.
@@ -18,7 +19,7 @@ SqlBuildingBlocks breaks down SQL into fundamental 'building blocks', or NonTerm
 Our roadmap for SqlBuildingBlocks includes developing custom grammars for popular database technologies such as SQL Server, MySQL and PostgreSQL.  Furthermore, we are working on a general all-purpose query engine which is still in its infancy. Stay tuned for these exciting updates!
 
 ## Contributing
-We're open to contributions from the community. More details about how to contribute will be shared soon. In the meantime, feel free to explore the repository, and we appreciate your patience.
+We're open to contributions from the community. Contributions are welcome. Please refer to our [contributing guidelines](CONTRIBUTING.md) for more information.
 
 ## License
 This project is licensed under the terms of the MIT license. For more information, please see the [LICENSE](LICENSE) file.
