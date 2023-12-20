@@ -26,7 +26,10 @@ public class TableDataProviderAdaptor : ITableDataProvider
         if (table is null)
             throw new ArgumentNullException(nameof(table));
 
-        if (!dictDataSets.TryGetValue(table.DatabaseName, out var dataSet))
+        if (string.IsNullOrEmpty(table.DatabaseName))
+            throw new ArgumentException($"DatabaseName must be provided for the {nameof(table)} instance.", nameof(table.DatabaseName));
+
+        if (!dictDataSets.TryGetValue(table.DatabaseName!, out var dataSet))
             throw new ArgumentException($"Dataset '{table.DatabaseName}' was not found", nameof(table.DatabaseName));
 
         if (!dataSet.Tables.Contains(table.TableName))
@@ -39,8 +42,11 @@ public class TableDataProviderAdaptor : ITableDataProvider
 
     public IQueryable? GetTableData(SqlTable sqlTable)
     {
-        if (sqlTable == null)
+        if (sqlTable is null)
             throw new ArgumentNullException(nameof(sqlTable));
+
+        if (sqlTable.DatabaseName is null)
+            throw new ArgumentException($"DatabaseName must be provided for the {nameof(sqlTable)} instance.", nameof(sqlTable.DatabaseName));
 
         if (!dictDataSets.TryGetValue(sqlTable.DatabaseName, out var dataSet))
             throw new ArgumentException($"Dataset '{sqlTable.DatabaseName}' was not found", nameof(sqlTable.DatabaseName));
@@ -54,10 +60,10 @@ public class TableDataProviderAdaptor : ITableDataProvider
 
     public (bool DatabaseServiced, IEnumerable<SqlTableInfo> Tables) GetTables(string? database)
     {
-        if (string.IsNullOrWhiteSpace(database))
+        if (string.IsNullOrEmpty(database))
             throw new ArgumentNullException(nameof(database));
 
-        if (!dictDataSets.TryGetValue(database, out var dataSet))
+        if (!dictDataSets.TryGetValue(database!, out var dataSet))
             throw new ArgumentException($"Dataset '{database}' was not found", nameof(database));
 
         var tables = dataSet.Tables.OfType<DataTable>().Select(t => new SqlTableInfo(new SqlTable(database, t.TableName)));

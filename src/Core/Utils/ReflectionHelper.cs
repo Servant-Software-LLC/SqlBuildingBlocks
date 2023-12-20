@@ -4,16 +4,16 @@ namespace SqlBuildingBlocks.Utils;
 
 public static class ReflectionHelper
 {
-    public static TResult? CallMethod<TResult>(object instance, string methodName, Type typeParameter, params object[] methodArguments) =>
+    public static TResult? CallMethod<TResult>(object instance, string methodName, Type typeParameter, params object?[] methodArguments) =>
         CallMethod<TResult>(instance, methodName, new Type[] { typeParameter }, methodArguments);
 
-    public static TResult? CallMethod<TResult>(object instance, string methodName, Type[] typeParameters, params object[] methodArguments) =>
+    public static TResult? CallMethod<TResult>(object instance, string methodName, Type[] typeParameters, params object?[] methodArguments) =>
         CallMethod<TResult>(instance, instance.GetType(), methodName, typeParameters, methodArguments);
 
-    public static TResult? CallMethod<TResult, TInstance>(TInstance instance, string methodName, Type typeParameter, params object[] methodArguments) =>
+    public static TResult? CallMethod<TResult, TInstance>(TInstance instance, string methodName, Type typeParameter, params object?[] methodArguments) =>
         CallMethod<TResult, TInstance>(instance, methodName, new Type[] { typeParameter }, methodArguments);
 
-    public static TResult? CallMethod<TResult, TInstance>(TInstance instance, string methodName, Type[] typeParameters, params object[] methodArguments) =>
+    public static TResult? CallMethod<TResult, TInstance>(TInstance instance, string methodName, Type[] typeParameters, params object?[] methodArguments) =>
         CallMethod<TResult>(instance, typeof(TInstance), methodName, typeParameters, methodArguments);
 
     public static MethodInfo GetSpecializedMethod(Type typeWithMethod, string methodName, Type[] typeParameters)
@@ -33,7 +33,7 @@ public static class ReflectionHelper
         return method;
     }
 
-    private static TResult? CallMethod<TResult>(object? instance, Type typeWithMethod, string methodName, Type[] typeParameters, params object[] methodArguments)
+    private static TResult? CallMethod<TResult>(object? instance, Type typeWithMethod, string methodName, Type[] typeParameters, params object?[] methodArguments)
     {
         if (instance == null)
             throw new ArgumentNullException(nameof(instance));

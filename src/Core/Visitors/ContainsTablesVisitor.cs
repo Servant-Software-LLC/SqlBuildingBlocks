@@ -21,7 +21,12 @@ class ContainsTablesVisitor : ISqlExpressionVisitor
 
     public SqlExpression? Visit(SqlColumnRef column)
     {
-        var columnOfOperand = (SqlColumn)column.Column;
+        if (column.Column is not SqlColumn columnOfOperand)
+            throw new ArgumentException($"The {nameof(column)}.{nameof(column.Column)} parameter must be convertable to a {typeof(SqlColumnRef)}.", nameof(column));
+
+        if (columnOfOperand.TableRef is null)
+            throw new ArgumentNullException(nameof(columnOfOperand.TableRef), $"{nameof(columnOfOperand)}.{nameof(columnOfOperand.TableRef)} cannot be null.");
+
         if (!tables.Contains(columnOfOperand.TableRef))
             Result = false;
 

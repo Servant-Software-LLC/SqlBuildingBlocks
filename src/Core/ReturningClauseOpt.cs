@@ -28,7 +28,7 @@ public class ReturningClauseOpt : NonTerminal
 
     public Id Id { get; }
 
-    public virtual SqlReturning Create(ParseTreeNode returningClause)
+    public virtual SqlReturning? Create(ParseTreeNode returningClause)
     {
         if (returningClause.ChildNodes.Count > 0)
         {

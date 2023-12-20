@@ -30,7 +30,7 @@ public class LimitOffsetClauseOpt : SqlBuildingBlocks.Shared.LimitOffsetClauseOp
             | LIMIT + value + OFFSET + value;
     }
 
-    public override SqlLimitOffset Create(ParseTreeNode limitOffsetClauseOpt)
+    public override SqlLimitOffset? Create(ParseTreeNode limitOffsetClauseOpt)
     {
         if (limitOffsetClauseOpt.Term.Name != TermName)
         {

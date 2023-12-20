@@ -5,7 +5,7 @@ public class SqlCreateTableDefinition
     /// <summary>
     /// Full name of the table to be created.  <see cref="SqlTable.TableAlias"/> will not be set.
     /// </summary>
-    public SqlTable Table { get; set; }
+    public SqlTable? Table { get; set; }
 
     public IList<SqlColumnDefinition> Columns { get; private set; } = new List<SqlColumnDefinition>();
 

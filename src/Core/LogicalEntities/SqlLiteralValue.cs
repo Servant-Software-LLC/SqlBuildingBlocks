@@ -9,7 +9,7 @@ public class SqlLiteralValue
     public SqlLiteralValue(string str) => String = str;
     public SqlLiteralValue(int integer) => Int = integer;
     public SqlLiteralValue(decimal dec) => Decimal = dec;
-    public SqlLiteralValue(object value)
+    public SqlLiteralValue(object? value)
     {
         if (value == null) 
             return;
@@ -77,7 +77,9 @@ public class SqlLiteralValue
         {
             if (companionOfBinExpr.Column != null)
             {
-                var columnOfCompanionOperand = (SqlColumn)companionOfBinExpr.Column.Column;
+                if (companionOfBinExpr.Column.Column is not SqlColumn columnOfCompanionOperand)
+                    throw new Exception($"Expected the companionOfBinExpr.Column.Column column to be a {nameof(SqlColumn)}.");
+
                 if (columnOfCompanionOperand.ColumnType == null)
                     throw new Exception($"Expected the {columnOfCompanionOperand} column to have its {nameof(SqlColumn.ColumnType)} property set.");
 

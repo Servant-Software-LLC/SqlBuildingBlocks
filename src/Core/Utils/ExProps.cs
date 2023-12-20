@@ -23,7 +23,7 @@ public class ExProps<TDerived> where TDerived : ExProps<TDerived>
         var propertyInfo = LambdaHelper<TDerived>.GetPropertyInfo(extendedPropertySelector);
         if (!extendedProperties().ContainsKey(propertyInfo.Name))
         {
-            property = default;
+            property = default!;
             return false;
         }
 
@@ -41,7 +41,7 @@ public class ExProps<TDerived> where TDerived : ExProps<TDerived>
     }
 
     protected TExtendedPropertyType Get<TExtendedPropertyType>(string key) where TExtendedPropertyType : class
-            => extendedProperties()[key] as TExtendedPropertyType;
+            => (extendedProperties()[key] as TExtendedPropertyType)!;
 
     protected TExtendedPropertyType GetValueType<TExtendedPropertyType>(string key) where TExtendedPropertyType : struct
             => (TExtendedPropertyType)extendedProperties()[key];

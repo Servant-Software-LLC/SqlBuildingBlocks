@@ -6,7 +6,7 @@ namespace SqlBuildingBlocks.LogicalEntities;
 
 public class SqlUpdateDefinition
 {
-    public SqlTable Table { get; set;  }
+    public SqlTable? Table { get; set;  }
 
     public IList<SqlAssignment> Assignments { get; private set; } = new List<SqlAssignment>();
 

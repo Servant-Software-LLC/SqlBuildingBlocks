@@ -15,6 +15,6 @@ public class Consolidator<TCommonInterface>
         if (!string.IsNullOrEmpty(exceptionMessage))
             throw new Exception(exceptionMessage);
 
-        return default;
+        return default!;
     }
 }

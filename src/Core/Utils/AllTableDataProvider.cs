@@ -23,7 +23,7 @@ public class AllTableDataProvider : Consolidator<ITableDataProvider>, IAllTableD
         ConsolidateService(tableDataProviders, i => i.GetTables(database), $"There is no database named {database}",
                            resultFound: result => result.DatabaseServiced);
 
-    public IQueryable GetTableData(SqlTable table) =>
+    public IQueryable? GetTableData(SqlTable table) =>
         ConsolidateService(tableDataProviders, i => i.GetTableData(table), $"There is no table by the name of {table}",
                            resultFound: result => result != null);
 

@@ -41,7 +41,7 @@ public class LimitOffsetClauseOpt : NonTerminal
 
     public Parameter Parameter { get; }
 
-    public virtual SqlLimitOffset Create(ParseTreeNode limitOffsetClauseOpt)
+    public virtual SqlLimitOffset? Create(ParseTreeNode limitOffsetClauseOpt)
     {
         if (limitOffsetClauseOpt.Term.Name != TermName)
         {

@@ -166,6 +166,9 @@ public class QueryEngine : IQueryEngine
     {
         foreach (DataRow dataRow in fromDataRows)
         {
+            if (sqlSelectDefinition.Table is null)
+                throw new ArgumentNullException(nameof(sqlSelectDefinition.Table), $"Cannot lookup table in processingState.DataRowsOfOtherTables because table value is null");
+
             processingState.DataRowsOfOtherTables[sqlSelectDefinition.Table] = dataRow;
 
             var enumerableQueryRows = ResolveSelectColumns(processingState, sqlSelectDefinition.Joins.ToArray());
@@ -231,13 +234,16 @@ public class QueryEngine : IQueryEngine
 
     private IEnumerable<DataRow>? GetQueryableRowsInFromTable(ProcessingState processingState)
     {
-        if (sqlSelectDefinition.Table == null)
+        if (sqlSelectDefinition.Table is null)
             return null;
 
         if (!processingState.TablesProjections.TryGetValue(sqlSelectDefinition.Table, out var tableWithColumnsToProjectOnto))
             tableWithColumnsToProjectOnto = emptyDataTable.Value;
 
         var fromTableQueryable = tableDataProvider.GetTableData(sqlSelectDefinition.Table);
+        if (fromTableQueryable is null)
+            throw new ArgumentNullException($"Table '{sqlSelectDefinition.Table.TableName}' was not found in DataSet '{sqlSelectDefinition.Table.DatabaseName}'", nameof(fromTableQueryable));
+
         if (dataRowType)
             fromTableQueryable = fromTableQueryable.Cast<DataRow>();
 
@@ -281,6 +287,9 @@ public class QueryEngine : IQueryEngine
     private IEnumerable<DataRow> GetQueryableRowsInJoinTable(ProcessingState processingState, SqlJoin join)
     {
         var joinTableQueryable = tableDataProvider.GetTableData(join.Table);
+        if (joinTableQueryable is null)
+            throw new ArgumentNullException($"Table '{join.Table.TableName}' was not found in DataSet '{join.Table.DatabaseName}'", nameof(joinTableQueryable));
+
         if (dataRowType)
             joinTableQueryable = joinTableQueryable.Cast<DataRow>();
 
@@ -291,7 +300,7 @@ public class QueryEngine : IQueryEngine
         //Find out if we can limit the rows to use by applying the WHERE clause now. (i.e. if WHERE isn't already used and doesn't contain tables further down in the JOINs)
         processingState.TablesInProcessing.Add(join.Table);
         if (sqlSelectDefinition.WhereClause != null &&
-            processingState.WhereApplied == null &&
+            processingState.WhereApplied is null &&
             WhereClauseContainsOnlyTables(sqlSelectDefinition.WhereClause, processingState.TablesInProcessing))
         {
             //Logically AND the JOIN ON and the WHERE
@@ -359,7 +368,7 @@ public class QueryEngine : IQueryEngine
 
         //If there are no JOINs then no values are substituted into the clauses and therefore, they don't need
         //projections.
-        if (sqlSelectDefinition.Table == null || sqlSelectDefinition.Joins == null || sqlSelectDefinition.Joins.Count == 0)
+        if (sqlSelectDefinition.Table is null || sqlSelectDefinition.Joins is null || sqlSelectDefinition.Joins.Count == 0)
             return;
 
         //Get all the ColumnRefs in the WHERE and JOIN ON clauses that will be substituting values
@@ -407,6 +416,9 @@ public class QueryEngine : IQueryEngine
 
         foreach (var column in allColumns.Columns)
         {
+            if (column.ColumnType == null)
+                throw new ArgumentException($"Column {column} has null for its {nameof(column.ColumnType)} property.");
+
             AddColumn(processingState, column.ColumnName, null, column.ColumnType, false, column, column.TableRef, false);
         }
     }
@@ -452,7 +464,7 @@ public class QueryEngine : IQueryEngine
         if (!hiddenColumn)
             AddOutputColumn(processingState, columnName, columnAlias, dataColumnType, duplicateColumnName, column, associatedTable, null);
 
-        if (associatedTable != null)
+        if (associatedTable is not null)
         {
             if (!processingState.TablesProjections.TryGetValue(associatedTable, out DataTable dataTable))
             {
@@ -488,9 +500,12 @@ public class QueryEngine : IQueryEngine
         return $"{associatedTable.TableName}.{columnName}";
     }
 
-    private static string GetColumnName(string outputColumnName)
+    private static string GetColumnName(string? outputColumnName)
     {
-        var indexOfLastPeriod = outputColumnName.LastIndexOf('.');
+        if (string.IsNullOrEmpty(outputColumnName))
+            throw new ArgumentException($"The {nameof(outputColumnName)} parameter cannot be null or empty.");
+
+        var indexOfLastPeriod = outputColumnName!.LastIndexOf('.');
         return indexOfLastPeriod < 0 ? outputColumnName : outputColumnName.Substring(indexOfLastPeriod + 1);
     }
 
@@ -501,7 +516,7 @@ public class QueryEngine : IQueryEngine
         newColumn.DataType = dataType;
         newColumn.ExProps().Column = column;
 
-        if (associatedTable != null)
+        if (associatedTable is not null)
         {
             newColumn.ExProps().Table = associatedTable;
         }

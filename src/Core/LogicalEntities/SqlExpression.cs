@@ -67,6 +67,10 @@ public class SqlExpression
         if (Value != null)
         {
             var valueExpression = Value.GetExpression(companionOfBinExpr);
+
+            if (Value.Value == null)
+                throw new Exception($"The {nameof(Value.Value)} property of {nameof(Value)} is null.  Unable to determine the type of the value.");
+
             var castToType = CastToType(Value.Value.GetType(), companionOfBinExpr);
 
             return Convert(valueExpression, Value.Value.GetType(), castToType);
@@ -82,8 +86,13 @@ public class SqlExpression
         if (Column == null)
             throw new Exception("Operand wasn't a Column as expected.");
 
+        if (Column.Column is not SqlColumn columnOfOperand)
+            throw new Exception($"The {nameof(Column)}.{nameof(Column.Column)} property must be convertable to a {typeof(SqlColumn)}.");
+
+        if (columnOfOperand.TableRef is null)
+            throw new ArgumentNullException(nameof(columnOfOperand.TableRef), $"{nameof(columnOfOperand)}.{nameof(columnOfOperand.TableRef)} cannot be null.");
+
         //Look for table rows that are providing substitute values.
-        var columnOfOperand = (SqlColumn)Column.Column;
         if (substituteValues != null && columnOfOperand.TableRef != tableDataRow &&
             substituteValues.TryGetValue(columnOfOperand.TableRef, out DataRow? rowSubstituteValues))
         {
@@ -105,6 +114,9 @@ public class SqlExpression
 
     private Expression GetExpressionForDataRow(ParameterExpression param, SqlColumn? columnOfOperand, SqlExpression companionOfBinExpr)
     {
+        if (columnOfOperand is null)
+            throw new ArgumentNullException(nameof(columnOfOperand), $"{nameof(columnOfOperand)} cannot be null.");
+
         //Since this is a DataRow, call param[columnOfOperand.ColumnName] to get the value of the column in the DataRow.
 
         // Create a constant expression for the column name
@@ -115,6 +127,9 @@ public class SqlExpression
 
         var valueExpression = Expression.MakeIndex(param, indexerProperty, new[] { columnNameExpression });
         
+        if (columnOfOperand.ColumnType is null)
+            throw new Exception($"Expected the {columnOfOperand} column to have its {nameof(SqlColumn.ColumnType)} property set.");
+
         var castToType = CastToType(columnOfOperand.ColumnType, companionOfBinExpr);
         return Convert(valueExpression, columnOfOperand.ColumnType, castToType);
     }
