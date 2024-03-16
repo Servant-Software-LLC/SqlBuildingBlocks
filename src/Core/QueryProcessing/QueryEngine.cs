@@ -148,8 +148,11 @@ public class QueryEngine : IQueryEngine
             var selectColumns = queryOutput.NewRow();
             foreach (DataColumn dataColumn in queryOutput.Columns)
             {
-                //Copy the column value from fromDataRows to the selectColumns
-                selectColumns[dataColumn.ColumnName] = dataRow[GetColumnName(dataColumn.ColumnName)];
+                //Items in the dataRow are using their original column names, so we need to get the original column name
+                var sqlColumn = dataColumn.ExProps().Column;
+
+                //Copy the column value from fromDataRows to the selectColumns. 
+                selectColumns[dataColumn.ColumnName] = dataRow[GetColumnName(sqlColumn.ColumnName)];
             }
 
             yield return selectColumns;
