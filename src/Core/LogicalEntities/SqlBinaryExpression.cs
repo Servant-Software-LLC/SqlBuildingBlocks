@@ -74,11 +74,15 @@ public class SqlBinaryExpression
 
     private BinaryExpression GetBinaryExpression(Expression left, Expression right, Func<Expression, Expression, BinaryExpression> binaryOperatorExpressionFunc)
     {
-        var leftNullable = left.Type.IsGenericType && left.Type.GetGenericTypeDefinition() == typeof(Nullable<>);
-        var rightNullable = right.Type.IsGenericType && right.Type.GetGenericTypeDefinition() == typeof(Nullable<>);
+        var commonType = GetCommonType(left.Type, right.Type);
+        var leftCasted = CastExpression(left, commonType);
+        var rightCasted = CastExpression(right, commonType);
+
+        var leftNullable = IsNullable(left.Type);
+        var rightNullable = IsNullable(right.Type);
 
         if (!leftNullable && !rightNullable)
-            return binaryOperatorExpressionFunc(left, right);
+            return binaryOperatorExpressionFunc(leftCasted, rightCasted);
 
         var leftHasValue = leftNullable ? Expression.Property(left, "HasValue") : null;
         var leftValue = leftNullable ? Expression.Property(left, "Value") : null;
@@ -91,7 +95,7 @@ public class SqlBinaryExpression
         if (leftNullable && !rightNullable)
         {
             var ternary = Expression.Condition(Expression.Not(leftHasValue), leftNull, Expression.Convert(leftValue, left.Type));
-            var argument = Expression.Convert(right, left.Type);
+            var argument = Expression.Convert(rightCasted, left.Type);
             var binaryOperatorExpression = binaryOperatorExpressionFunc(ternary, argument);
             return Expression.And(leftHasValue, binaryOperatorExpression);
         }
@@ -100,7 +104,7 @@ public class SqlBinaryExpression
         if (rightNullable && !leftNullable)
         {
             var ternary = Expression.Condition(Expression.Not(rightHasValue), rightNull, Expression.Convert(rightValue, right.Type));
-            var argument = Expression.Convert(left, right.Type);
+            var argument = Expression.Convert(leftCasted, right.Type);
             var binaryOperatorExpression = binaryOperatorExpressionFunc(argument, ternary);
             return Expression.And(rightHasValue, binaryOperatorExpression);
         }
@@ -114,6 +118,71 @@ public class SqlBinaryExpression
         return resultExpression;
     }
 
+    private Type GetCommonType(Type type1, Type type2)
+    {
+        // If both types are same, return that type
+        if (type1 == type2)
+            return type1;
+
+        // If one type is assignable from the other, return the assignable type
+        if (type1.IsAssignableFrom(type2))
+            return type1;
+        if (type2.IsAssignableFrom(type1))
+            return type2;
+
+        // If one of the types is nullable, get the underlying type and try again
+        if (IsNullable(type1))
+            return GetCommonType(Nullable.GetUnderlyingType(type1), type2);
+        if (IsNullable(type2))
+            return GetCommonType(type1, Nullable.GetUnderlyingType(type2));
+
+        // Example of handling some numeric promotions explicitly
+        Dictionary<Type, int> typePrecedence = new Dictionary<Type, int>
+        {
+            { typeof(byte), 1 },
+            { typeof(short), 2 },
+            { typeof(int), 3 },
+            { typeof(long), 4 },
+            { typeof(float), 5 },
+            { typeof(double), 6 },
+            { typeof(decimal), 7 }
+        };
+
+        if (typePrecedence.TryGetValue(type1, out int type1Precedence) &&
+            typePrecedence.TryGetValue(type2, out int type2Precedence))
+        {
+            Type higherPrecedenceType = type1Precedence > type2Precedence ? type1 : type2;
+
+            // You might want to handle nullable types here as well
+            return higherPrecedenceType;
+        }
+
+        // If no common type found, throw an exception
+        throw new Exception($"No common type found for {type1} and {type2}");
+    }
+
+    private Expression CastExpression(Expression expression, Type targetType)
+    {
+        // If expression type matches target type, no need for casting
+        if (expression.Type == targetType)
+            return expression;
+
+        // If expression is nullable and target type is non-nullable, perform null check and cast
+        if (IsNullable(expression.Type) && !IsNullable(targetType))
+        {
+            var hasValue = Expression.Property(expression, "HasValue");
+            var value = Expression.Property(expression, "Value");
+            return Expression.Condition(Expression.Not(hasValue), Expression.Constant(null, targetType), Expression.Convert(value, targetType));
+        }
+
+        // Perform standard conversion
+        return Expression.Convert(expression, targetType);
+    }
+
+    private bool IsNullable(Type type)
+    {
+        return type.IsGenericType && type.GetGenericTypeDefinition() == typeof(Nullable<>);
+    }
 
     public string ToExpressionString() => $"{Left.ToExpressionString()} {Expr.CreateOperator(Operator)} {Right.ToExpressionString()}";
     public override string ToString() => $"{Left} { Expr.CreateOperator(Operator)} {Right}";
