@@ -16,7 +16,7 @@ public class Id : NonTerminal
     public Id(Grammar grammar) : this(grammar, new SimpleId(grammar)) { }
 
     public Id(Grammar grammar, SimpleId id_simple)
-        : base(nameof(Id).CamelCase())
+        : base(TermName)
     {
         SimpleId = id_simple ?? throw new ArgumentNullException(nameof(id_simple));
 
