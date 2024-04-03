@@ -31,8 +31,9 @@ public class Stmt : NonTerminal
         UpdateStmt updateStmt = new(grammar, selectStmt.TableName, funcCall, whereClauseOpt);
         DeleteStmt deleteStmt = new(grammar, selectStmt.TableName, whereClauseOpt, updateStmt.ReturningClauseOpt);
         CreateTableStmt createTableStmt = new(grammar, selectStmt.Id);
+        AlterStmt alterStmt = new(grammar, selectStmt.Id, createTableStmt.ColumnDef);
 
-        var internalState = DetermineInternalState(selectStmt, insertStmt, updateStmt, deleteStmt, createTableStmt);
+        var internalState = DetermineInternalState(selectStmt, insertStmt, updateStmt, deleteStmt, createTableStmt, alterStmt);
         stmts = internalState.Stmts;
         Rule = internalState.Rule;
         grammar.MarkTransient(this);
@@ -61,6 +62,7 @@ public class Stmt : NonTerminal
         UpdateStmt? updateStmt = null;
         DeleteStmt? deleteStmt = null;
         CreateTableStmt? createTableStmt = null;
+        AlterStmt? alterStmt = null;
 
         //Compose the rule for this instance from all of the provided statments.
         for (int i = 0; i < stmts.Length; i++)
@@ -87,6 +89,9 @@ public class Stmt : NonTerminal
                 case CreateTableStmt createTableStmt1:
                     createTableStmt = createTableStmt1;
                     break;
+                case AlterStmt alterStmt1:
+                    alterStmt = alterStmt1;
+                    break;
                 default:
                     throw new ArgumentOutOfRangeException($"The statement of type {stmt.GetType()} was not expected.");
             }
@@ -97,7 +102,7 @@ public class Stmt : NonTerminal
                 rule |= stmts[i];
         }
 
-        return new(rule!, new(selectStmt, insertStmt, updateStmt, deleteStmt, createTableStmt));
+        return new(rule!, new(selectStmt, insertStmt, updateStmt, deleteStmt, createTableStmt, alterStmt));
     }
 
     public virtual SqlDefinition Create(ParseTreeNode stmt)
