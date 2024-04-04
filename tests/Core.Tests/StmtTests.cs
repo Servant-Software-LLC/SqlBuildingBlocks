@@ -21,8 +21,9 @@ public class StmtTests
             UpdateStmt updateStmt = new(this, selectStmt.TableName, selectStmt.FuncCall, selectStmt.WhereClauseOpt);
             DeleteStmt deleteStmt = new(this, selectStmt.TableName, selectStmt.WhereClauseOpt, updateStmt.ReturningClauseOpt);
             CreateTableStmt createTableStmt = new(this, selectStmt.Id);
+            AlterStmt alterStmt = new(this, selectStmt.Id, createTableStmt.ColumnDef);
 
-            Stmt stmt = new(this, selectStmt, insertStmt, updateStmt, deleteStmt, createTableStmt);
+            Stmt stmt = new(this, selectStmt, insertStmt, updateStmt, deleteStmt, createTableStmt, alterStmt);
             Root = stmt;
         }
 
@@ -46,6 +47,7 @@ public class StmtTests
         Assert.Null(sqlDefinition.Update);
         Assert.Null(sqlDefinition.Delete);
         Assert.Null(sqlDefinition.Create);
+        Assert.Null(sqlDefinition.Alter);
     }
 
     [Fact]
@@ -64,6 +66,7 @@ public class StmtTests
         Assert.Null(sqlDefinition.Update);
         Assert.Null(sqlDefinition.Delete);
         Assert.Null(sqlDefinition.Create);
+        Assert.Null(sqlDefinition.Alter);
     }
 
     [Fact]
@@ -82,6 +85,7 @@ public class StmtTests
         Assert.NotNull(sqlDefinition.Update);
         Assert.Null(sqlDefinition.Delete);
         Assert.Null(sqlDefinition.Create);
+        Assert.Null(sqlDefinition.Alter);
     }
 
     [Fact]
@@ -100,6 +104,7 @@ public class StmtTests
         Assert.Null(sqlDefinition.Update);
         Assert.NotNull(sqlDefinition.Delete);
         Assert.Null(sqlDefinition.Create);
+        Assert.Null(sqlDefinition.Alter);
     }
 
     [Fact]
@@ -118,6 +123,25 @@ public class StmtTests
         Assert.Null(sqlDefinition.Update);
         Assert.Null(sqlDefinition.Delete);
         Assert.NotNull(sqlDefinition.Create);
+        Assert.Null(sqlDefinition.Alter);
     }
 
+    [Fact]
+    public void Stmt_AlterTable()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "ALTER TABLE Customers ADD Age INT");
+
+        DatabaseConnectionProvider databaseConnectionProvider = new();
+        TableSchemaProvider tableSchemaProvider = new();
+        var sqlDefinition = grammar.Create(node, databaseConnectionProvider, tableSchemaProvider);
+
+        //Assert - Only need to assert that the correct type of statement was created.  Each statement type has its own unit tests to test their individual details.
+        Assert.Null(sqlDefinition.Select);
+        Assert.Null(sqlDefinition.Insert);
+        Assert.Null(sqlDefinition.Update);
+        Assert.Null(sqlDefinition.Delete);
+        Assert.Null(sqlDefinition.Create);
+        Assert.NotNull(sqlDefinition.Alter);
+    }
 }

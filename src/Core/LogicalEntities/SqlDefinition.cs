@@ -11,6 +11,7 @@ public class SqlDefinition
     public SqlDefinition(SqlUpdateDefinition update) => Update = update?? throw new ArgumentNullException(nameof(update));
     public SqlDefinition(SqlDeleteDefinition delete) => Delete = delete ?? throw new ArgumentNullException(nameof(delete));
     public SqlDefinition(SqlCreateTableDefinition create) => Create = create ?? throw new ArgumentNullException(nameof(create));
+    public SqlDefinition(SqlAlterTableDefinition alter) => Alter = alter ?? throw new ArgumentNullException(nameof(alter));
 
     //Only one of the following properties will ever be set.  Bounded by the ctors.
     public SqlSelectDefinition? Select { get; }
@@ -18,6 +19,7 @@ public class SqlDefinition
     public SqlUpdateDefinition? Update { get; }
     public SqlDeleteDefinition? Delete { get;}
     public SqlCreateTableDefinition? Create { get; }
+    public SqlAlterTableDefinition? Alter { get; }
 
     public void ResolveParameters(DbParameterCollection parameters)
     {
@@ -27,6 +29,7 @@ public class SqlDefinition
         Delete?.ResolveParameters(parameters);
 
         //NOTE: CREATE TABLE does not use parameters
+        //NOTE: ALTER TABLE does not use parameters
     }
 
     /// <summary>
@@ -41,6 +44,7 @@ public class SqlDefinition
         Delete?.ResolveFunctions(functionProvider);
 
         //NOTE: CREATE TABLE does not use functions
+        //NOTE: ALTER TABLE does not use functions
     }
 
     public override string ToString()
@@ -50,6 +54,7 @@ public class SqlDefinition
         if (Update != null) return Update.ToString();
         if (Delete != null) return Delete.ToString();
         if (Create != null) return Create.ToString();
+        if (Alter != null) return Alter.ToString();
 
         return "SQL definition type not set";
     }

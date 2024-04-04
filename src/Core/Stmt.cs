@@ -152,6 +152,15 @@ public class Stmt : NonTerminal
             return new(stmts.CreateTableStmt.Create(stmt));
         }
 
+        //ALTER TABLE
+        if (stmt.Term.Name == AlterStmt.TermName)
+        {
+            if (stmts.AlterStmt == null)
+                throw new ArgumentNullException(nameof(stmts.AlterStmt), $"Unable to create a {nameof(SqlDefinition)} instance for Irony term, {stmt.Term.Name}, because a {typeof(AlterStmt)} was not provided to the ctor of {nameof(Stmt)}");
+
+            return new(stmts.AlterStmt.Create(stmt));
+        }
+
         var thisMethod = MethodBase.GetCurrentMethod() as MethodInfo;
         throw new ArgumentException($"Cannot create building block of type {thisMethod!.ReturnType}.  The TermName for node is {stmt.Term.Name} which does not match any of the SQL statement types ({SelectStmt.TermName}, {InsertStmt.TermName}, {UpdateStmt.TermName}, {DeleteStmt.TermName}) or {CreateTableStmt.TermName}", nameof(stmt));
     }
