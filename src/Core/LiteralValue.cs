@@ -8,16 +8,28 @@ namespace SqlBuildingBlocks;
 public class LiteralValue : NonTerminal
 {
     public static string TermName => MethodBase.GetCurrentMethod().DeclaringType.Name.CamelCase();
+    private const string TrueLiteral = "TrueLiteral";
+    private const string FalseLiteral = "FalseLiteral";
 
     public LiteralValue(Grammar grammar)
         : base(TermName)
     {
         var NULL = grammar.ToTerm("NULL");  // explicitly define NULL as a literal term
 
+        // Define boolean literals
+        var trueLiteral = new NonTerminal(TrueLiteral);
+        var falseLiteral = new NonTerminal(FalseLiteral);
+
         StringLiteral string_literal = new("string", "'", StringOptions.AllowsDoubledQuote);
         NumberLiteral number = new("number");
 
-        Rule = string_literal | number | NULL;
+        // Rule for true literals
+        trueLiteral.Rule = grammar.ToTerm("TRUE") | "True" | "T" | "t" | "yes" | "on";
+
+        // Rule for false literals
+        falseLiteral.Rule = grammar.ToTerm("FALSE") | "False" | "F" | "f" | "no" | "off";
+
+        Rule = string_literal | number | trueLiteral | falseLiteral | NULL;
 
         grammar.MarkReservedWords("NULL");
     }
@@ -31,8 +43,14 @@ public class LiteralValue : NonTerminal
         }
 
         var childNode = parseTreeNode.ChildNodes[0];
-        if (childNode.Term.Name == "NULL")
+        var termName = childNode.Term.Name;
+        if (termName == "NULL")
             return new();
+
+        if (termName == TrueLiteral)
+            return new(true);
+        if (termName == FalseLiteral)
+            return new(false);
 
         var literalValue = childNode.Token.Value;
 

@@ -9,6 +9,7 @@ public class SqlLiteralValue
     public SqlLiteralValue(string str) => String = str;
     public SqlLiteralValue(int integer) => Int = integer;
     public SqlLiteralValue(decimal dec) => Decimal = dec;
+    public SqlLiteralValue(bool boolean) => Boolean = boolean;
     public SqlLiteralValue(object? value)
     {
         if (value == null) 
@@ -32,6 +33,12 @@ public class SqlLiteralValue
             return;
         }
 
+        if (value is bool boolean)
+        {
+            Boolean = boolean;
+            return;
+        }
+
         if (value == System.DBNull.Value)
         {
             DBNull = true;
@@ -44,6 +51,7 @@ public class SqlLiteralValue
     public string? String { get; }
     public int? Int { get; }
     public decimal? Decimal { get; }
+    public bool? Boolean { get; }
     public bool DBNull { get; }
 
     public object? Value
@@ -58,6 +66,9 @@ public class SqlLiteralValue
 
             if (Decimal != null)
                 return Decimal;
+
+            if (Boolean != null)
+                return Boolean;
 
             if (DBNull) 
                 return System.DBNull.Value;
@@ -99,6 +110,11 @@ public class SqlLiteralValue
             return Expression.Constant(Decimal);
         }
 
+        if (Boolean != null)
+        {
+            return Expression.Constant(Boolean);
+        }
+
         return Expression.Constant(null);
     }
 
@@ -108,6 +124,7 @@ public class SqlLiteralValue
         String != null ? $"'{String}'" :
         Int != null ? Int.ToString() :
         Decimal != null ? Decimal.ToString() :
+        Boolean != null ? Boolean.ToString().ToUpperInvariant() :
         DBNull ? "DBNull" :
         "NULL";
 }

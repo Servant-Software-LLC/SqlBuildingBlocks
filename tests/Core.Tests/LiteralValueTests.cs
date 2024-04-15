@@ -51,6 +51,48 @@ public class LiteralValueTests
         Assert.Null(literalValue.String);
     }
 
+    [Theory]
+    [InlineData("TRUE")]
+    [InlineData("True")]
+    [InlineData("T")]
+    [InlineData("t")]
+    [InlineData("yes")]
+    [InlineData("on")]
+    public void CanCreateTrueBooleanLiteralValue(string input)
+    {
+        // Arrange
+
+        // Act
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, input);
+        var literalValue = grammar.Create(node);
+
+        // Assert
+        Assert.Equal(true, literalValue.Boolean);
+        Assert.Equal("TRUE", literalValue.ToString());
+    }
+
+    [Theory]
+    [InlineData("FALSE")]
+    [InlineData("False")]
+    [InlineData("F")]
+    [InlineData("f")]
+    [InlineData("no")]
+    [InlineData("off")]
+    public void CanCreateFalseBooleanLiteralValue(string input)
+    {
+        // Arrange
+
+        // Act
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, input);
+        var literalValue = grammar.Create(node);
+
+        // Assert
+        Assert.Equal(false, literalValue.Boolean);
+        Assert.Equal("FALSE", literalValue.ToString());
+    }
+
     [Fact]
     public void ThrowsExceptionForInvalidLiteralValueType()
     {
