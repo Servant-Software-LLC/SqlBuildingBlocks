@@ -8,7 +8,7 @@ namespace SqlBuildingBlocks.Core.Tests.LogicalEntities;
 public class SqlSelectDefinitionTests
 {
     [Fact]
-    public void ResolveParameters_DbParameterCollection()
+    public void ResolveParameters_DbParameterCollection_WithSelectStatement()
     {
         // Setup
         SqlSelectDefinition sqlSelectDefinition = new();
@@ -16,19 +16,8 @@ public class SqlSelectDefinitionTests
         sqlSelectDefinition.WhereClause = new(new(new SqlLiteralValue(5)), SqlBinaryOperator.Equal, new(new SqlParameter("Age")));
 
         DbParameterCollection parameters = new FakeParameterCollection();
-        DbParameter testParameter = new FakeDbParameter
-        {
-            ParameterName = "Test",
-            Value = "Bob"
-        };
-        parameters.Add(testParameter);
-
-        DbParameter ageParameter = new FakeDbParameter
-        {
-            ParameterName = "Age",
-            Value = 5
-        };
-        parameters.Add(ageParameter);
+        AddParameter(parameters, "Test", "Bob");
+        AddParameter(parameters, "Age", 5);
 
         // Action
         sqlSelectDefinition.ResolveParameters(parameters);
@@ -42,6 +31,48 @@ public class SqlSelectDefinitionTests
         var rightExpression = sqlSelectDefinition.WhereClause.Right;
         Assert.NotNull(rightExpression.Value);
         Assert.Equal(5, rightExpression.Value.Value);
+    }
+
+    [Fact]
+    public void ResolveParameters_DbParameterCollection_WithInsertStatement()
+    {
+        // Setup
+        SqlInsertDefinition sqlInsertDefinition = new();
+
+        //Only the values are parameters in an insert statement.
+        sqlInsertDefinition.Values = new List<SqlExpression>
+        {
+            new(new SqlParameter("TestString")),
+            new(new SqlParameter("TestInt")),
+            new(new SqlParameter("TestDecimal")),
+            new(new SqlParameter("TestBool"))
+        };
+
+        DbParameterCollection parameters = new FakeParameterCollection();
+        AddParameter(parameters, "TestString", "Bob");
+        AddParameter(parameters, "TestInt", 5);
+        AddParameter(parameters, "TestDecimal", 5.5m);
+        AddParameter(parameters, "TestBool", true);
+
+        // Action
+        sqlInsertDefinition.ResolveParameters(parameters);
+
+        // Assert
+        Assert.Equal(4, sqlInsertDefinition.Values.Count);
+        Assert.Equal("Bob", sqlInsertDefinition.Values[0].Value.String);
+        Assert.Equal(5, sqlInsertDefinition.Values[1].Value.Int);
+        Assert.Equal(5.5m, sqlInsertDefinition.Values[2].Value.Decimal);
+        Assert.Equal(true, sqlInsertDefinition.Values[3].Value.Boolean);
+    }
+
+    private static void AddParameter(DbParameterCollection parameters, string parameterName, object value)
+    {
+        DbParameter testParameter = new FakeDbParameter
+        {
+            ParameterName = parameterName,
+            Value = value
+        };
+        parameters.Add(testParameter);
     }
 
     [Fact]
