@@ -44,6 +44,7 @@ public class StmtLineTests
         Assert.Null(sqlDefinition.Update);
         Assert.Null(sqlDefinition.Delete);
         Assert.Null(sqlDefinition.Create);
+        Assert.Null(sqlDefinition.Alter);
     }
 
     [Fact]
@@ -63,6 +64,7 @@ public class StmtLineTests
         Assert.Null(selectSqlDefinition.Update);
         Assert.Null(selectSqlDefinition.Delete);
         Assert.Null(selectSqlDefinition.Create);
+        Assert.Null(selectSqlDefinition.Alter);
 
         var insertSqlDefinition = sqlDefinitions[1];
 
@@ -72,6 +74,6 @@ public class StmtLineTests
         Assert.Null(insertSqlDefinition.Update);
         Assert.Null(insertSqlDefinition.Delete);
         Assert.Null(insertSqlDefinition.Create);
-
+        Assert.Null(insertSqlDefinition.Alter);
     }
 }
