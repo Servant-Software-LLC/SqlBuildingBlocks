@@ -24,14 +24,31 @@ public class LiteralValue : NonTerminal
         NumberLiteral number = new("number");
 
         // Rule for true literals
-        trueLiteral.Rule = grammar.ToTerm("TRUE") | "True" | "T" | "t" | "yes" | "on";
+        //trueLiteral.Rule = grammar.ToTerm("TRUE") | "True" | "T" | "t" | "yes" | "on";
+        trueLiteral.Rule = grammar.ToTerm("TRUE") | "T" | "yes" | "on";
+        if (grammar.CaseSensitive)
+        {
+            trueLiteral.Rule |= "True";
+            trueLiteral.Rule |= "t";
+        }
 
         // Rule for false literals
-        falseLiteral.Rule = grammar.ToTerm("FALSE") | "False" | "F" | "f" | "no" | "off";
+        //falseLiteral.Rule = grammar.ToTerm("FALSE") | "False" | "F" | "f" | "no" | "off";
+        falseLiteral.Rule = grammar.ToTerm("FALSE") | "F" | "no" | "off";
+        if (grammar.CaseSensitive)
+        {
+            falseLiteral.Rule |= "False";
+            falseLiteral.Rule |= "f";
+        }
 
         Rule = string_literal | number | trueLiteral | falseLiteral | NULL;
 
         grammar.MarkReservedWords("NULL");
+        grammar.MarkReservedWords("TRUE", "T", "yes", "on", "FALSE", "F", "no", "off");
+        if (grammar.CaseSensitive)
+        {
+            grammar.MarkReservedWords("True", "t", "False", "f");
+        }
     }
 
     public virtual SqlLiteralValue Create(ParseTreeNode parseTreeNode)

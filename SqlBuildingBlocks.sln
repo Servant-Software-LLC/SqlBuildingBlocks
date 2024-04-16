@@ -30,6 +30,8 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "SqlBuildingBlocks.Grammars.
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "SqlBuildingBlocks.Grammars.SQLServer.Tests", "tests\Grammars\SQLServer.Tests\SqlBuildingBlocks.Grammars.SQLServer.Tests.csproj", "{7BB67ECA-F6A6-4BB5-9DCB-0D9BFB710B19}"
 EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "SqlBuildingBlocks.Grammars.CrossCutting.Tests", "tests\Grammars\CrossCutting.Tests\SqlBuildingBlocks.Grammars.CrossCutting.Tests.csproj", "{C9A24CA5-910E-4930-8F35-3ABD30109B96}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -76,6 +78,10 @@ Global
 		{7BB67ECA-F6A6-4BB5-9DCB-0D9BFB710B19}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{7BB67ECA-F6A6-4BB5-9DCB-0D9BFB710B19}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{7BB67ECA-F6A6-4BB5-9DCB-0D9BFB710B19}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C9A24CA5-910E-4930-8F35-3ABD30109B96}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C9A24CA5-910E-4930-8F35-3ABD30109B96}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C9A24CA5-910E-4930-8F35-3ABD30109B96}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C9A24CA5-910E-4930-8F35-3ABD30109B96}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -86,6 +92,7 @@ Global
 		{9182BAE0-0023-4E48-830F-184A3E3DFB89} = {83B9C7C1-A4ED-49E4-988F-89E3423313EB}
 		{B377CC60-B4BC-4A89-9856-553711690127} = {83B9C7C1-A4ED-49E4-988F-89E3423313EB}
 		{7BB67ECA-F6A6-4BB5-9DCB-0D9BFB710B19} = {83B9C7C1-A4ED-49E4-988F-89E3423313EB}
+		{C9A24CA5-910E-4930-8F35-3ABD30109B96} = {83B9C7C1-A4ED-49E4-988F-89E3423313EB}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {834FEEDD-2B16-456F-9126-C7C082A29837}
