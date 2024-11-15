@@ -8,6 +8,8 @@ public class SqlLiteralValue
     public SqlLiteralValue() { }
     public SqlLiteralValue(string str) => String = str;
     public SqlLiteralValue(int integer) => Int = integer;
+    public SqlLiteralValue(float f) => Float = f;
+    public SqlLiteralValue(double d) => Double = d;
     public SqlLiteralValue(decimal dec) => Decimal = dec;
     public SqlLiteralValue(bool boolean) => Boolean = boolean;
     public SqlLiteralValue(object? value)
@@ -24,6 +26,18 @@ public class SqlLiteralValue
         if (value is int integer)
         {
             Int = integer; 
+            return;
+        }
+
+        if (value is float f)
+        {
+            Float = f;
+            return;
+        }
+
+        if (value is double d)
+        {
+            Double = d;
             return;
         }
 
@@ -50,6 +64,8 @@ public class SqlLiteralValue
 
     public string? String { get; }
     public int? Int { get; }
+    public float? Float { get; }
+    public double? Double { get; }
     public decimal? Decimal { get; }
     public bool? Boolean { get; }
     public bool DBNull { get; }
@@ -63,6 +79,12 @@ public class SqlLiteralValue
 
             if (Int != null)
                 return Int;
+
+            if (Float != null)
+                return Float;
+
+            if (Double != null)
+                return Double;
 
             if (Decimal != null)
                 return Decimal;
@@ -105,6 +127,16 @@ public class SqlLiteralValue
             return Expression.Constant(Int);
         }
 
+        if (Float != null)
+        {
+            return Expression.Constant(Float);
+        }
+
+        if (Double != null)
+        {
+            return Expression.Constant(Double);
+        }
+
         if (Decimal != null)
         {
             return Expression.Constant(Decimal);
@@ -123,6 +155,8 @@ public class SqlLiteralValue
     public override string ToString() =>
         String != null ? $"'{String}'" :
         Int != null ? Int.ToString() :
+        Float != null ? Float.ToString() :
+        Double != null ? Double.ToString() :
         Decimal != null ? Decimal.ToString() :
         Boolean != null ? Boolean.ToString().ToUpperInvariant() :
         DBNull ? "DBNull" :

@@ -29,6 +29,12 @@ public class SqlParameter : IEquatable<SqlParameter>
         if (sqlLiteralValue.Int.HasValue)
             return new(sqlLiteralValue.Int.Value);
 
+        if (sqlLiteralValue.Float.HasValue)
+            return new((int)sqlLiteralValue.Float.Value);
+
+        if (sqlLiteralValue.Double.HasValue)
+            return new((int)sqlLiteralValue.Double.Value);
+
         if (sqlLiteralValue.Decimal.HasValue)
             return new((int)sqlLiteralValue.Decimal.Value);
 

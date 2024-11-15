@@ -44,6 +44,8 @@ public class SqlSelectDefinitionTests
         {
             new(new SqlParameter("TestString")),
             new(new SqlParameter("TestInt")),
+            new(new SqlParameter("TestFloat")),
+            new(new SqlParameter("TestDouble")),
             new(new SqlParameter("TestDecimal")),
             new(new SqlParameter("TestBool"))
         };
@@ -51,6 +53,8 @@ public class SqlSelectDefinitionTests
         DbParameterCollection parameters = new FakeParameterCollection();
         AddParameter(parameters, "TestString", "Bob");
         AddParameter(parameters, "TestInt", 5);
+        AddParameter(parameters, "TestFloat", 5.1f);
+        AddParameter(parameters, "TestDouble", 5.2d);
         AddParameter(parameters, "TestDecimal", 5.5m);
         AddParameter(parameters, "TestBool", true);
 
@@ -58,11 +62,13 @@ public class SqlSelectDefinitionTests
         sqlInsertDefinition.ResolveParameters(parameters);
 
         // Assert
-        Assert.Equal(4, sqlInsertDefinition.Values.Count);
+        Assert.Equal(6, sqlInsertDefinition.Values.Count);
         Assert.Equal("Bob", sqlInsertDefinition.Values[0].Value.String);
         Assert.Equal(5, sqlInsertDefinition.Values[1].Value.Int);
-        Assert.Equal(5.5m, sqlInsertDefinition.Values[2].Value.Decimal);
-        Assert.Equal(true, sqlInsertDefinition.Values[3].Value.Boolean);
+        Assert.Equal(5.1f, sqlInsertDefinition.Values[2].Value.Float);
+        Assert.Equal(5.2d, sqlInsertDefinition.Values[3].Value.Double);
+        Assert.Equal(5.5m, sqlInsertDefinition.Values[4].Value.Decimal);
+        Assert.Equal(true, sqlInsertDefinition.Values[5].Value.Boolean);
     }
 
     private static void AddParameter(DbParameterCollection parameters, string parameterName, object value)
