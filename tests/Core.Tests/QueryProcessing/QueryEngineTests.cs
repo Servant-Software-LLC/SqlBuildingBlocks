@@ -254,4 +254,62 @@ public class QueryEngineTests
         Assert.Equal(10, resultset.Rows.Count);
 
     }
+
+    [Fact]
+    public void QueryAsDataTable_Select_ColumnsSameName_DifferingCase()
+    {
+        // Arrange
+
+        const string databaseName = "MyDB";
+        const string tableName = "Table";
+
+        //Create the DataSet with the schema and data.
+        DataSet dataSet = new(databaseName);
+
+        //Define a table's schema
+        DataTable table = new(tableName);
+        table.Columns.Add("Id", typeof(double));
+        table.Columns.Add("Name", typeof(string));
+        table.Columns.Add("nAMe", typeof(string));
+
+        //Add data to table
+        table.Rows.Add(new object[] { 1.0, "Bogart", "Bob"});
+        dataSet.Tables.Add(table);
+
+        // SELECT * FROM Table
+        SqlSelectDefinition sqlSelect = new SqlSelectDefinition();
+        SqlColumn idColumn = new(databaseName, tableName, "Id") { ColumnType = typeof(double) };
+        sqlSelect.Columns.Add(idColumn);
+        SqlColumn nameColumn = new(databaseName, tableName, "Name");
+        sqlSelect.Columns.Add(nameColumn);
+        SqlColumn nAMeColumn = new(databaseName, tableName, "nAMe");
+        sqlSelect.Columns.Add(nAMeColumn);
+
+        SqlTable sqlTable = new(databaseName, tableName);
+        idColumn.TableRef = sqlTable;
+        nameColumn.TableRef = sqlTable;
+        nAMeColumn.TableRef = sqlTable;
+        sqlSelect.Table = sqlTable;
+
+
+        // Act 
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        DataTable dataTable = queryEngine.QueryAsDataTable();
+
+        // Assert
+
+        Assert.Equal(3, dataTable.Columns.Count);
+        Assert.Equal("Id", dataTable.Columns[0].ColumnName);
+        Assert.Equal("Name", dataTable.Columns[1].ColumnName);
+        Assert.Equal("nAMe", dataTable.Columns[2].ColumnName);
+
+        Assert.Equal(1, dataTable.Rows.Count);
+        var firstRow = dataTable.Rows[0];
+
+        Assert.Equal(1.0, firstRow[0]);
+        Assert.Equal("Bogart", firstRow[1]);
+        Assert.Equal("Bob", firstRow[2]);
+
+    }
 }

@@ -476,7 +476,7 @@ public class QueryEngine : IQueryEngine
             }
 
             //Add the columnn to the projection.
-            if (!dataTable.Columns.Contains(columnName))
+            if (!dataTable.Columns.Cast<DataColumn>().Any(col => col.ColumnName == columnName))
             {
                 DataColumn newTablesProjectionColumn = new();
                 newTablesProjectionColumn.ColumnName = columnName;
