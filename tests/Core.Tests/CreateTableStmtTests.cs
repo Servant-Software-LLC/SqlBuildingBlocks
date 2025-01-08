@@ -67,13 +67,13 @@ CREATE TABLE [SomeSetting] (
 
 
         //Constraints
-        Assert.Equal(1, sqlCreateTableDefinition.Constraints.Count);
+        Assert.Single(sqlCreateTableDefinition.Constraints);
         var constraint = sqlCreateTableDefinition.Constraints[0];
         Assert.Equal("PK_SomeSetting", constraint.Name);
         Assert.Null(constraint.UniqueConstraint);
         Assert.Null(constraint.ForeignKeyConstraint);
         var primaryKeyConstraint = constraint.PrimaryKeyConstraint;
-        Assert.Equal(1, primaryKeyConstraint.Columns.Count);
+        Assert.Single(primaryKeyConstraint.Columns);
         Assert.Equal("Id", primaryKeyConstraint.Columns[0]);
     }
 }

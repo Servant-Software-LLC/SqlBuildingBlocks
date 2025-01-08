@@ -74,13 +74,13 @@ CREATE TABLE ""SomeSetting"" (
         Assert.False(sqlCreateTableDefinition.Columns[2].DataType.Scale.HasValue);
 
         //Constraints
-        Assert.Equal(1, sqlCreateTableDefinition.Constraints.Count);
+        Assert.Single(sqlCreateTableDefinition.Constraints);
         var constraint = sqlCreateTableDefinition.Constraints[0];
         Assert.Equal("UC_Id", constraint.Name);
         Assert.Null(constraint.ForeignKeyConstraint);
         Assert.Null(constraint.PrimaryKeyConstraint);
         var uniqueKeyConstraint = constraint.UniqueConstraint;
-        Assert.Equal(1, uniqueKeyConstraint.Columns.Count);
+        Assert.Single(uniqueKeyConstraint.Columns);
         Assert.Equal("Id", uniqueKeyConstraint.Columns[0]);
     }
 }

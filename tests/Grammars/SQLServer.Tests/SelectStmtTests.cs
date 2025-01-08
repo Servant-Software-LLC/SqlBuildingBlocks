@@ -64,7 +64,7 @@ public class SelectStmtTests
 
 
         //No JOINs
-        Assert.Equal(0, selectStmt.Joins.Count);
+        Assert.Empty(selectStmt.Joins);
 
         //WHERE
         Assert.Null(selectStmt.WhereClause);

@@ -105,7 +105,7 @@ public class SqlSelectDefinitionTests
         // Assert
         
         //ROW_COUNT() column should be a literal value now.
-        Assert.Equal(1, sqlSelectDefinition.Columns.Count);
+        Assert.Single(sqlSelectDefinition.Columns);
         Assert.IsType<SqlLiteralValueColumn>(sqlSelectDefinition.Columns[0]);
         var sqlLiteralValueColumn = (SqlLiteralValueColumn)sqlSelectDefinition.Columns[0];
         Assert.Equal(2, sqlLiteralValueColumn.Value.Value);
@@ -135,7 +135,7 @@ public class SqlSelectDefinitionTests
         // Assert
 
         //All column should still be there.
-        Assert.Equal(1, sqlSelectDefinition.Columns.Count);
+        Assert.Single(sqlSelectDefinition.Columns);
         Assert.IsType<SqlAllColumns>(sqlSelectDefinition.Columns[0]);
     }
 

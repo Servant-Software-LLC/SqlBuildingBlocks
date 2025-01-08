@@ -48,7 +48,7 @@ public class UpdateStmtTests
 
         //Assert - SET
         var assignments = sqlUpdateDefinition.Assignments;
-        Assert.Equal(1, assignments.Count);
+        Assert.Single(assignments);
         Assert.Equal("zip", assignments[0].Column.ColumnName);
         Assert.Equal(32655, assignments[0].Value.Int);
 
@@ -74,7 +74,7 @@ public class UpdateStmtTests
 
         //Assert - SET
         var assignments = sqlUpdateDefinition.Assignments;
-        Assert.Equal(1, assignments.Count);
+        Assert.Single(assignments);
         Assert.Equal("zip", assignments[0].Column.ColumnName);
         Assert.Equal("Zip", assignments[0].Parameter.Name);
     }
@@ -92,7 +92,7 @@ public class UpdateStmtTests
 
         //Assert - SET
         var assignments = sqlUpdateDefinition.Assignments;
-        Assert.Equal(1, assignments.Count);
+        Assert.Single(assignments);
         Assert.Equal("zip", assignments[0].Column.ColumnName);
         Assert.Equal("ROW_COUNT", assignments[0].Function.FunctionName);
     }

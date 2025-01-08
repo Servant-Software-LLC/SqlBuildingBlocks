@@ -19,7 +19,7 @@ public class ConstraintDefTests
             Root = constraintDef;
         }
 
-        public virtual (SqlConstraintDefinition? Constraint, bool Handled) Create(ParseTreeNode createTableStmt, IList<SqlColumnDefinition> columns) =>
+        public virtual (SqlConstraintDefinition Constraint, bool Handled) Create(ParseTreeNode createTableStmt, IList<SqlColumnDefinition> columns) =>
             ((ConstraintDef)Root).Create(createTableStmt, columns);
 
     }

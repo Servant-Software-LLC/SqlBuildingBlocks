@@ -63,7 +63,7 @@ public class SelectStmtTests
         Assert.Equal("Customers", secondColumn.TableRef.TableName);
 
         //Many assertions are not done on the joins, because JoinChainOptTests.MultipleInnerJoins_WithColumnId_Expressions already thoroughly covers them.
-        Assert.Equal(0, selectStmt.Joins.Count);
+        Assert.Empty(selectStmt.Joins);
 
         //WHERE
         Assert.Null(selectStmt.WhereClause);
@@ -215,7 +215,7 @@ public class SelectStmtTests
         var selectStmt = grammar.Create(node, databaseConnectionProvider, tableSchemaProvider);
 
         //Assert on select columns
-        Assert.Equal(1, selectStmt.Columns.Count);
+        Assert.Single(selectStmt.Columns);
 
         //First column - [c].[CustomerName]
         Assert.IsType<SqlColumn>(selectStmt.Columns[0]);
@@ -256,7 +256,7 @@ public class SelectStmtTests
         TableSchemaProvider tableSchemaProvider = new();
         var selectStmt = grammar.Create(node, databaseConnectionProvider, tableSchemaProvider);
 
-        Assert.Equal(1, selectStmt.Columns.Count);
+        Assert.Single(selectStmt.Columns);
         var column = selectStmt.Columns[0];
         Assert.IsType<SqlFunctionColumn>(column);
         var functionColumn = (SqlFunctionColumn)column;
@@ -273,7 +273,7 @@ public class SelectStmtTests
         TableSchemaProvider tableSchemaProvider = new();
         var selectStmt = grammar.Create(node, databaseConnectionProvider, tableSchemaProvider);
 
-        Assert.Equal(1, selectStmt.Columns.Count);
+        Assert.Single(selectStmt.Columns);
         var column = selectStmt.Columns[0];
         Assert.IsType<SqlAggregate>(column);
         var aggregateColumn = (SqlAggregate)column;

@@ -49,13 +49,13 @@ public class SelectStmtTests
         var selectStmt = grammar.Create(node);
 
         //Assert on select columns
-        Assert.Equal(1, selectStmt.Columns.Count);
+        Assert.Single(selectStmt.Columns);
 
         //First column - *
         Assert.IsType<SqlAllColumns>(selectStmt.Columns[0]);
 
         //Many assertions are not done on the joins, because JoinChainOptTests.MultipleInnerJoins_WithColumnId_Expressions already thoroughly covers them.
-        Assert.Equal(0, selectStmt.Joins.Count);
+        Assert.Empty(selectStmt.Joins);
 
         //WHERE
         Assert.Null(selectStmt.WhereClause);
@@ -95,7 +95,7 @@ public class SelectStmtTests
         Assert.Equal("Customers", secondColumn.TableRef.TableName);
 
         //Many assertions are not done on the joins, because JoinChainOptTests.MultipleInnerJoins_WithColumnId_Expressions already thoroughly covers them.
-        Assert.Equal(0, selectStmt.Joins.Count);
+        Assert.Empty(selectStmt.Joins);
 
         //WHERE
         Assert.Null(selectStmt.WhereClause);
@@ -129,7 +129,7 @@ public class SelectStmtTests
 
 
         //No JOINs
-        Assert.Equal(0, selectStmt.Joins.Count);
+        Assert.Empty(selectStmt.Joins);
 
         //WHERE
         Assert.Null(selectStmt.WhereClause);
@@ -151,7 +151,7 @@ public class SelectStmtTests
         //Assert on select columns
         Assert.Equal(2, selectStmt.Columns.Count);
 
-        Assert.Equal(0, selectStmt.Joins.Count);
+        Assert.Empty(selectStmt.Joins);
 
         //WHERE
         Assert.Null(selectStmt.WhereClause);

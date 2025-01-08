@@ -31,7 +31,7 @@ public class QueryEngineTests
 
         var results = queryResults.Results.ToList();
 
-        Assert.Equal(1, results.Count);
+        Assert.Single(results);
         Assert.Equal("Variable_name", results[0].Table.Columns[0].ColumnName);
         Assert.Equal("Value", results[0].Table.Columns[1].ColumnName);
     }
@@ -56,6 +56,6 @@ public class QueryEngineTests
 
         var results = queryResults.Results.ToList();
 
-        Assert.Equal(0, results.Count);
+        Assert.Empty(results);
     }
 }

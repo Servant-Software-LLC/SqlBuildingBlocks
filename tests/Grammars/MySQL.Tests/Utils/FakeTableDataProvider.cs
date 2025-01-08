@@ -27,10 +27,10 @@ public class FakeTableDataProvider : ITableDataProvider
         throw new KeyNotFoundException();
     }
 
-    public record variable(string VARIABLE_NAME, string VARIABLE_VALUE);
+    public record variableValue(string VARIABLE_NAME, string VARIABLE_VALUE);
     public record events_stage_history(long THREAD_ID, string EVENT_NAME, long NESTING_EVENT_ID);
 
-    private IEnumerable<variable> Variable_GetEnumerable()
+    private IEnumerable<variableValue> Variable_GetEnumerable()
     {
         yield return new("activate_all_roles_on_login", "OFF");
         yield return new("sql_mode", "STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION");

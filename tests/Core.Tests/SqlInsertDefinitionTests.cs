@@ -28,7 +28,7 @@ public class SqlInsertDefinitionTests
         sqlInsertDefinition.ResolveParameters(parameters);
 
         // Assert
-        Assert.Equal(1, sqlInsertDefinition.Values.Count);
+        Assert.Single(sqlInsertDefinition.Values);
         var valueExpression = sqlInsertDefinition.Values[0];
         Assert.Null(valueExpression.Parameter);
         Assert.NotNull(valueExpression.Value);

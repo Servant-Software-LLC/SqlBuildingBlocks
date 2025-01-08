@@ -39,8 +39,8 @@ public class AlterTableTests
 
         //Assert
         Assert.Equal("Customers", sqlAlterTableDefinition.Table.TableName);
-        Assert.Equal(0, sqlAlterTableDefinition.ColumnsToDrop.Count);
-        Assert.Equal(1, sqlAlterTableDefinition.ColumnsToAdd.Count);
+        Assert.Empty(sqlAlterTableDefinition.ColumnsToDrop);
+        Assert.Single(sqlAlterTableDefinition.ColumnsToAdd);
         var columnToAdd = sqlAlterTableDefinition.ColumnsToAdd[0];
         Assert.Equal("Age", columnToAdd.Column.ColumnName);
         Assert.Equal("INT", columnToAdd.Column.DataType.Name);
@@ -61,8 +61,8 @@ public class AlterTableTests
 
         //Assert
         Assert.Equal("Customers", sqlAlterTableDefinition.Table.TableName);
-        Assert.Equal(0, sqlAlterTableDefinition.ColumnsToDrop.Count);
-        Assert.Equal(1, sqlAlterTableDefinition.ColumnsToAdd.Count);
+        Assert.Empty(sqlAlterTableDefinition.ColumnsToDrop);
+        Assert.Single(sqlAlterTableDefinition.ColumnsToAdd);
         var columnToAdd = sqlAlterTableDefinition.ColumnsToAdd[0];
         Assert.Equal("Age", columnToAdd.Column.ColumnName);
         Assert.Equal("INT", columnToAdd.Column.DataType.Name);
@@ -83,8 +83,8 @@ public class AlterTableTests
 
         //Assert
         Assert.Equal("Customers", sqlAlterTableDefinition.Table.TableName);
-        Assert.Equal(0, sqlAlterTableDefinition.ColumnsToDrop.Count);
-        Assert.Equal(1, sqlAlterTableDefinition.ColumnsToAdd.Count);
+        Assert.Empty(sqlAlterTableDefinition.ColumnsToDrop);
+        Assert.Single(sqlAlterTableDefinition.ColumnsToAdd);
         var columnToAdd = sqlAlterTableDefinition.ColumnsToAdd[0];
         Assert.Equal("Age", columnToAdd.Column.ColumnName);
         Assert.Equal("INT", columnToAdd.Column.DataType.Name);
@@ -105,13 +105,13 @@ public class AlterTableTests
 
         //Assert
         Assert.Equal("Customers", sqlAlterTableDefinition.Table.TableName);
-        Assert.Equal(0, sqlAlterTableDefinition.ColumnsToDrop.Count);
-        Assert.Equal(1, sqlAlterTableDefinition.ColumnsToAdd.Count);
+        Assert.Empty(sqlAlterTableDefinition.ColumnsToDrop);
+        Assert.Single(sqlAlterTableDefinition.ColumnsToAdd);
         var columnToAdd = sqlAlterTableDefinition.ColumnsToAdd[0];
         Assert.Equal("Age", columnToAdd.Column.ColumnName);
         Assert.Equal("INT", columnToAdd.Column.DataType.Name);
         Assert.True(columnToAdd.Column.AllowNulls);
-        Assert.Equal(1, columnToAdd.Constraints.Count);
+        Assert.Single(columnToAdd.Constraints);
         var constraint = columnToAdd.Constraints[0];
         Assert.NotNull(constraint.UniqueConstraint);
         Assert.Null(constraint.ForeignKeyConstraint);
@@ -132,8 +132,8 @@ public class AlterTableTests
 
         //Assert
         Assert.Equal("Customers", sqlAlterTableDefinition.Table.TableName);
-        Assert.Equal(0, sqlAlterTableDefinition.ColumnsToAdd.Count);
-        Assert.Equal(1, sqlAlterTableDefinition.ColumnsToDrop.Count);
+        Assert.Empty(sqlAlterTableDefinition.ColumnsToAdd);
+        Assert.Single(sqlAlterTableDefinition.ColumnsToDrop);
         var columnToDrop = sqlAlterTableDefinition.ColumnsToDrop[0];
         Assert.Equal("Age", columnToDrop);
     }
@@ -152,8 +152,8 @@ public class AlterTableTests
 
         //Assert
         Assert.Equal("Customers", sqlAlterTableDefinition.Table.TableName);
-        Assert.Equal(0, sqlAlterTableDefinition.ColumnsToAdd.Count);
-        Assert.Equal(1, sqlAlterTableDefinition.ColumnsToDrop.Count);
+        Assert.Empty(sqlAlterTableDefinition.ColumnsToAdd);
+        Assert.Single(sqlAlterTableDefinition.ColumnsToDrop);
         var columnToDrop = sqlAlterTableDefinition.ColumnsToDrop[0];
         Assert.Equal("Age", columnToDrop);
     }
