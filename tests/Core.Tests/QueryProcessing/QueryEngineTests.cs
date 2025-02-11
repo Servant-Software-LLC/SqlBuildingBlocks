@@ -1,5 +1,8 @@
-﻿using SqlBuildingBlocks.LogicalEntities;
+﻿using SqlBuildingBlocks.Core.Tests.Utils;
+using SqlBuildingBlocks.Interfaces;
+using SqlBuildingBlocks.LogicalEntities;
 using SqlBuildingBlocks.QueryProcessing;
+using SqlBuildingBlocks.Utils;
 using System.Data;
 using Xunit;
 
@@ -311,5 +314,34 @@ public class QueryEngineTests
         Assert.Equal("Bogart", firstRow[1]);
         Assert.Equal("Bob", firstRow[2]);
 
+    }
+
+    [Fact]
+    public void QueryWithUnendingDataSource_Select()
+    {
+        SelectStmtTests.TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, $"SELECT * FROM {UnendingTableDataProvider.tableName}");
+
+        FakeDatabaseConnectionProvider databaseConnectionProvider = new() { DefaultDatabase = UnendingTableDataProvider.databaseName };
+        UnendingTableDataProvider unendingTableDataProvider = new();
+        SqlSelectDefinition selectDefinition = grammar.Create(node, databaseConnectionProvider, unendingTableDataProvider);
+
+        AllTableDataProvider allTableDataProvider = new(new ITableDataProvider[] { unendingTableDataProvider });
+        var queryEngine = new QueryEngine(allTableDataProvider, selectDefinition);
+
+        var (ColumnSchema, Results) = queryEngine.Query();
+
+        int counter = 0;
+        foreach (var row in Results)
+        {
+            Assert.Equal(counter, row["id"]);
+            counter++;
+
+            //Make sure that our data source only has provided the number of rows requested.
+            Assert.Equal(counter, unendingTableDataProvider.DataRowsProvided);
+
+            if (counter > 5)
+                break;
+        }
     }
 }

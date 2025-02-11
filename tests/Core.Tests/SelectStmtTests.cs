@@ -8,7 +8,7 @@ namespace SqlBuildingBlocks.Core.Tests;
 
 public class SelectStmtTests
 {
-    private class TestGrammar : Grammar
+    internal class TestGrammar : Grammar
     {
         public TestGrammar()
         {

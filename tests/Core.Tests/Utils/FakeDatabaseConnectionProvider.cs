@@ -1,8 +1,8 @@
 ﻿using SqlBuildingBlocks.Interfaces;
 
-namespace SqlBuildingBlocks.Grammars.MySQL.Tests.Utils;
+namespace SqlBuildingBlocks.Core.Tests.Utils;
 
-internal class FakeDatabaseConnectionProvider : IDatabaseConnectionProvider
+public class FakeDatabaseConnectionProvider : IDatabaseConnectionProvider
 {
     public string DefaultDatabase { get; set; } = string.Empty;
 
