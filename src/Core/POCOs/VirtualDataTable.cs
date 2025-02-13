@@ -10,8 +10,18 @@ namespace SqlBuildingBlocks.POCOs;
 /// </summary>
 public class VirtualDataTable
 {
-    public DataColumnCollection Columns { get; set; }
-    public IEnumerable<DataRow> Rows { get; set; }
+    public VirtualDataTable() { }
+
+    public VirtualDataTable(DataTable dataTable)
+    {
+        TableName = dataTable.TableName;
+        Columns = dataTable.Columns;
+        Rows = dataTable.Rows.Cast<DataRow>();
+    }
+
+    public string? TableName { get; set; }
+    public DataColumnCollection? Columns { get; set; }
+    public IEnumerable<DataRow>? Rows { get; set; }
 
     public DataTable CreateEmptyDataTable()
     {

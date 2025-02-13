@@ -1,41 +1,58 @@
 ﻿using SqlBuildingBlocks.Extensions;
 using SqlBuildingBlocks.Interfaces;
 using SqlBuildingBlocks.LogicalEntities;
+using SqlBuildingBlocks.POCOs;
 using System.Data;
 
 namespace SqlBuildingBlocks.QueryProcessing;
 
 public class TableDataProviderAdaptor : ITableDataProvider
 {
-    private readonly Dictionary<string, DataSet> dictDataSets = new();
+    private readonly Dictionary<string, VirtualDataSet> dictDataSets = new();
+
+    public TableDataProviderAdaptor() { }
 
     public TableDataProviderAdaptor(IEnumerable<DataSet> dataSets)
     {
         foreach (var dataSet in dataSets)
         {
-            if (string.IsNullOrWhiteSpace(dataSet.DataSetName))
-                throw new ArgumentException($"Dataset must have a name", nameof(dataSet.DataSetName));
-
-            if (!dictDataSets.TryAdd(dataSet.DataSetName, dataSet))
-                throw new ArgumentException($"A DataSet with the name {dataSet.DataSetName} already exists.", nameof(dataSets));
+            AddDataSet(dataSet);
         }
     }
 
-    public IEnumerable<DataColumn> GetColumns(SqlTable table)
+    public void AddDataSet(DataSet dataSet)
     {
-        if (table is null)
-            throw new ArgumentNullException(nameof(table));
+        if (string.IsNullOrWhiteSpace(dataSet.DataSetName))
+            throw new ArgumentException($"Dataset must have a name", nameof(dataSet.DataSetName));
 
-        if (string.IsNullOrEmpty(table.DatabaseName))
-            throw new ArgumentException($"DatabaseName must be provided for the {nameof(table)} instance.", nameof(table.DatabaseName));
+        var virtualDataSet = new VirtualDataSet(dataSet);
+        AddDataSet(dataSet.DataSetName, virtualDataSet);
+    }
 
-        if (!dictDataSets.TryGetValue(table.DatabaseName!, out var dataSet))
-            throw new ArgumentException($"Dataset '{table.DatabaseName}' was not found", nameof(table.DatabaseName));
+    public void AddDataSet(string dataSetName, VirtualDataSet virtualDataSet)
+    {
+        if (!dictDataSets.TryAdd(dataSetName, virtualDataSet))
+            throw new ArgumentException($"A DataSet with the name {dataSetName} already exists.", nameof(virtualDataSet));
+    }
 
-        if (!dataSet.Tables.Contains(table.TableName))
-            throw new ArgumentException($"Table '{table.TableName}' was not found in DataSet '{table.DatabaseName}'", nameof(table.TableName));
+    public IEnumerable<DataColumn> GetColumns(SqlTable sqlTable)
+    {
+        if (sqlTable is null)
+            throw new ArgumentNullException(nameof(sqlTable));
 
-        var dataTable = dataSet.Tables[table.TableName];
+        if (string.IsNullOrEmpty(sqlTable.DatabaseName))
+            throw new ArgumentException($"DatabaseName must be provided for the {nameof(sqlTable)} instance.", nameof(sqlTable.DatabaseName));
+
+        if (!dictDataSets.TryGetValue(sqlTable.DatabaseName!, out var dataSet))
+            throw new ArgumentException($"Dataset '{sqlTable.DatabaseName}' was not found", nameof(sqlTable.DatabaseName));
+
+        if (dataSet.Tables == null || dataSet.Tables.Count == 0)
+            throw new ArgumentNullException($"Dataset '{sqlTable.DatabaseName}' does not have any tables.");
+
+        if (!dataSet.Tables.ContainsKey(sqlTable.TableName))
+            throw new ArgumentException($"Table '{sqlTable.TableName}' was not found in DataSet '{sqlTable.DatabaseName}'", nameof(sqlTable.TableName));
+
+        var dataTable = dataSet.Tables[sqlTable.TableName];
 
         return dataTable.Columns.OfType<DataColumn>();
     }
@@ -51,7 +68,10 @@ public class TableDataProviderAdaptor : ITableDataProvider
         if (!dictDataSets.TryGetValue(sqlTable.DatabaseName, out var dataSet))
             throw new ArgumentException($"Dataset '{sqlTable.DatabaseName}' was not found", nameof(sqlTable.DatabaseName));
 
-        if (!dataSet.Tables.Contains(sqlTable.TableName))
+        if (dataSet.Tables == null || dataSet.Tables.Count == 0)
+            throw new ArgumentNullException($"Dataset '{sqlTable.DatabaseName}' does not have any tables.");
+
+        if (!dataSet.Tables.ContainsKey(sqlTable.TableName))
             throw new ArgumentException($"Table '{sqlTable.TableName}' was not found in DataSet '{sqlTable.DatabaseName}'", nameof(sqlTable.TableName));
 
         var table = dataSet.Tables[sqlTable.TableName];
