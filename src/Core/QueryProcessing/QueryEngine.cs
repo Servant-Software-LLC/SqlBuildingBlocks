@@ -1,6 +1,7 @@
 ﻿using SqlBuildingBlocks.Extensions;
 using SqlBuildingBlocks.Interfaces;
 using SqlBuildingBlocks.LogicalEntities;
+using SqlBuildingBlocks.POCOs;
 using SqlBuildingBlocks.Utils;
 using SqlBuildingBlocks.Visitors;
 using System.Data;
@@ -34,10 +35,10 @@ public class QueryEngine : IQueryEngine
     /// </summary>
     /// <returns>A DataColumnCollection which describes the schema of the columns of the SELECT query and an
     /// IEnumerable of DataRows, so that rows can be progressively fed back to the caller as they are calculated.</returns>
-    public (DataColumnCollection ColumnSchema, IEnumerable<DataRow> Results) Query()
+    public VirtualDataTable Query()
     {
         (ProcessingState processingState, IEnumerable<DataRow> selectRows) = QueryInternal();
-        return (processingState.QueryOutput.Columns, selectRows);
+        return new() { Columns = processingState.QueryOutput.Columns, Rows = selectRows };
     }
 
     /// Executes the SELECT statement described in the <see cref="sqlSelectDefinition"/>.  Requires that by the time of

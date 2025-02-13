@@ -1,8 +1,8 @@
-﻿using System.Data;
+﻿using SqlBuildingBlocks.POCOs;
 
 namespace SqlBuildingBlocks.Interfaces;
 
 public interface IQueryEngine
 {
-    (DataColumnCollection ColumnSchema, IEnumerable<DataRow> Results) Query();
+    VirtualDataTable Query();
 }

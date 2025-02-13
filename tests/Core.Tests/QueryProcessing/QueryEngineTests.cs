@@ -329,10 +329,10 @@ public class QueryEngineTests
         AllTableDataProvider allTableDataProvider = new(new ITableDataProvider[] { unendingTableDataProvider });
         var queryEngine = new QueryEngine(allTableDataProvider, selectDefinition);
 
-        var (ColumnSchema, Results) = queryEngine.Query();
+        var virtualDataTable = queryEngine.Query();
 
         int counter = 0;
-        foreach (var row in Results)
+        foreach (var row in virtualDataTable.Rows)
         {
             Assert.Equal(counter, row["id"]);
             counter++;

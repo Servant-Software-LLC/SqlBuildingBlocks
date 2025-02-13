@@ -3,6 +3,7 @@ using SqlBuildingBlocks.Core.Tests.Utils;
 using SqlBuildingBlocks.Grammars.MySQL.Tests.Utils;
 using SqlBuildingBlocks.Interfaces;
 using SqlBuildingBlocks.LogicalEntities;
+using SqlBuildingBlocks.POCOs;
 using SqlBuildingBlocks.QueryProcessing;
 using SqlBuildingBlocks.Utils;
 using System.Linq;
@@ -27,9 +28,9 @@ public class QueryEngineTests
         AllTableDataProvider allTableDataProvider = new(new ITableDataProvider[] { tableDataProvider });
         var queryEngine = new QueryEngine(allTableDataProvider, selectDefinition);
 
-        var queryResults = queryEngine.Query();
+        var virtualDataTable = queryEngine.Query();
 
-        var results = queryResults.Results.ToList();
+        var results = virtualDataTable.Rows.ToList();
 
         Assert.Single(results);
         Assert.Equal("Variable_name", results[0].Table.Columns[0].ColumnName);
@@ -52,9 +53,9 @@ public class QueryEngineTests
         AllTableDataProvider allTableDataProvider = new(new ITableDataProvider[] { tableDataProvider });
         var queryEngine = new QueryEngine(allTableDataProvider, selectDefinition);
 
-        var queryResults = queryEngine.Query();
+        var virtualDataTable = queryEngine.Query();
 
-        var results = queryResults.Results.ToList();
+        var results = virtualDataTable.Rows.ToList();
 
         Assert.Empty(results);
     }
