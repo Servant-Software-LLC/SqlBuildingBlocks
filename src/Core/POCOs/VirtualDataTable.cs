@@ -2,7 +2,6 @@
 
 namespace SqlBuildingBlocks.POCOs;
 
-
 /// <summary>
 /// In order for us to support large data sources, the results coming from the QueryEngine must be in an enumerable iterator.  This iterator
 /// will only pull rows from the data sources on demand.  Previously, we stored a whole DataTable of results which would require loading
@@ -26,7 +25,35 @@ public class VirtualDataTable
     public DataTable CreateEmptyDataTable()
     {
         DataTable table = new DataTable();
+        SetSchema(table);
 
+        return table;
+    }
+
+    /// <summary>
+    /// Make a full copy of the schema and data contained in this virtual data table.  
+    /// </summary>
+    /// <remarks>Be careful, this call will copy of the data into memory.  The enumerable of <see cref="Rows"/> isn't necessarily in-memory.</remarks>
+    /// <returns></returns>
+    public DataTable ToDataTable()
+    {
+        DataTable table = new DataTable();
+        SetSchema(table);
+
+        if (Rows != null)
+        {
+            //Copy the data.
+            foreach (DataRow dataRow in Rows)
+            {
+                table.Rows.Add(dataRow.ItemArray);
+            }
+        }
+
+        return table;
+    }
+
+    private void SetSchema(DataTable table)
+    {
         if (Columns != null)
         {
             foreach (DataColumn col in Columns)
@@ -38,13 +65,10 @@ public class VirtualDataTable
                     DefaultValue = col.DefaultValue,
                     ReadOnly = col.ReadOnly,
                     Unique = col.Unique
-                    // You can copy additional properties as needed.
                 };
 
                 table.Columns.Add(newCol);
             }
         }
-
-        return table;
     }
 }
