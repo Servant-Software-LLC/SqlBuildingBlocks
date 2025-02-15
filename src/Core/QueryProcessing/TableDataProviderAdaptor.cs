@@ -49,7 +49,7 @@ public class TableDataProviderAdaptor : ITableDataProvider
         if (dataSet.Tables == null || dataSet.Tables.Count == 0)
             throw new ArgumentNullException($"Dataset '{sqlTable.DatabaseName}' does not have any tables.");
 
-        if (!dataSet.Tables.ContainsKey(sqlTable.TableName))
+        if (!dataSet.Tables.Contains(sqlTable.TableName))
             throw new ArgumentException($"Table '{sqlTable.TableName}' was not found in DataSet '{sqlTable.DatabaseName}'", nameof(sqlTable.TableName));
 
         var dataTable = dataSet.Tables[sqlTable.TableName];
@@ -71,7 +71,7 @@ public class TableDataProviderAdaptor : ITableDataProvider
         if (dataSet.Tables == null || dataSet.Tables.Count == 0)
             throw new ArgumentNullException($"Dataset '{sqlTable.DatabaseName}' does not have any tables.");
 
-        if (!dataSet.Tables.ContainsKey(sqlTable.TableName))
+        if (!dataSet.Tables.Contains(sqlTable.TableName))
             throw new ArgumentException($"Table '{sqlTable.TableName}' was not found in DataSet '{sqlTable.DatabaseName}'", nameof(sqlTable.TableName));
 
         var table = dataSet.Tables[sqlTable.TableName];
@@ -86,7 +86,7 @@ public class TableDataProviderAdaptor : ITableDataProvider
         if (!dictDataSets.TryGetValue(database!, out var dataSet))
             throw new ArgumentException($"Dataset '{database}' was not found", nameof(database));
 
-        var tables = dataSet.Tables.OfType<DataTable>().Select(t => new SqlTableInfo(new SqlTable(database, t.TableName)));
+        var tables = dataSet.Tables.OfType<VirtualDataTable>().Select(t => new SqlTableInfo(new SqlTable(database, t.TableName!)));
 
         return (true, tables);
     }
