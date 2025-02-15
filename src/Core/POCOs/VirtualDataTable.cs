@@ -9,7 +9,8 @@ namespace SqlBuildingBlocks.POCOs;
 /// </summary>
 public class VirtualDataTable
 {
-    public VirtualDataTable() { }
+    public VirtualDataTable(string tableName) => 
+        TableName = !string.IsNullOrEmpty(tableName) ? tableName : throw new ArgumentNullException(nameof(tableName));
 
     public VirtualDataTable(DataTable dataTable)
     {
@@ -18,7 +19,7 @@ public class VirtualDataTable
         Rows = dataTable.Rows.Cast<DataRow>();
     }
 
-    public string? TableName { get; set; }
+    public string TableName { get; }
     public DataColumnCollection? Columns { get; set; }
     public IEnumerable<DataRow>? Rows { get; set; }
 

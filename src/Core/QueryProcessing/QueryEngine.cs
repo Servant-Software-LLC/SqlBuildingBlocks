@@ -38,7 +38,7 @@ public class QueryEngine : IQueryEngine
     public VirtualDataTable Query()
     {
         (ProcessingState processingState, IEnumerable<DataRow> selectRows) = QueryInternal();
-        return new() { Columns = processingState.QueryOutput.Columns, Rows = selectRows };
+        return new("ResultSet") { Columns = processingState.QueryOutput.Columns, Rows = selectRows };
     }
 
     /// Executes the SELECT statement described in the <see cref="sqlSelectDefinition"/>.  Requires that by the time of
