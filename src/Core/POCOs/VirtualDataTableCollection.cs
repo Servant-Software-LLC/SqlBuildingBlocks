@@ -13,6 +13,9 @@ public class VirtualDataTableCollection : IEnumerable<VirtualDataTable>
 
     public int Count => virtualDataTables.Count;
 
+    public void Add(VirtualDataTable data) => virtualDataTables.Add(data.TableName!, data);
+    public void Remove(string name) => virtualDataTables.Remove(name);
+
     public bool Contains(string name) => virtualDataTables.ContainsKey(name);
 
     /// <summary>
