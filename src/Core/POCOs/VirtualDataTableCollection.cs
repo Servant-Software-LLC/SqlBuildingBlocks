@@ -1,4 +1,5 @@
 ﻿using System.Collections;
+using System.Data;
 
 namespace SqlBuildingBlocks.POCOs;
 
@@ -14,6 +15,8 @@ public class VirtualDataTableCollection : IEnumerable<VirtualDataTable>
     public int Count => virtualDataTables.Count;
 
     public void Add(VirtualDataTable data) => virtualDataTables.Add(data.TableName!, data);
+    public void Add(DataTable dataTable) => virtualDataTables.Add(dataTable.TableName, new VirtualDataTable(dataTable));
+
     public void Remove(string name) => virtualDataTables.Remove(name);
 
     public bool Contains(string name) => virtualDataTables.ContainsKey(name);

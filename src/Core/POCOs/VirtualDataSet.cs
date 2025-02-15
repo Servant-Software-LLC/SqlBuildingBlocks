@@ -11,14 +11,8 @@ public class VirtualDataSet
     {
         foreach(DataTable dataTable in dataSet.Tables)
         {
-            AddTable(dataTable);
+            Tables.Add(dataTable);
         }
-    }
-
-    public void AddTable(DataTable dataTable)
-    {
-        var virtualTable = new VirtualDataTable(dataTable);
-        tables.Add(dataTable.TableName, virtualTable);
     }
 
     public VirtualDataTableCollection Tables => new VirtualDataTableCollection(tables);
