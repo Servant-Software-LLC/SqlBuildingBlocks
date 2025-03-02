@@ -65,8 +65,9 @@ public class TableDataProviderAdaptor : ITableDataProvider
         if (sqlTable.DatabaseName is null)
             throw new ArgumentException($"DatabaseName must be provided for the {nameof(sqlTable)} instance.", nameof(sqlTable.DatabaseName));
 
+        //If we don't have this DataSet, then another ITableDataProvider may have it.  Therefore, don't throw an exception.
         if (!dictDataSets.TryGetValue(sqlTable.DatabaseName, out var dataSet))
-            throw new ArgumentException($"Dataset '{sqlTable.DatabaseName}' was not found", nameof(sqlTable.DatabaseName));
+            return null;
 
         if (dataSet.Tables == null || dataSet.Tables.Count == 0)
             throw new ArgumentNullException($"Dataset '{sqlTable.DatabaseName}' does not have any tables.");
@@ -75,7 +76,7 @@ public class TableDataProviderAdaptor : ITableDataProvider
             throw new ArgumentException($"Table '{sqlTable.TableName}' was not found in DataSet '{sqlTable.DatabaseName}'", nameof(sqlTable.TableName));
 
         var table = dataSet.Tables[sqlTable.TableName];
-        return (from DataRow row in table.Rows select (object)row).AsQueryable();
+        return table.Rows.AsQueryable();
     }
 
     public (bool DatabaseServiced, IEnumerable<SqlTableInfo> Tables) GetTables(string? database)
