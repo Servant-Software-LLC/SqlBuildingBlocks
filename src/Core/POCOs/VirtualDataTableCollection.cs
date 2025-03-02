@@ -17,7 +17,18 @@ public class VirtualDataTableCollection : IEnumerable<VirtualDataTable>
     public void Add(VirtualDataTable data) => virtualDataTables.Add(data.TableName!, data);
     public void Add(DataTable dataTable) => virtualDataTables.Add(dataTable.TableName, new VirtualDataTable(dataTable));
 
-    public void Remove(string name) => virtualDataTables.Remove(name);
+    public void Remove(string name)
+    {
+        if (virtualDataTables.TryGetValue(name, out VirtualDataTable virtualDataTable))
+        {
+            if (virtualDataTable is IDisposable tableDisposable)
+            {
+                tableDisposable.Dispose();
+            }
+
+            virtualDataTables.Remove(name);
+        }
+    }
 
     public bool Contains(string name) => virtualDataTables.ContainsKey(name);
 
