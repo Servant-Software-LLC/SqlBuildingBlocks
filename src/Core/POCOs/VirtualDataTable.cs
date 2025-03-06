@@ -38,7 +38,7 @@ public class VirtualDataTable
     /// <returns></returns>
     public DataTable ToDataTable()
     {
-        DataTable table = new DataTable();
+        DataTable table = new DataTable(TableName);
         SetSchema(table);
 
         if (Rows != null)
