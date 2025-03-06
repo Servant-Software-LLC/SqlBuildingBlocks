@@ -4,7 +4,7 @@ namespace SqlBuildingBlocks.POCOs;
 
 public class VirtualDataSet
 {
-    private readonly IDictionary<string, VirtualDataTable> tables = new Dictionary<string, VirtualDataTable>();
+    private readonly IDictionary<string, VirtualDataTable> tables = new Dictionary<string, VirtualDataTable>(StringComparer.OrdinalIgnoreCase);
 
     public VirtualDataSet() { }
     public VirtualDataSet(DataSet dataSet)
