@@ -59,7 +59,16 @@ public class VirtualDataTable
         {
             foreach (DataColumn col in Columns)
             {
-                table.Columns.Add(col);
+                // Create a new DataColumn with the same name and data type.
+                DataColumn newCol = new DataColumn(col.ColumnName, col.DataType)
+                {
+                    Caption = col.Caption,
+                    DefaultValue = col.DefaultValue,
+                    ReadOnly = col.ReadOnly,
+                    Unique = col.Unique
+                };
+
+                table.Columns.Add(newCol);
             }
         }
     }
