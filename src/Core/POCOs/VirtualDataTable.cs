@@ -62,30 +62,12 @@ public class VirtualDataTable
         if (foreignRow == null)
             throw new ArgumentNullException(nameof(foreignRow));
 
-        if (Columns == null || Columns.Count == 0)
-            throw new InvalidOperationException("VirtualDataTable.Columns is not set.");
-
-        // Validate that the foreign row has the same number of columns.
-        if (foreignRow.Table.Columns.Count != Columns.Count)
-            throw new InvalidOperationException("Foreign row does not have the same number of columns as VirtualDataTable.");
-
-        // Build a dictionary of column values after validating each column's existence and type.
-        var data = new Dictionary<string, object>();
-        foreach (DataColumn col in Columns)
-        {
-            if (!foreignRow.Table.Columns.Contains(col.ColumnName))
-                throw new InvalidOperationException($"Foreign row is missing required column '{col.ColumnName}'.");
-
-            var foreignCol = foreignRow.Table.Columns[col.ColumnName];
-            if (foreignCol.DataType != col.DataType)
-                throw new InvalidOperationException(
-                    $"Data type mismatch for column '{col.ColumnName}'. Expected {col.DataType}, but got {foreignCol.DataType}.");
-
-            data[col.ColumnName] = foreignRow[col.ColumnName];
-        }
+        IDictionary<string, object> foreignDictionary = foreignRow.Table.Columns
+            .Cast<DataColumn>()
+            .ToDictionary(col => col.ColumnName, col => foreignRow[col]);
 
         // Create a new DataRow from the validated dictionary and append it.
-        DataRow newRow = CreateNewRowFromData(data);
+        DataRow newRow = CreateNewRowFromData(foreignDictionary);
         AppendNewRow(newRow);
     }
 
@@ -98,11 +80,22 @@ public class VirtualDataTable
         if (rowData == null)
             throw new ArgumentNullException(nameof(rowData));
 
-        if (Columns == null || Columns.Count == 0)
-            throw new InvalidOperationException("VirtualDataTable.Columns is not set.");
-
         // Convert the provided data to a dictionary for easier validation.
         var data = rowData.ToDictionary(x => x.Key, x => x.Value);
+
+        // Create a new DataRow from the validated dictionary and append it.
+        DataRow newRow = CreateNewRowFromData(data);
+        AppendNewRow(newRow);
+    }
+
+    /// <summary>
+    /// Creates a new DataRow using the VirtualDataTable's underlying schema from Columns.
+    /// It assumes that the provided dictionary has been validated.
+    /// </summary>
+    public DataRow CreateNewRowFromData(IDictionary<string, object> data)
+    {
+        if (Columns == null || Columns.Count == 0)
+            throw new InvalidOperationException("VirtualDataTable.Columns is not set.");
 
         if (data.Count != Columns.Count)
             throw new InvalidOperationException("Provided row data does not have the same number of columns as VirtualDataTable.");
@@ -122,17 +115,6 @@ public class VirtualDataTable
             }
         }
 
-        // Create a new DataRow from the validated dictionary and append it.
-        DataRow newRow = CreateNewRowFromData(data);
-        AppendNewRow(newRow);
-    }
-
-    /// <summary>
-    /// Creates a new DataRow using the VirtualDataTable's underlying schema from Columns.
-    /// It assumes that the provided dictionary has been validated.
-    /// </summary>
-    private DataRow CreateNewRowFromData(IDictionary<string, object> data)
-    {
         // Retrieve the underlying DataTable from one of the DataColumns.
         DataTable schemaTable = Columns[0].Table;
         if (schemaTable == null)
