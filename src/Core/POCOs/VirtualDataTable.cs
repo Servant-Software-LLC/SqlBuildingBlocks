@@ -63,6 +63,18 @@ public class VirtualDataTable
         AppendNewRow(foreignRow);
     }
 
+    /// <summary>
+    /// Ensures that the provided <paramref name="foreignRow"/> matches the schema of the current <see cref="VirtualDataTable"/>.
+    /// If the <paramref name="foreignRow"/> does not belong to the same underlying <see cref="DataTable"/> as defined by the VirtualDataTable's columns,
+    /// it creates and returns a new <see cref="DataRow"/> using the data from the provided row after validation.
+    /// </summary>
+    /// <param name="foreignRow">
+    /// The external <see cref="DataRow"/> whose schema is to be matched and validated against the VirtualDataTable's schema.
+    /// </param>
+    /// <returns>
+    /// A <see cref="DataRow"/> that conforms to the VirtualDataTable's schema. If the provided row already matches the schema, it is returned unchanged;
+    /// otherwise, a new row is created using the validated data.
+    /// </returns>
     public DataRow MatchSchema(DataRow foreignRow)
     {
         if (foreignRow == null)
