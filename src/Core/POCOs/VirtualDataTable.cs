@@ -59,6 +59,12 @@ public class VirtualDataTable
     /// </summary>
     public void AppendRow(DataRow foreignRow)
     {
+        foreignRow = MatchSchema(foreignRow);
+        AppendNewRow(foreignRow);
+    }
+
+    public DataRow MatchSchema(DataRow foreignRow)
+    {
         if (foreignRow == null)
             throw new ArgumentNullException(nameof(foreignRow));
 
@@ -76,7 +82,7 @@ public class VirtualDataTable
             foreignRow = CreateNewRowFromData(foreignDictionary);
         }
 
-        AppendNewRow(foreignRow);
+        return foreignRow;
     }
 
     /// <summary>
