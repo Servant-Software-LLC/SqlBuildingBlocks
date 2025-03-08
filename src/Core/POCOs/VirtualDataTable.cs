@@ -66,9 +66,17 @@ public class VirtualDataTable
             .Cast<DataColumn>()
             .ToDictionary(col => col.ColumnName, col => foreignRow[col]);
 
-        // Create a new DataRow from the validated dictionary and append it.
-        DataRow newRow = CreateNewRowFromData(foreignDictionary);
-        AppendNewRow(newRow);
+        //Check if this DataRow has the same DataTable as its columns
+        DataTable schemaTable = GetSchemaDataTable();
+        bool sameDataTable = object.ReferenceEquals(foreignRow.Table, schemaTable);
+
+        if (!sameDataTable)
+        {
+            // Create a new DataRow from the validated dictionary and append it.
+            foreignRow = CreateNewRowFromData(foreignDictionary);
+        }
+
+        AppendNewRow(foreignRow);
     }
 
     /// <summary>
@@ -94,29 +102,10 @@ public class VirtualDataTable
     /// </summary>
     public DataRow CreateNewRowFromData(IDictionary<string, object> data)
     {
-        if (Columns == null || Columns.Count == 0)
-            throw new InvalidOperationException("VirtualDataTable.Columns is not set.");
-
-        if (data.Count != Columns.Count)
-            throw new InvalidOperationException("Provided row data does not have the same number of columns as VirtualDataTable.");
-
-        // Validate that every column required by the VirtualDataTable is present and the value is of the correct type.
-        foreach (DataColumn col in Columns)
-        {
-            if (!data.ContainsKey(col.ColumnName))
-                throw new InvalidOperationException($"Provided row data is missing required column '{col.ColumnName}'.");
-
-            object value = data[col.ColumnName];
-            if (value != null && value != DBNull.Value)
-            {
-                if (!col.DataType.IsAssignableFrom(value.GetType()))
-                    throw new InvalidOperationException(
-                        $"Data type mismatch for column '{col.ColumnName}'. Expected {col.DataType}, but got {value.GetType()}.");
-            }
-        }
+        ValidateMatchesSchema(data);
 
         // Retrieve the underlying DataTable from one of the DataColumns.
-        DataTable schemaTable = Columns[0].Table;
+        DataTable schemaTable = GetSchemaDataTable();
         if (schemaTable == null)
             throw new InvalidOperationException("The DataColumn in VirtualDataTable.Columns is not attached to any DataTable.");
 
@@ -143,6 +132,38 @@ public class VirtualDataTable
         else
         {
             Rows = Rows.Concat(new[] { newRow });
+        }
+    }
+
+    private DataTable GetSchemaDataTable()
+    {
+        if (Columns == null || Columns.Count == 0)
+            throw new InvalidOperationException("VirtualDataTable.Columns is not set.");
+
+        return Columns![0].Table;
+    }
+
+    private void ValidateMatchesSchema(IDictionary<string, object> data)
+    {
+        if (Columns == null || Columns.Count == 0)
+            throw new InvalidOperationException("VirtualDataTable.Columns is not set.");
+
+        if (data.Count != Columns.Count)
+            throw new InvalidOperationException("Provided row data does not have the same number of columns as VirtualDataTable.");
+
+        // Validate that every column required by the VirtualDataTable is present and the value is of the correct type.
+        foreach (DataColumn col in Columns)
+        {
+            if (!data.ContainsKey(col.ColumnName))
+                throw new InvalidOperationException($"Provided row data is missing required column '{col.ColumnName}'.");
+
+            object value = data[col.ColumnName];
+            if (value != null && value != DBNull.Value)
+            {
+                if (!col.DataType.IsAssignableFrom(value.GetType()))
+                    throw new InvalidOperationException(
+                        $"Data type mismatch for column '{col.ColumnName}'. Expected {col.DataType}, but got {value.GetType()}.");
+            }
         }
     }
 
