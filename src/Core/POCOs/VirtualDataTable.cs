@@ -9,22 +9,28 @@ namespace SqlBuildingBlocks.POCOs;
 /// </summary>
 public class VirtualDataTable
 {
-    private readonly DataTable schemaTable;
+    private DataTable schemaTable = null!;
 
     public VirtualDataTable(string tableName)
     {
         schemaTable = new DataTable(tableName);
     }
 
-    public VirtualDataTable(DataTable dataTable)
-    {
-        schemaTable = dataTable;
-        Rows = dataTable.Rows.Cast<DataRow>();
-    }
+    public VirtualDataTable(DataTable dataTable) => AdoptDataTable(dataTable);
 
     public string TableName => schemaTable.TableName;
     public DataColumnCollection? Columns => schemaTable.Columns;
     public IEnumerable<DataRow>? Rows { get; set; }
+
+    public void AdoptDataTable(DataTable dataTable)
+    {
+        if (dataTable == null)
+            throw new ArgumentNullException(nameof(dataTable));
+
+        // Set the Rows property to the rows from the provided table.
+        schemaTable = dataTable;
+        Rows = dataTable.Rows.Cast<DataRow>();
+    }
 
     public DataTable CreateEmptyDataTable()
     {
