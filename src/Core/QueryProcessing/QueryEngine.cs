@@ -38,7 +38,9 @@ public class QueryEngine : IQueryEngine
     public VirtualDataTable Query()
     {
         (ProcessingState processingState, IEnumerable<DataRow> selectRows) = QueryInternal();
-        return new("ResultSet") { Columns = processingState.QueryOutput.Columns, Rows = selectRows };
+
+        processingState.QueryOutput.Rows = selectRows;
+        return processingState.QueryOutput;
     }
 
     /// Executes the SELECT statement described in the <see cref="sqlSelectDefinition"/>.  Requires that by the time of
@@ -51,12 +53,9 @@ public class QueryEngine : IQueryEngine
         (ProcessingState processingState, IEnumerable<DataRow> selectRows) = QueryInternal();
 
         //Get all the rows and add them to this processing table.
-        foreach (DataRow dataRow in selectRows)
-        {
-            processingState.QueryOutput.Rows.Add(dataRow);
-        }
+        processingState.QueryOutput.Rows = selectRows;
 
-        return processingState.QueryOutput;        
+        return processingState.QueryOutput.ToDataTable();        
     }
 
     private (ProcessingState processingState, IEnumerable<DataRow> SelectRows) QueryInternal()
@@ -93,7 +92,7 @@ public class QueryEngine : IQueryEngine
         //If this is a COUNT aggregate, then we only return 1 DataRow that has only the count itself.  (TODO: Technically, there could be other columns in this SELECT, but it hasn't been a needed use case yet)
         if (processingState.CountAggregate)
         {
-            processingState.QueryOutput = new DataTable();
+            processingState.QueryOutput = new("ResultSet");
             processingState.QueryOutput.Columns.Add(new DataColumn("Count", typeof(int)));
 
             var onlyDataRow = processingState.QueryOutput.NewRow();
@@ -118,7 +117,7 @@ public class QueryEngine : IQueryEngine
     /// </summary>
     /// <param name="dataTableOutput"></param>
     /// <returns></returns>
-    private DataRow ResolveSelectColumns(DataTable queryOutput)
+    private DataRow ResolveSelectColumns(VirtualDataTable queryOutput)
     {
         var selectColumns = queryOutput.NewRow();
 
@@ -139,7 +138,7 @@ public class QueryEngine : IQueryEngine
     /// <param name="queryOutput"></param>
     /// <param name="fromDataRows"></param>
     /// <returns></returns>
-    private IEnumerable<DataRow> ResolveSelectColumns(DataTable queryOutput, IEnumerable<DataRow> fromDataRows)
+    private IEnumerable<DataRow> ResolveSelectColumns(VirtualDataTable queryOutput, IEnumerable<DataRow> fromDataRows)
     {
         //TODO: Maltby - Possible performance improvement.  Map columns of the SELECT to integer index values in fromDataRows' DataRow
         //               before enumerating all rows of fromDataRows.

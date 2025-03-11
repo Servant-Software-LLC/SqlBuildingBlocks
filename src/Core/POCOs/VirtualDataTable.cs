@@ -9,18 +9,21 @@ namespace SqlBuildingBlocks.POCOs;
 /// </summary>
 public class VirtualDataTable
 {
-    public VirtualDataTable(string tableName) => 
-        TableName = !string.IsNullOrEmpty(tableName) ? tableName : throw new ArgumentNullException(nameof(tableName));
+    private readonly DataTable schemaTable;
+
+    public VirtualDataTable(string tableName)
+    {
+        schemaTable = new DataTable(tableName);
+    }
 
     public VirtualDataTable(DataTable dataTable)
     {
-        TableName = dataTable.TableName;
-        Columns = dataTable.Columns;
+        schemaTable = dataTable;
         Rows = dataTable.Rows.Cast<DataRow>();
     }
 
-    public string TableName { get; }
-    public DataColumnCollection? Columns { get; set; }
+    public string TableName => schemaTable.TableName;
+    public DataColumnCollection? Columns => schemaTable.Columns;
     public IEnumerable<DataRow>? Rows { get; set; }
 
     public DataTable CreateEmptyDataTable()
@@ -85,7 +88,6 @@ public class VirtualDataTable
             .ToDictionary(col => col.ColumnName, col => foreignRow[col]);
 
         //Check if this DataRow has the same DataTable as its columns
-        DataTable schemaTable = GetSchemaDataTable();
         bool sameDataTable = object.ReferenceEquals(foreignRow.Table, schemaTable);
 
         if (!sameDataTable)
@@ -114,6 +116,8 @@ public class VirtualDataTable
         AppendNewRow(newRow);
     }
 
+    public DataRow NewRow() => schemaTable.NewRow();
+
     /// <summary>
     /// Creates a new DataRow using the VirtualDataTable's underlying schema from Columns.
     /// It assumes that the provided dictionary has been validated.
@@ -121,11 +125,6 @@ public class VirtualDataTable
     public DataRow CreateNewRowFromData(IDictionary<string, object> data)
     {
         ValidateMatchesSchema(data);
-
-        // Retrieve the underlying DataTable from one of the DataColumns.
-        DataTable schemaTable = GetSchemaDataTable();
-        if (schemaTable == null)
-            throw new InvalidOperationException("The DataColumn in VirtualDataTable.Columns is not attached to any DataTable.");
 
         DataRow newRow = schemaTable.NewRow();
 
@@ -151,14 +150,6 @@ public class VirtualDataTable
         {
             Rows = Rows.Concat(new[] { newRow });
         }
-    }
-
-    private DataTable GetSchemaDataTable()
-    {
-        if (Columns == null || Columns.Count == 0)
-            throw new InvalidOperationException("VirtualDataTable.Columns is not set.");
-
-        return Columns![0].Table;
     }
 
     private void ValidateMatchesSchema(IDictionary<string, object> data)

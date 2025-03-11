@@ -1,4 +1,5 @@
 ﻿using SqlBuildingBlocks.LogicalEntities;
+using SqlBuildingBlocks.POCOs;
 using System.Data;
 
 namespace SqlBuildingBlocks.QueryProcessing;
@@ -24,7 +25,7 @@ internal class ProcessingState
 
     public Dictionary<SqlTable, DataRow> DataRowsOfOtherTables = new();
 
-    public DataTable QueryOutput = new();
+    public VirtualDataTable QueryOutput = new("ResultSet");
 
     public bool CountAggregate { get; set; }
 }
