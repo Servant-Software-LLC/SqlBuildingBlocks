@@ -17,6 +17,7 @@ public class VirtualDataTable
     }
 
     public VirtualDataTable(DataTable dataTable) => AdoptDataTable(dataTable);
+    public VirtualDataTable(VirtualDataTable virtualDataTable) => AdoptDataTable(virtualDataTable);
 
     public string TableName => schemaTable.TableName;
     public DataColumnCollection? Columns => schemaTable.Columns;
@@ -31,6 +32,12 @@ public class VirtualDataTable
         schemaTable = dataTable;
         Rows = dataTable.Rows.Cast<DataRow>();
     }
+
+    /// <summary>
+    /// Allows two virtual tables to share the same schema
+    /// </summary>
+    /// <param name="virtualDataTable"></param>
+    public void AdoptDataTable(VirtualDataTable virtualDataTable) => AdoptDataTable(virtualDataTable.schemaTable);
 
     public DataTable CreateEmptyDataTable()
     {
