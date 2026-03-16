@@ -83,6 +83,10 @@ public class QueryEngine : IQueryEngine
                                     //FROM with JOINs
                                     ResolveSelectColumns(processingState, fromDataRows);
 
+        //Apply ORDER BY before LIMIT/OFFSET so that LIMIT operates on the sorted result set.
+        if (sqlSelectDefinition.OrderBy != null && sqlSelectDefinition.OrderBy.Count > 0)
+            selectRows = ApplyOrderBy(selectRows, sqlSelectDefinition.OrderBy);
+
         //TODO:  Maltby - There are lots of optimization possibilities here in the table joins
         if (sqlSelectDefinition.Limit != null && sqlSelectDefinition.Limit.RowOffset.Value > 0)
             selectRows = selectRows.Skip(sqlSelectDefinition.Limit.RowOffset.Value);
@@ -331,6 +335,36 @@ public class QueryEngine : IQueryEngine
 
         processingState.WhereApplied = sqlSelectDefinition.Table;
         return applyFilterMethodReturnValue;
+    }
+
+    private static IEnumerable<DataRow> ApplyOrderBy(IEnumerable<DataRow> rows, IList<SqlOrderByColumn> orderBy)
+    {
+        var first = orderBy[0];
+        var firstColName = GetColumnName(first.ColumnName);
+
+        IOrderedEnumerable<DataRow> ordered = first.Descending
+            ? rows.OrderByDescending(row => row[firstColName], Comparer<object>.Create(CompareValues))
+            : rows.OrderBy(row => row[firstColName], Comparer<object>.Create(CompareValues));
+
+        for (int i = 1; i < orderBy.Count; i++)
+        {
+            var col = orderBy[i];
+            var colName = GetColumnName(col.ColumnName);
+            ordered = col.Descending
+                ? ordered.ThenByDescending(row => row[colName], Comparer<object>.Create(CompareValues))
+                : ordered.ThenBy(row => row[colName], Comparer<object>.Create(CompareValues));
+        }
+
+        return ordered;
+    }
+
+    private static int CompareValues(object x, object y)
+    {
+        if (x == DBNull.Value && y == DBNull.Value) return 0;
+        if (x == DBNull.Value) return -1;
+        if (y == DBNull.Value) return 1;
+        if (x is IComparable cx) return cx.CompareTo(y);
+        return string.Compare(x.ToString(), y.ToString(), StringComparison.Ordinal);
     }
 
     private bool WhereClauseContainsOnlyTables(SqlBinaryExpression whereClause, HashSet<SqlTable> tables)
