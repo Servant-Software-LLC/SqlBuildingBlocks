@@ -7,6 +7,7 @@ namespace SqlBuildingBlocks.Core.Tests.Utils;
 internal class DetectVisitedVisitor : ISqlExpressionVisitor
 {
     public bool VisitedBinaryExpression { get; private set; }
+    public bool VisitedBetweenExpression { get; private set; }
     public bool VisitedColumnRef { get; private set; }
     public bool VisitedParameter { get; private set; }
     public bool VisitedFunction { get; private set; }
@@ -16,6 +17,12 @@ internal class DetectVisitedVisitor : ISqlExpressionVisitor
     {
         Assert.NotNull(binExpr);
         VisitedBinaryExpression = true;
+    }
+
+    public void Visit(SqlBetweenExpression betweenExpr)
+    {
+        Assert.NotNull(betweenExpr);
+        VisitedBetweenExpression = true;
     }
 
     SqlExpression ISqlExpressionVisitor.Visit(SqlColumnRef column)

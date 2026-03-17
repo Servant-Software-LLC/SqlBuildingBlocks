@@ -15,6 +15,8 @@ namespace SqlBuildingBlocks.Visitors;
 public abstract class ResolveFunctionsVisitorBase : ISqlExpressionVisitor, ISqlValueVisitor
 {
     public virtual void Visit(SqlBinaryExpression binExpr) { }
+
+    public virtual void Visit(SqlBetweenExpression betweenExpr) { }
     public virtual SqlExpression? Visit(SqlColumnRef column) => null;
     public virtual SqlExpression? Visit(SqlParameter parameter) => null;
     public SqlExpression? Visit(SqlFunction sqlFunction) => VisitReturnExpression(sqlFunction);

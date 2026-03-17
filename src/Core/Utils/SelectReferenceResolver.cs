@@ -206,7 +206,7 @@ class SelectReferenceResolver
         if (sqlSelectDefinition.WhereClause == null)
             return;
 
-        WalkBinaryExpression_SetColumnReferences(sqlSelectDefinition.WhereClause, columnNameToTables, false);
+        WalkExpression_SetColumnReferences(sqlSelectDefinition.WhereClause, columnNameToTables, false);
     }
 
     private void WalkBinaryExpression_SetColumnReferences(SqlBinaryExpression binaryExpression, TableFinder columnNameToTables, bool joinOnClause)
@@ -216,11 +216,41 @@ class SelectReferenceResolver
             SetColumnReferences(binaryExpression.Right, columnNameToTables, joinOnClause);
     }
 
+    private void WalkBetweenExpression_SetColumnReferences(SqlBetweenExpression betweenExpression, TableFinder columnNameToTables, bool joinOnClause)
+    {
+        SetColumnReferences(betweenExpression.Operand, columnNameToTables, joinOnClause);
+        SetColumnReferences(betweenExpression.LowerBound, columnNameToTables, joinOnClause);
+        SetColumnReferences(betweenExpression.UpperBound, columnNameToTables, joinOnClause);
+    }
+
+    private void WalkExpression_SetColumnReferences(SqlExpression expression, TableFinder columnNameToTables, bool joinOnClause)
+    {
+        if (expression.BinExpr != null)
+        {
+            WalkBinaryExpression_SetColumnReferences(expression.BinExpr, columnNameToTables, joinOnClause);
+            return;
+        }
+
+        if (expression.BetweenExpr != null)
+        {
+            WalkBetweenExpression_SetColumnReferences(expression.BetweenExpr, columnNameToTables, joinOnClause);
+            return;
+        }
+
+        SetColumnReferences(expression, columnNameToTables, joinOnClause);
+    }
+
     private void SetColumnReferences(SqlExpression operand, TableFinder columnNameToTables, bool joinOnClause)
     {
         if (operand.BinExpr != null)
         {
             WalkBinaryExpression_SetColumnReferences(operand.BinExpr, columnNameToTables, joinOnClause);
+            return;
+        }
+
+        if (operand.BetweenExpr != null)
+        {
+            WalkBetweenExpression_SetColumnReferences(operand.BetweenExpr, columnNameToTables, joinOnClause);
             return;
         }
 

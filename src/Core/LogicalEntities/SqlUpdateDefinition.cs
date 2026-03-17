@@ -10,7 +10,7 @@ public class SqlUpdateDefinition
 
     public IList<SqlAssignment> Assignments { get; private set; } = new List<SqlAssignment>();
 
-    public SqlBinaryExpression? WhereClause { get; set; }
+    public SqlExpression? WhereClause { get; set; }
 
     public SqlReturning? Returning { get; set; }
 

@@ -8,7 +8,7 @@ public class SqlDeleteDefinition
 {
     public SqlTable? Table { get; set; }
 
-    public SqlBinaryExpression? WhereClause { get; set; }
+    public SqlExpression? WhereClause { get; set; }
     public SqlReturning? Returning { get; set; }
 
     public void ResolveParameters(DbParameterCollection parameters) =>

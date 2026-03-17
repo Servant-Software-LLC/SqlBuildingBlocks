@@ -228,7 +228,7 @@ public class SelectStmtTests
         Assert.NotNull(selectStmt.WhereClause);
 
         //WHERE - ROW_COUNT() = 1
-        var whereLeftExpr = selectStmt.WhereClause.Left.BinExpr;
+        var whereLeftExpr = selectStmt.WhereClause!.BinExpr!.Left.BinExpr;
         Assert.NotNull(whereLeftExpr);
         Assert.NotNull(whereLeftExpr.Left.Function);
         Assert.Equal("ROW_COUNT", whereLeftExpr.Left.Function.FunctionName);
@@ -237,7 +237,7 @@ public class SelectStmtTests
         Assert.Equal(1, whereLeftExpr.Right.Value.Int);
 
         //WHERE - BlogId=LAST_INSERT_ID()
-        var whereRightExpr = selectStmt.WhereClause.Right.BinExpr;
+        var whereRightExpr = selectStmt.WhereClause!.BinExpr!.Right.BinExpr;
         Assert.NotNull(whereRightExpr);
         Assert.NotNull(whereRightExpr.Left.Column);
         Assert.Equal("BlogId", whereRightExpr.Left.Column.ColumnName);
@@ -346,10 +346,11 @@ public class SelectStmtTests
         //Assert on FROM table
         Assert.Equal("employees", selectStmt.Table.TableName);
 
-        //Assert on WHERE clause — WhereClause is a SqlBinaryExpression directly
+        //Assert on WHERE clause — WhereClause is a SqlExpression wrapping a SqlBinaryExpression
         Assert.NotNull(selectStmt.WhereClause);
-        var binExpr = selectStmt.WhereClause;
-        Assert.Equal(SqlBinaryOperator.IsNull, binExpr.Operator);
+        var binExpr = selectStmt.WhereClause!.BinExpr;
+        Assert.NotNull(binExpr);
+        Assert.Equal(SqlBinaryOperator.IsNull, binExpr!.Operator);
         Assert.NotNull(binExpr.Left.Column);
         Assert.Equal("manager_id", binExpr.Left.Column.ColumnName);
         Assert.Null(binExpr.Right);
@@ -368,10 +369,11 @@ public class SelectStmtTests
         //Assert on FROM table
         Assert.Equal("orders", selectStmt.Table.TableName);
 
-        //Assert on WHERE clause — WhereClause is a SqlBinaryExpression directly
+        //Assert on WHERE clause — WhereClause is a SqlExpression wrapping a SqlBinaryExpression
         Assert.NotNull(selectStmt.WhereClause);
-        var binExpr = selectStmt.WhereClause;
-        Assert.Equal(SqlBinaryOperator.IsNotNull, binExpr.Operator);
+        var binExpr = selectStmt.WhereClause!.BinExpr;
+        Assert.NotNull(binExpr);
+        Assert.Equal(SqlBinaryOperator.IsNotNull, binExpr!.Operator);
         Assert.NotNull(binExpr.Left.Column);
         Assert.Equal("shipped_date", binExpr.Left.Column.ColumnName);
         Assert.Null(binExpr.Right);
@@ -389,8 +391,9 @@ public class SelectStmtTests
 
         //Assert on WHERE: top-level AND
         Assert.NotNull(selectStmt.WhereClause);
-        var andExpr = selectStmt.WhereClause;
-        Assert.Equal(SqlBinaryOperator.And, andExpr.Operator);
+        var andExpr = selectStmt.WhereClause!.BinExpr;
+        Assert.NotNull(andExpr);
+        Assert.Equal(SqlBinaryOperator.And, andExpr!.Operator);
 
         // Left side of AND: completed_at IS NULL
         var leftIsNull = andExpr.Left.BinExpr;
@@ -421,11 +424,99 @@ public class SelectStmtTests
         //Assert: one join
         Assert.Single(selectStmt.Joins);
 
-        //Assert on WHERE clause: IS NULL — WhereClause is a SqlBinaryExpression directly
+        //Assert on WHERE clause: IS NULL — WhereClause is a SqlExpression wrapping a SqlBinaryExpression
         Assert.NotNull(selectStmt.WhereClause);
-        var binExpr = selectStmt.WhereClause;
-        Assert.Equal(SqlBinaryOperator.IsNull, binExpr.Operator);
+        var binExpr = selectStmt.WhereClause!.BinExpr;
+        Assert.NotNull(binExpr);
+        Assert.Equal(SqlBinaryOperator.IsNull, binExpr!.Operator);
         Assert.Null(binExpr.Right);
+    }
+
+    // ── BETWEEN / NOT BETWEEN ─────────────────────────────────────────────
+
+    [Fact]
+    public void Select_Where_Between()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, @"SELECT * FROM orders WHERE amount BETWEEN 100 AND 500");
+
+        DatabaseConnectionProvider databaseConnectionProvider = new();
+        TableSchemaProvider tableSchemaProvider = new();
+        var selectStmt = grammar.Create(node, databaseConnectionProvider, tableSchemaProvider);
+
+        Assert.NotNull(selectStmt.WhereClause);
+        var betweenExpr = selectStmt.WhereClause!.BetweenExpr;
+        Assert.NotNull(betweenExpr);
+        Assert.False(betweenExpr!.IsNegated);
+
+        // Operand
+        Assert.NotNull(betweenExpr.Operand.Column);
+        Assert.Equal("amount", betweenExpr.Operand.Column.ColumnName);
+
+        // Lower bound
+        Assert.NotNull(betweenExpr.LowerBound.Value);
+        Assert.Equal(100, betweenExpr.LowerBound.Value.Int);
+
+        // Upper bound
+        Assert.NotNull(betweenExpr.UpperBound.Value);
+        Assert.Equal(500, betweenExpr.UpperBound.Value.Int);
+    }
+
+    [Fact]
+    public void Select_Where_NotBetween()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, @"SELECT * FROM employees WHERE age NOT BETWEEN 18 AND 25");
+
+        DatabaseConnectionProvider databaseConnectionProvider = new();
+        TableSchemaProvider tableSchemaProvider = new();
+        var selectStmt = grammar.Create(node, databaseConnectionProvider, tableSchemaProvider);
+
+        Assert.NotNull(selectStmt.WhereClause);
+        var betweenExpr = selectStmt.WhereClause!.BetweenExpr;
+        Assert.NotNull(betweenExpr);
+        Assert.True(betweenExpr!.IsNegated);
+
+        Assert.NotNull(betweenExpr.Operand.Column);
+        Assert.Equal("age", betweenExpr.Operand.Column.ColumnName);
+
+        Assert.NotNull(betweenExpr.LowerBound.Value);
+        Assert.Equal(18, betweenExpr.LowerBound.Value.Int);
+
+        Assert.NotNull(betweenExpr.UpperBound.Value);
+        Assert.Equal(25, betweenExpr.UpperBound.Value.Int);
+    }
+
+    [Fact]
+    public void Select_Where_Between_AndCondition()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, @"SELECT * FROM orders WHERE amount BETWEEN 10 AND 100 AND status = 'active'");
+
+        DatabaseConnectionProvider databaseConnectionProvider = new();
+        TableSchemaProvider tableSchemaProvider = new();
+        var selectStmt = grammar.Create(node, databaseConnectionProvider, tableSchemaProvider);
+
+        Assert.NotNull(selectStmt.WhereClause);
+
+        // Top-level is a logical AND
+        var topBinExpr = selectStmt.WhereClause!.BinExpr;
+        Assert.NotNull(topBinExpr);
+        Assert.Equal(SqlBinaryOperator.And, topBinExpr!.Operator);
+
+        // Left side of AND is the BETWEEN expression
+        var betweenExpr = topBinExpr.Left.BetweenExpr;
+        Assert.NotNull(betweenExpr);
+        Assert.False(betweenExpr!.IsNegated);
+        Assert.Equal("amount", betweenExpr.Operand.Column.ColumnName);
+        Assert.Equal(10, betweenExpr.LowerBound.Value.Int);
+        Assert.Equal(100, betweenExpr.UpperBound.Value.Int);
+
+        // Right side of AND is the equality
+        var rightBinExpr = topBinExpr.Right!.BinExpr;
+        Assert.NotNull(rightBinExpr);
+        Assert.Equal(SqlBinaryOperator.Equal, rightBinExpr!.Operator);
+        Assert.Equal("status", rightBinExpr.Left.Column.ColumnName);
     }
 
 }

@@ -11,6 +11,12 @@ public interface ISqlExpressionVisitor
     void Visit(SqlBinaryExpression binExpr);
 
     /// <summary>
+    /// Visits the <see cref="SqlBetweenExpression"/> in the <see cref="SqlExpression"/> tree.
+    /// </summary>
+    /// <param name="betweenExpr"></param>
+    void Visit(SqlBetweenExpression betweenExpr);
+
+    /// <summary>
     /// Visits the <see cref="SqlColumnRef" in the <see cref="SqlExpression"/> tree./>
     /// </summary>
     /// <param name="column"></param>
