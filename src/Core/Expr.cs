@@ -11,6 +11,7 @@ namespace SqlBuildingBlocks;
 public class Expr : NonTerminal
 {
     private const string binExprTermName = "binExpr";
+    private const string isNullExprTermName = "isNullExpr";
 
     private readonly Grammar grammar;
     private FuncCall? funcCall;
@@ -71,6 +72,8 @@ public class Expr : NonTerminal
         var OR = grammar.ToTerm("OR");
         var LIKE = grammar.ToTerm("LIKE");
         var IN = grammar.ToTerm("IN");
+        var IS = grammar.ToTerm("IS");
+        var NULL = grammar.ToTerm("NULL");
 
         // Define operator precedence and associativity
 
@@ -78,6 +81,9 @@ public class Expr : NonTerminal
         grammar.RegisterOperators(9, Associativity.Left, PLUS, MINUS);
         grammar.RegisterOperators(8, Associativity.Left, EQUAL, GREATER_THAN, LESS_THAN, GREATER_THAN_EQUAL, LESS_THAN_EQUAL, NOT_EQUAL_TO, NOT_EQUAL_TO_EXCL, NOT_LESS_THAN, NOT_GREATER_THAN, LIKE, IN);
         grammar.RegisterOperators(7, Associativity.Left, BITWISE_AND, BITWISE_OR, BITWISE_XOR);
+        // IS has same precedence as comparison operators; registering it resolves the shift-reduce conflict
+        // for the isNullExpr postfix production (expr IS NULL / expr IS NOT NULL).
+        grammar.RegisterOperators(7, Associativity.Left, IS);
         grammar.RegisterOperators(6, Associativity.Left, NOT);
         grammar.RegisterOperators(5, Associativity.Left, AND);
         grammar.RegisterOperators(4, Associativity.Left, OR);
@@ -110,14 +116,20 @@ public class Expr : NonTerminal
         var binExpr = new NonTerminal(binExprTermName);
         binExpr.Rule = this + binOp + this;
 
-        Rule = term | unExpr | binExpr;
+        // IS NULL / IS NOT NULL — unary postfix predicates
+        var isNullExpr = new NonTerminal(isNullExprTermName);
+        isNullExpr.Rule = this + IS + NULL | this + IS + NOT + NULL;
 
-        //Note: we cannot declare binOp as transient because it includes operators "NOT LIKE", "NOT IN" consisting of two tokens. 
+        Rule = term | unExpr | binExpr | isNullExpr;
+
+        //Note: we cannot declare binOp as transient because it includes operators "NOT LIKE", "NOT IN" consisting of two tokens.
         // Transient non-terminals cannot have more than one non-punctuation child nodes.
         // Instead, we set flag InheritPrecedence on binOp , so that it inherits precedence value from it's children, and this precedence is used
         // in conflict resolution when binOp node is sitting on the stack
         grammar.MarkTransient(this /*expression*/, term, unOp);
         binOp.SetFlag(TermFlags.InheritPrecedence);
+
+        grammar.MarkReservedWords("IS");
     }
 
     public virtual SqlExpression Create(ParseTreeNode expression)
@@ -128,6 +140,12 @@ public class Expr : NonTerminal
         if (nodeTermName == binExprTermName)
         {
             return new(CreateBinaryExpression(expression));
+        }
+
+        //Is this an IS NULL / IS NOT NULL expression?
+        if (nodeTermName == isNullExprTermName)
+        {
+            return new(CreateIsNullExpression(expression));
         }
 
         //Is this node a column reference?
@@ -172,6 +190,23 @@ public class Expr : NonTerminal
         return new(left, CreateOperator(operatorSymbol), right);
     }
 
+    protected internal SqlBinaryExpression CreateIsNullExpression(ParseTreeNode isNullExpr)
+    {
+        if (isNullExpr.Term.Name != isNullExprTermName)
+        {
+            var thisMethod = MethodBase.GetCurrentMethod() as MethodInfo;
+            throw new ArgumentException($"Cannot create building block of type {thisMethod!.ReturnType}.  The TermName for node is {isNullExpr.Term.Name} which does not match {isNullExprTermName}", nameof(isNullExpr));
+        }
+
+        // Children: expr IS NULL  => [0]=expr, [1]=IS, [2]=NULL
+        //           expr IS NOT NULL => [0]=expr, [1]=IS, [2]=NOT, [3]=NULL
+        var left = Create(isNullExpr.ChildNodes[0]);
+        var isNotNull = isNullExpr.ChildNodes.Count == 4;
+        var op = isNotNull ? SqlBinaryOperator.IsNotNull : SqlBinaryOperator.IsNull;
+
+        return new(left, op, null);
+    }
+
     internal static SqlBinaryOperator CreateOperator(string sBinaryOperator) =>
         sBinaryOperator.ToUpper() switch
         {
@@ -197,6 +232,8 @@ public class Expr : NonTerminal
             SqlBinaryOperator.And => "AND",
             SqlBinaryOperator.Or => "OR",
             SqlBinaryOperator.Like => "LIKE",
+            SqlBinaryOperator.IsNull => "IS NULL",
+            SqlBinaryOperator.IsNotNull => "IS NOT NULL",
             _ => throw new ArgumentException($"Invalid binary operator {binaryOperator}", nameof(binaryOperator))
         };
 

@@ -44,6 +44,30 @@ public class TableSchemaProvider : ITableSchemaProvider
             yield break;
         }
 
+        if (table.TableName == "employees")
+        {
+            yield return new("id", typeof(int));
+            yield return new("name", typeof(string));
+            // DataColumn does not support Nullable<T>; use object to represent a nullable column.
+            yield return new DataColumn("manager_id", typeof(int)) { AllowDBNull = true };
+            yield break;
+        }
+
+        if (table.TableName == "orders")
+        {
+            yield return new("id", typeof(int));
+            yield return new DataColumn("shipped_date", typeof(DateTime)) { AllowDBNull = true };
+            yield break;
+        }
+
+        if (table.TableName == "tasks")
+        {
+            yield return new("id", typeof(int));
+            yield return new DataColumn("completed_at", typeof(DateTime)) { AllowDBNull = true };
+            yield return new("assigned_to", typeof(string));
+            yield break;
+        }
+
         throw new KeyNotFoundException($"The fake TableSchemaProvider doesn't know about a table by the name of {table.TableName}");
     }
 }

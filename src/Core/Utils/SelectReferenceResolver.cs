@@ -212,7 +212,8 @@ class SelectReferenceResolver
     private void WalkBinaryExpression_SetColumnReferences(SqlBinaryExpression binaryExpression, TableFinder columnNameToTables, bool joinOnClause)
     {
         SetColumnReferences(binaryExpression.Left, columnNameToTables, joinOnClause);
-        SetColumnReferences(binaryExpression.Right, columnNameToTables, joinOnClause);
+        if (binaryExpression.Right != null)
+            SetColumnReferences(binaryExpression.Right, columnNameToTables, joinOnClause);
     }
 
     private void SetColumnReferences(SqlExpression operand, TableFinder columnNameToTables, bool joinOnClause)
