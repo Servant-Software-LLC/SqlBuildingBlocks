@@ -114,4 +114,100 @@ public class ExprTests
         Assert.Equal("ID", binExpr.Right.Parameter.Name);
     }
 
+    [Fact]
+    public void Column_IsNull()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "manager_id IS NULL");
+        var expression = grammar.Create(node);
+
+        Assert.NotNull(expression.BinExpr);
+        var binExpr = expression.BinExpr;
+
+        // Left: the column operand
+        Assert.NotNull(binExpr.Left.Column);
+        Assert.Equal("manager_id", binExpr.Left.Column.ColumnName);
+        Assert.Null(binExpr.Left.Value);
+        Assert.Null(binExpr.Left.BinExpr);
+
+        // Operator
+        Assert.Equal(SqlBinaryOperator.IsNull, binExpr.Operator);
+
+        // Right: null (IS NULL is a unary postfix predicate)
+        Assert.Null(binExpr.Right);
+    }
+
+    [Fact]
+    public void Column_IsNotNull()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "shipped_date IS NOT NULL");
+        var expression = grammar.Create(node);
+
+        Assert.NotNull(expression.BinExpr);
+        var binExpr = expression.BinExpr;
+
+        // Left: the column operand
+        Assert.NotNull(binExpr.Left.Column);
+        Assert.Equal("shipped_date", binExpr.Left.Column.ColumnName);
+        Assert.Null(binExpr.Left.Value);
+        Assert.Null(binExpr.Left.BinExpr);
+
+        // Operator
+        Assert.Equal(SqlBinaryOperator.IsNotNull, binExpr.Operator);
+
+        // Right: null (IS NOT NULL is a unary postfix predicate)
+        Assert.Null(binExpr.Right);
+    }
+
+    [Fact]
+    public void CompoundCondition_IsNull_And_IsNotNull()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "a IS NULL AND b IS NOT NULL");
+        var expression = grammar.Create(node);
+
+        // Top-level: AND binary expression
+        Assert.NotNull(expression.BinExpr);
+        var andExpr = expression.BinExpr;
+        Assert.Equal(SqlBinaryOperator.And, andExpr.Operator);
+
+        // Left of AND: a IS NULL
+        Assert.NotNull(andExpr.Left.BinExpr);
+        var leftIsNull = andExpr.Left.BinExpr;
+        Assert.Equal(SqlBinaryOperator.IsNull, leftIsNull.Operator);
+        Assert.NotNull(leftIsNull.Left.Column);
+        Assert.Equal("a", leftIsNull.Left.Column.ColumnName);
+        Assert.Null(leftIsNull.Right);
+
+        // Right of AND: b IS NOT NULL
+        Assert.NotNull(andExpr.Right);
+        Assert.NotNull(andExpr.Right.BinExpr);
+        var rightIsNotNull = andExpr.Right.BinExpr;
+        Assert.Equal(SqlBinaryOperator.IsNotNull, rightIsNotNull.Operator);
+        Assert.NotNull(rightIsNotNull.Left.Column);
+        Assert.Equal("b", rightIsNotNull.Left.Column.ColumnName);
+        Assert.Null(rightIsNotNull.Right);
+    }
+
+    [Fact]
+    public void IsNull_ToExpressionString()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "manager_id IS NULL");
+        var expression = grammar.Create(node);
+
+        Assert.Equal("manager_id IS NULL", expression.ToExpressionString());
+    }
+
+    [Fact]
+    public void IsNotNull_ToExpressionString()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "shipped_date IS NOT NULL");
+        var expression = grammar.Create(node);
+
+        Assert.Equal("shipped_date IS NOT NULL", expression.ToExpressionString());
+    }
+
 }

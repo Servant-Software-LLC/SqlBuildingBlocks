@@ -333,4 +333,99 @@ public class SelectStmtTests
 
     }
 
+    [Fact]
+    public void Select_Where_IsNull()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, @"SELECT id, name FROM employees WHERE manager_id IS NULL");
+
+        DatabaseConnectionProvider databaseConnectionProvider = new();
+        TableSchemaProvider tableSchemaProvider = new();
+        var selectStmt = grammar.Create(node, databaseConnectionProvider, tableSchemaProvider);
+
+        //Assert on FROM table
+        Assert.Equal("employees", selectStmt.Table.TableName);
+
+        //Assert on WHERE clause — WhereClause is a SqlBinaryExpression directly
+        Assert.NotNull(selectStmt.WhereClause);
+        var binExpr = selectStmt.WhereClause;
+        Assert.Equal(SqlBinaryOperator.IsNull, binExpr.Operator);
+        Assert.NotNull(binExpr.Left.Column);
+        Assert.Equal("manager_id", binExpr.Left.Column.ColumnName);
+        Assert.Null(binExpr.Right);
+    }
+
+    [Fact]
+    public void Select_Where_IsNotNull()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, @"SELECT id FROM orders WHERE shipped_date IS NOT NULL");
+
+        DatabaseConnectionProvider databaseConnectionProvider = new();
+        TableSchemaProvider tableSchemaProvider = new();
+        var selectStmt = grammar.Create(node, databaseConnectionProvider, tableSchemaProvider);
+
+        //Assert on FROM table
+        Assert.Equal("orders", selectStmt.Table.TableName);
+
+        //Assert on WHERE clause — WhereClause is a SqlBinaryExpression directly
+        Assert.NotNull(selectStmt.WhereClause);
+        var binExpr = selectStmt.WhereClause;
+        Assert.Equal(SqlBinaryOperator.IsNotNull, binExpr.Operator);
+        Assert.NotNull(binExpr.Left.Column);
+        Assert.Equal("shipped_date", binExpr.Left.Column.ColumnName);
+        Assert.Null(binExpr.Right);
+    }
+
+    [Fact]
+    public void Select_Where_IsNull_And_IsNotNull()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, @"SELECT id FROM tasks WHERE completed_at IS NULL AND assigned_to IS NOT NULL");
+
+        DatabaseConnectionProvider databaseConnectionProvider = new();
+        TableSchemaProvider tableSchemaProvider = new();
+        var selectStmt = grammar.Create(node, databaseConnectionProvider, tableSchemaProvider);
+
+        //Assert on WHERE: top-level AND
+        Assert.NotNull(selectStmt.WhereClause);
+        var andExpr = selectStmt.WhereClause;
+        Assert.Equal(SqlBinaryOperator.And, andExpr.Operator);
+
+        // Left side of AND: completed_at IS NULL
+        var leftIsNull = andExpr.Left.BinExpr;
+        Assert.NotNull(leftIsNull);
+        Assert.Equal(SqlBinaryOperator.IsNull, leftIsNull.Operator);
+        Assert.Equal("completed_at", leftIsNull.Left.Column.ColumnName);
+        Assert.Null(leftIsNull.Right);
+
+        // Right side of AND: assigned_to IS NOT NULL
+        Assert.NotNull(andExpr.Right);
+        var rightIsNotNull = andExpr.Right.BinExpr;
+        Assert.NotNull(rightIsNotNull);
+        Assert.Equal(SqlBinaryOperator.IsNotNull, rightIsNotNull.Operator);
+        Assert.Equal("assigned_to", rightIsNotNull.Left.Column.ColumnName);
+        Assert.Null(rightIsNotNull.Right);
+    }
+
+    [Fact]
+    public void Select_Join_Where_IsNull()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, @"SELECT e.id, e.name FROM employees e INNER JOIN orders o ON e.id = o.id WHERE e.manager_id IS NULL");
+
+        DatabaseConnectionProvider databaseConnectionProvider = new();
+        TableSchemaProvider tableSchemaProvider = new();
+        var selectStmt = grammar.Create(node, databaseConnectionProvider, tableSchemaProvider);
+
+        //Assert: one join
+        Assert.Single(selectStmt.Joins);
+
+        //Assert on WHERE clause: IS NULL — WhereClause is a SqlBinaryExpression directly
+        Assert.NotNull(selectStmt.WhereClause);
+        var binExpr = selectStmt.WhereClause;
+        Assert.Equal(SqlBinaryOperator.IsNull, binExpr.Operator);
+        Assert.Null(binExpr.Right);
+    }
+
 }

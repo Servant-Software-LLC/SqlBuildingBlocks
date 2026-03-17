@@ -7,7 +7,7 @@ namespace SqlBuildingBlocks.LogicalEntities;
 
 public class SqlBinaryExpression
 {
-    public SqlBinaryExpression(SqlExpression left, SqlBinaryOperator binaryOperator, SqlExpression right)
+    public SqlBinaryExpression(SqlExpression left, SqlBinaryOperator binaryOperator, SqlExpression? right)
     {
         Left = left;
         Operator = binaryOperator;
@@ -16,13 +16,13 @@ public class SqlBinaryExpression
 
     public SqlExpression Left { get; set; }
     public SqlBinaryOperator Operator { get; set; }
-    public SqlExpression Right { get; set; }
+    public SqlExpression? Right { get; set; }
 
     public void Accept(ISqlExpressionVisitor visitor)
     {
         visitor.Visit(this);
         Left.Accept(visitor);
-        Right.Accept(visitor);
+        Right?.Accept(visitor);
     }
 
     public Expression<Func<TDataRow, bool>> BuildExpression<TDataRow>(Dictionary<SqlTable, DataRow> substituteValues, SqlTable tableDataRow)
@@ -38,8 +38,12 @@ public class SqlBinaryExpression
 
     public Expression GetExpression(Dictionary<SqlTable, DataRow> substituteValues, SqlTable tableDataRow, ParameterExpression param)
     {
-        var leftProperty = Left.GetExpression(substituteValues, tableDataRow, param, Right);
-        var rightProperty = Right.GetExpression(substituteValues, tableDataRow, param, Left);
+        // IS NULL and IS NOT NULL are unary postfix predicates — no right operand needed.
+        if (Operator == SqlBinaryOperator.IsNull || Operator == SqlBinaryOperator.IsNotNull)
+            return GetIsNullExpression(substituteValues, tableDataRow, param);
+
+        var leftProperty = Left.GetExpression(substituteValues, tableDataRow, param, Right!);
+        var rightProperty = Right!.GetExpression(substituteValues, tableDataRow, param, Left);
 
         return Operator switch
         {
@@ -53,6 +57,32 @@ public class SqlBinaryExpression
             SqlBinaryOperator.Like => GetRegexIsMatchExpression(leftProperty, rightProperty),
             _ => throw new ArgumentException($"Invalid binary operator {Operator} in {nameof(GetExpression)}", nameof(Operator))
         };
+    }
+
+    private Expression GetIsNullExpression(Dictionary<SqlTable, DataRow> substituteValues, SqlTable tableDataRow, ParameterExpression param)
+    {
+        // Use a dummy companion expression (null literal) to satisfy the GetExpression signature
+        var nullCompanion = new SqlExpression(new SqlLiteralValue());
+        var leftProperty = Left.GetExpression(substituteValues, tableDataRow, param, nullCompanion);
+
+        Expression isNullCheck;
+        if (leftProperty.Type.IsValueType && !(leftProperty.Type.IsGenericType && leftProperty.Type.GetGenericTypeDefinition() == typeof(Nullable<>)))
+        {
+            // Non-nullable value type: IS NULL is always false, IS NOT NULL is always true
+            isNullCheck = Expression.Constant(false);
+        }
+        else if (leftProperty.Type.IsGenericType && leftProperty.Type.GetGenericTypeDefinition() == typeof(Nullable<>))
+        {
+            // Nullable value type: check HasValue
+            isNullCheck = Expression.Not(Expression.Property(leftProperty, "HasValue"));
+        }
+        else
+        {
+            // Reference type or object: compare to null
+            isNullCheck = Expression.Equal(leftProperty, Expression.Constant(null, leftProperty.Type));
+        }
+
+        return Operator == SqlBinaryOperator.IsNull ? isNullCheck : Expression.Not(isNullCheck);
     }
 
 
@@ -184,6 +214,13 @@ public class SqlBinaryExpression
         return type.IsGenericType && type.GetGenericTypeDefinition() == typeof(Nullable<>);
     }
 
-    public string ToExpressionString() => $"{Left.ToExpressionString()} {Expr.CreateOperator(Operator)} {Right.ToExpressionString()}";
-    public override string ToString() => $"{Left} { Expr.CreateOperator(Operator)} {Right}";
+    public string ToExpressionString() =>
+        Operator == SqlBinaryOperator.IsNull || Operator == SqlBinaryOperator.IsNotNull
+            ? $"{Left.ToExpressionString()} {Expr.CreateOperator(Operator)}"
+            : $"{Left.ToExpressionString()} {Expr.CreateOperator(Operator)} {Right!.ToExpressionString()}";
+
+    public override string ToString() =>
+        Operator == SqlBinaryOperator.IsNull || Operator == SqlBinaryOperator.IsNotNull
+            ? $"{Left} {Expr.CreateOperator(Operator)}"
+            : $"{Left} {Expr.CreateOperator(Operator)} {Right}";
 }
