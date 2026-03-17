@@ -15,7 +15,7 @@ public class SqlSelectDefinition
 
     public SqlBinaryExpression? WhereClause { get; set; }
 
-    //TODO: Maltby - Need ORDER BY columns
+    public IList<SqlOrderByColumn> OrderBy { get; set; } = new List<SqlOrderByColumn>();
 
     public SqlLimitOffset? Limit { get; set; }
 

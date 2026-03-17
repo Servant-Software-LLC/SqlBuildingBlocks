@@ -143,6 +143,10 @@ public class SelectStmt : NonTerminal
 
         //WHERE clause
         sqlSelectDefinition.WhereClause = WhereClauseOpt?.Create(selectStmt.ChildNodes[5]);
+
+        //ORDER BY clause
+        if (OrderByList != null)
+            sqlSelectDefinition.OrderBy = OrderByList.Create(selectStmt.ChildNodes[8]);
     }
 
 

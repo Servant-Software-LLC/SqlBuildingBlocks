@@ -317,6 +317,197 @@ public class QueryEngineTests
     }
 
     [Fact]
+    public void QueryAsDataTable_OrderBy_SingleColumn_Asc()
+    {
+        const string databaseName = "MyDB";
+
+        // SELECT id, city FROM locations ORDER BY city ASC
+        SqlSelectDefinition sqlSelect = new();
+        SqlColumn idCol = new(databaseName, "locations", "id") { ColumnType = typeof(int) };
+        SqlColumn cityCol = new(databaseName, "locations", "city") { ColumnType = typeof(string) };
+        sqlSelect.Columns.Add(idCol);
+        sqlSelect.Columns.Add(cityCol);
+
+        SqlTable locationsTable = new(databaseName, "locations");
+        idCol.TableRef = locationsTable;
+        cityCol.TableRef = locationsTable;
+        sqlSelect.Table = locationsTable;
+
+        sqlSelect.OrderBy.Add(new SqlOrderByColumn("city", descending: false));
+
+        DataSet dataSet = new(databaseName);
+        DataTable locations = new("locations");
+        locations.Columns.Add("id", typeof(int));
+        locations.Columns.Add("city", typeof(string));
+        locations.Rows.Add(1, "Houston");
+        locations.Rows.Add(2, "New Braunfels");
+        locations.Rows.Add(3, "Austin");
+        dataSet.Tables.Add(locations);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var resultset = queryEngine.QueryAsDataTable();
+
+        Assert.Equal(3, resultset.Rows.Count);
+        Assert.Equal("Austin", resultset.Rows[0]["city"]);
+        Assert.Equal("Houston", resultset.Rows[1]["city"]);
+        Assert.Equal("New Braunfels", resultset.Rows[2]["city"]);
+    }
+
+    [Fact]
+    public void QueryAsDataTable_OrderBy_SingleColumn_Desc()
+    {
+        const string databaseName = "MyDB";
+
+        // SELECT id, city FROM locations ORDER BY city DESC
+        SqlSelectDefinition sqlSelect = new();
+        SqlColumn idCol = new(databaseName, "locations", "id") { ColumnType = typeof(int) };
+        SqlColumn cityCol = new(databaseName, "locations", "city") { ColumnType = typeof(string) };
+        sqlSelect.Columns.Add(idCol);
+        sqlSelect.Columns.Add(cityCol);
+
+        SqlTable locationsTable = new(databaseName, "locations");
+        idCol.TableRef = locationsTable;
+        cityCol.TableRef = locationsTable;
+        sqlSelect.Table = locationsTable;
+
+        sqlSelect.OrderBy.Add(new SqlOrderByColumn("city", descending: true));
+
+        DataSet dataSet = new(databaseName);
+        DataTable locations = new("locations");
+        locations.Columns.Add("id", typeof(int));
+        locations.Columns.Add("city", typeof(string));
+        locations.Rows.Add(1, "Houston");
+        locations.Rows.Add(2, "New Braunfels");
+        locations.Rows.Add(3, "Austin");
+        dataSet.Tables.Add(locations);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var resultset = queryEngine.QueryAsDataTable();
+
+        Assert.Equal(3, resultset.Rows.Count);
+        Assert.Equal("New Braunfels", resultset.Rows[0]["city"]);
+        Assert.Equal("Houston", resultset.Rows[1]["city"]);
+        Assert.Equal("Austin", resultset.Rows[2]["city"]);
+    }
+
+    [Fact]
+    public void QueryAsDataTable_OrderBy_MultiColumn()
+    {
+        const string databaseName = "MyDB";
+
+        // SELECT id, state, city FROM locations ORDER BY state ASC, city DESC
+        SqlSelectDefinition sqlSelect = new();
+        SqlColumn idCol = new(databaseName, "locations", "id") { ColumnType = typeof(int) };
+        SqlColumn stateCol = new(databaseName, "locations", "state") { ColumnType = typeof(string) };
+        SqlColumn cityCol = new(databaseName, "locations", "city") { ColumnType = typeof(string) };
+        sqlSelect.Columns.Add(idCol);
+        sqlSelect.Columns.Add(stateCol);
+        sqlSelect.Columns.Add(cityCol);
+
+        SqlTable locationsTable = new(databaseName, "locations");
+        idCol.TableRef = locationsTable;
+        stateCol.TableRef = locationsTable;
+        cityCol.TableRef = locationsTable;
+        sqlSelect.Table = locationsTable;
+
+        sqlSelect.OrderBy.Add(new SqlOrderByColumn("state", descending: false));
+        sqlSelect.OrderBy.Add(new SqlOrderByColumn("city", descending: true));
+
+        DataSet dataSet = new(databaseName);
+        DataTable locations = new("locations");
+        locations.Columns.Add("id", typeof(int));
+        locations.Columns.Add("state", typeof(string));
+        locations.Columns.Add("city", typeof(string));
+        locations.Rows.Add(1, "Texas", "Houston");
+        locations.Rows.Add(2, "Texas", "Austin");
+        locations.Rows.Add(3, "California", "Los Angeles");
+        locations.Rows.Add(4, "California", "San Francisco");
+        dataSet.Tables.Add(locations);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var resultset = queryEngine.QueryAsDataTable();
+
+        Assert.Equal(4, resultset.Rows.Count);
+        // California first (ASC), cities within California in DESC order
+        Assert.Equal("San Francisco", resultset.Rows[0]["city"]);
+        Assert.Equal("Los Angeles", resultset.Rows[1]["city"]);
+        // Texas second, cities within Texas in DESC order
+        Assert.Equal("Houston", resultset.Rows[2]["city"]);
+        Assert.Equal("Austin", resultset.Rows[3]["city"]);
+    }
+
+    [Fact]
+    public void QueryAsDataTable_OrderBy_Numeric_Asc()
+    {
+        const string databaseName = "MyDB";
+
+        // SELECT id FROM locations ORDER BY id ASC — verifies numeric (not lexicographic) sort
+        SqlSelectDefinition sqlSelect = new();
+        SqlColumn idCol = new(databaseName, "locations", "id") { ColumnType = typeof(int) };
+        sqlSelect.Columns.Add(idCol);
+
+        SqlTable locationsTable = new(databaseName, "locations");
+        idCol.TableRef = locationsTable;
+        sqlSelect.Table = locationsTable;
+
+        sqlSelect.OrderBy.Add(new SqlOrderByColumn("id", descending: false));
+
+        DataSet dataSet = new(databaseName);
+        DataTable locations = new("locations");
+        locations.Columns.Add("id", typeof(int));
+        locations.Rows.Add(10);
+        locations.Rows.Add(2);
+        locations.Rows.Add(1);
+        dataSet.Tables.Add(locations);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var resultset = queryEngine.QueryAsDataTable();
+
+        Assert.Equal(3, resultset.Rows.Count);
+        Assert.Equal(1, resultset.Rows[0]["id"]);
+        Assert.Equal(2, resultset.Rows[1]["id"]);
+        Assert.Equal(10, resultset.Rows[2]["id"]);
+    }
+
+    [Fact]
+    public void QueryAsDataTable_OrderBy_Then_Limit()
+    {
+        const string databaseName = "MyDB";
+
+        // ORDER BY id ASC LIMIT 2 — verifies ordering applied before limiting
+        SqlSelectDefinition sqlSelect = new();
+        SqlColumn idCol = new(databaseName, "locations", "id") { ColumnType = typeof(int) };
+        SqlColumn cityCol = new(databaseName, "locations", "city") { ColumnType = typeof(string) };
+        sqlSelect.Columns.Add(idCol);
+        sqlSelect.Columns.Add(cityCol);
+
+        SqlTable locationsTable = new(databaseName, "locations");
+        idCol.TableRef = locationsTable;
+        cityCol.TableRef = locationsTable;
+        sqlSelect.Table = locationsTable;
+
+        sqlSelect.OrderBy.Add(new SqlOrderByColumn("id", descending: false));
+        sqlSelect.Limit = new SqlLimitOffset { RowCount = new SqlLimitValue(2) };
+
+        DataSet dataSet = new(databaseName);
+        DataTable locations = new("locations");
+        locations.Columns.Add("id", typeof(int));
+        locations.Columns.Add("city", typeof(string));
+        locations.Rows.Add(3, "Austin");
+        locations.Rows.Add(1, "Houston");
+        locations.Rows.Add(2, "New Braunfels");
+        dataSet.Tables.Add(locations);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var resultset = queryEngine.QueryAsDataTable();
+
+        // After sort: 1-Houston, 2-New Braunfels, 3-Austin.  LIMIT 2 → first two.
+        Assert.Equal(2, resultset.Rows.Count);
+        Assert.Equal(1, resultset.Rows[0]["id"]);
+        Assert.Equal(2, resultset.Rows[1]["id"]);
+    }
+
+    [Fact]
     public void QueryWithUnendingDataSource_Select()
     {
         SelectStmtTests.TestGrammar grammar = new();
