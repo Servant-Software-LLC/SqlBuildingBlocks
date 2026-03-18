@@ -304,4 +304,60 @@ public class ExprTests
         Assert.Equal("age NOT BETWEEN 18 AND 25", expression.ToExpressionString());
     }
 
+    // ── CAST ─────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Cast_ColumnToVarchar()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "CAST(order_id AS VARCHAR(50))");
+        var expression = grammar.Create(node);
+
+        Assert.NotNull(expression.CastExpr);
+        var cast = expression.CastExpr!;
+
+        Assert.NotNull(cast.Expression.Column);
+        Assert.Equal("order_id", cast.Expression.Column.ColumnName);
+
+        Assert.Equal("VARCHAR", cast.DataType.Name);
+        Assert.Equal(50, cast.DataType.Length);
+    }
+
+    [Fact]
+    public void Cast_ColumnToInt()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "CAST(price AS INT)");
+        var expression = grammar.Create(node);
+
+        Assert.NotNull(expression.CastExpr);
+        var cast = expression.CastExpr!;
+
+        Assert.NotNull(cast.Expression.Column);
+        Assert.Equal("price", cast.Expression.Column.ColumnName);
+
+        Assert.Equal("INT", cast.DataType.Name);
+        Assert.Null(cast.DataType.Length);
+    }
+
+    [Fact]
+    public void Cast_ToExpressionString_WithLength()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "CAST(order_id AS VARCHAR(50))");
+        var expression = grammar.Create(node);
+
+        Assert.Equal("CAST(order_id AS VARCHAR(50))", expression.ToExpressionString());
+    }
+
+    [Fact]
+    public void Cast_ToExpressionString_NoParams()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "CAST(price AS INT)");
+        var expression = grammar.Create(node);
+
+        Assert.Equal("CAST(price AS INT)", expression.ToExpressionString());
+    }
+
 }

@@ -43,4 +43,10 @@ public interface ISqlExpressionVisitor
     /// <param name="column"></param>
     /// <returns>An expression which is the leaf node's replacement.  A <see cref="null"/> value implies no change.</returns>
     SqlExpression? Visit(SqlLiteralValue value);
+
+    /// <summary>
+    /// Visits the <see cref="SqlCastExpression"/> in the <see cref="SqlExpression"/> tree.
+    /// </summary>
+    /// <param name="castExpr"></param>
+    void Visit(SqlCastExpression castExpr);
 }

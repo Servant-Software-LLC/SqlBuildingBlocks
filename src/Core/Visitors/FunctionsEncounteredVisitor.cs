@@ -50,4 +50,6 @@ public class FunctionsEncounteredVisitor : ISqlExpressionVisitor
     }
 
     public SqlExpression? Visit(SqlLiteralValue value) => null;
+
+    public void Visit(SqlCastExpression castExpr) { }
 }

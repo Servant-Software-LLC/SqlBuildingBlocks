@@ -30,6 +30,8 @@ public abstract class ResolveFunctionsVisitorBase : ISqlExpressionVisitor, ISqlV
 
     SqlLimitValue? ISqlValueVisitor.Visit(SqlLimitValue limit) => null;
 
+    public virtual void Visit(SqlCastExpression castExpr) { }
+
     protected abstract SqlExpression? VisitReturnExpression(SqlFunction sqlFunction);
 
     protected abstract SqlLiteralValue? VisitReturnValue(SqlFunction sqlFunction);

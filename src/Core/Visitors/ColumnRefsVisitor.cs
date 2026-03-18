@@ -45,4 +45,6 @@ class ColumnRefsVisitor : ISqlExpressionVisitor
     public SqlExpression? Visit(SqlFunction function) => null;
 
     public SqlExpression? Visit(SqlLiteralValue value) => null;
+
+    public void Visit(SqlCastExpression castExpr) { }
 }
