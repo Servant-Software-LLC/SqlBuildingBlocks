@@ -256,7 +256,8 @@ public class QueryEngine : IQueryEngine
 
         //Find out if we can limit the rows to use by applying the WHERE clause now.
         processingState.TablesInProcessing.Add(sqlSelectDefinition.Table);
-        if (sqlSelectDefinition.WhereClause != null && WhereClauseContainsOnlyTables(sqlSelectDefinition.WhereClause, processingState.TablesInProcessing))
+        var whereClauseAsBinary = sqlSelectDefinition.WhereClause?.BinExpr;
+        if (whereClauseAsBinary != null && WhereClauseContainsOnlyTables(whereClauseAsBinary, processingState.TablesInProcessing))
         {
             //Calls in a generic fashon:
             //  var expression = selectDefinition.WhereClause.BuildExpression<TDataRow>(null, selectDefinition.Table);
@@ -267,7 +268,7 @@ public class QueryEngine : IQueryEngine
                                                     methodName: nameof(ApplyFilter),
                                                     typeParameter: fromTableQueryable.ElementType,
                                                     // Method arguments
-                                                    fromTableQueryable, sqlSelectDefinition.WhereClause, null, sqlSelectDefinition.Table, tableWithColumnsToProjectOnto);
+                                                    fromTableQueryable, whereClauseAsBinary, null, sqlSelectDefinition.Table, tableWithColumnsToProjectOnto);
 
             if (applyFilterMethodReturnValue == null)
                 throw new ArgumentNullException($"{nameof(ApplyFilter)}'s return value was null", innerException: null);
@@ -306,12 +307,13 @@ public class QueryEngine : IQueryEngine
 
         //Find out if we can limit the rows to use by applying the WHERE clause now. (i.e. if WHERE isn't already used and doesn't contain tables further down in the JOINs)
         processingState.TablesInProcessing.Add(join.Table);
-        if (sqlSelectDefinition.WhereClause != null &&
+        var joinWhereClauseAsBinary = sqlSelectDefinition.WhereClause?.BinExpr;
+        if (joinWhereClauseAsBinary != null &&
             processingState.WhereApplied is null &&
-            WhereClauseContainsOnlyTables(sqlSelectDefinition.WhereClause, processingState.TablesInProcessing))
+            WhereClauseContainsOnlyTables(joinWhereClauseAsBinary, processingState.TablesInProcessing))
         {
             //Logically AND the JOIN ON and the WHERE
-            filteringExpression = new SqlBinaryExpression(new(filteringExpression), SqlBinaryOperator.And, new(sqlSelectDefinition.WhereClause));
+            filteringExpression = new SqlBinaryExpression(new(filteringExpression), SqlBinaryOperator.And, new(joinWhereClauseAsBinary));
 
             processingState.WhereApplied = join.Table;
         }
@@ -413,8 +415,8 @@ public class QueryEngine : IQueryEngine
         var lastJoinTable = sqlSelectDefinition.Joins.Last().Table;
 
         List<SqlColumnRef> columnRefsWithinClauses = new();
-        if (sqlSelectDefinition.WhereClause != null)
-            columnRefsWithinClauses.AddRange(GetColumnRefs(sqlSelectDefinition.WhereClause, lastJoinTable));
+        if (sqlSelectDefinition.WhereClause?.BinExpr != null)
+            columnRefsWithinClauses.AddRange(GetColumnRefs(sqlSelectDefinition.WhereClause.BinExpr, lastJoinTable));
 
         foreach (SqlJoin join in sqlSelectDefinition.Joins)
         {

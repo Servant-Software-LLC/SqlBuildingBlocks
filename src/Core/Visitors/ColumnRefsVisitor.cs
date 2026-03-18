@@ -27,6 +27,8 @@ class ColumnRefsVisitor : ISqlExpressionVisitor
 
     public void Visit(SqlBinaryExpression binExpr) { }
 
+    public void Visit(SqlBetweenExpression betweenExpr) { }
+
     public SqlExpression? Visit(SqlColumnRef column)
     {
         var columnOfOperand = (SqlColumn)column.Column!;

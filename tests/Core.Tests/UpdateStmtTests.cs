@@ -55,8 +55,10 @@ public class UpdateStmtTests
         //Assert - WHERE
         var whereClause = sqlUpdateDefinition.WhereClause;
         Assert.NotNull(whereClause);
-        Assert.Equal("city", whereClause.Left.Column.ColumnName);
-        Assert.Equal("Boston", whereClause.Right.Value.String);
+        var whereClauseBin = whereClause!.BinExpr;
+        Assert.NotNull(whereClauseBin);
+        Assert.Equal("city", whereClauseBin!.Left.Column.ColumnName);
+        Assert.Equal("Boston", whereClauseBin.Right!.Value.String);
 
         Assert.Null(sqlUpdateDefinition.Returning);
     }

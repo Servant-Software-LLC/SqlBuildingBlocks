@@ -137,8 +137,8 @@ public class QueryEngineTests
         // WHERE id=1 or id=2
         SqlExpression leftExpression = new(new SqlBinaryExpression(new(locationsIdColumnRef), SqlBinaryOperator.Equal, new(new SqlLiteralValue(1))));
         SqlExpression rightExpression = new(new SqlBinaryExpression(new(locationsIdColumnRef), SqlBinaryOperator.Equal, new(new SqlLiteralValue(2))));
-        SqlBinaryExpression whereClause = new(leftExpression, SqlBinaryOperator.Or, rightExpression);
-        sqlSelect.WhereClause = whereClause;
+        SqlBinaryExpression whereClauseBinary = new(leftExpression, SqlBinaryOperator.Or, rightExpression);
+        sqlSelect.WhereClause = new SqlExpression(whereClauseBinary);
 
         //Create the DataSet with the schema and data.
         DataSet dataSet = new(databaseName);

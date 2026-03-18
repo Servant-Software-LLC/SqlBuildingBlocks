@@ -50,6 +50,8 @@ public class TableSchemaProvider : ITableSchemaProvider
             yield return new("name", typeof(string));
             // DataColumn does not support Nullable<T>; use object to represent a nullable column.
             yield return new DataColumn("manager_id", typeof(int)) { AllowDBNull = true };
+            yield return new("age", typeof(int));
+            yield return new("status", typeof(string));
             yield break;
         }
 
@@ -57,6 +59,9 @@ public class TableSchemaProvider : ITableSchemaProvider
         {
             yield return new("id", typeof(int));
             yield return new DataColumn("shipped_date", typeof(DateTime)) { AllowDBNull = true };
+            yield return new("amount", typeof(decimal));
+            yield return new("status", typeof(string));
+            yield return new("age", typeof(int));
             yield break;
         }
 

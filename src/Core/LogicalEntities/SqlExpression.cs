@@ -13,6 +13,7 @@ public class SqlExpression
     public SqlExpression(SqlFunction function) => Function = function;
     public SqlExpression(SqlLiteralValue value) => Value = value;
     public SqlExpression(SqlBinaryExpression binExpr) => BinExpr = binExpr;
+    public SqlExpression(SqlBetweenExpression betweenExpr) => BetweenExpr = betweenExpr;
 
     //Logic within this class should enforce that only one of these properties is ever set.
     public SqlColumnRef? Column { get; private set; }
@@ -20,6 +21,7 @@ public class SqlExpression
     public SqlFunction? Function { get; private set; }
     public SqlLiteralValue? Value { get; private set; }
     public SqlBinaryExpression? BinExpr { get; private set; }
+    public SqlBetweenExpression? BetweenExpr { get; private set; }
 
     public Type Type 
     { 
@@ -54,6 +56,12 @@ public class SqlExpression
         if (BinExpr != null)
         {
             BinExpr.Accept(visitor);
+            return;
+        }
+
+        if (BetweenExpr != null)
+        {
+            BetweenExpr.Accept(visitor);
             return;
         }
 
@@ -191,6 +199,7 @@ public class SqlExpression
         Function = null;
         Value = null;
         BinExpr = null;
+        BetweenExpr = null;
 
         if (expression.Column != null)
             Column = expression.Column;
@@ -201,12 +210,15 @@ public class SqlExpression
         else if (expression.Value != null)
             Value = expression.Value;
         else if (expression.BinExpr != null)
-            BinExpr = expression.BinExpr;        
+            BinExpr = expression.BinExpr;
+        else if (expression.BetweenExpr != null)
+            BetweenExpr = expression.BetweenExpr;
     }
 
     public string ToExpressionString()
     {
         if (BinExpr != null) return BinExpr.ToExpressionString();
+        if (BetweenExpr != null) return BetweenExpr.ToExpressionString();
         if (Column != null) return Column.ToExpressionString();
         if (Parameter != null) return Parameter.ToExpressionString();
         if (Function != null) return Function.ToExpressionString();
@@ -218,6 +230,7 @@ public class SqlExpression
     public override string ToString()
     {
         if (BinExpr != null) return BinExpr.ToString();
+        if (BetweenExpr != null) return BetweenExpr.ToString();
         if (Column != null) return Column.ToString();
         if (Parameter != null) return Parameter.ToString();
         if (Function != null) return Function.ToString();

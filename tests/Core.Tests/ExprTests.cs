@@ -210,4 +210,98 @@ public class ExprTests
         Assert.Equal("shipped_date IS NOT NULL", expression.ToExpressionString());
     }
 
+    // ── BETWEEN / NOT BETWEEN ─────────────────────────────────────────────
+
+    [Fact]
+    public void Between_IntegerLiterals()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "amount BETWEEN 100 AND 500");
+        var expression = grammar.Create(node);
+
+        Assert.NotNull(expression.BetweenExpr);
+        var between = expression.BetweenExpr!;
+
+        Assert.False(between.IsNegated);
+
+        // Operand
+        Assert.NotNull(between.Operand.Column);
+        Assert.Equal("amount", between.Operand.Column.ColumnName);
+
+        // Lower bound
+        Assert.NotNull(between.LowerBound.Value);
+        Assert.Equal(100, between.LowerBound.Value.Int);
+
+        // Upper bound
+        Assert.NotNull(between.UpperBound.Value);
+        Assert.Equal(500, between.UpperBound.Value.Int);
+    }
+
+    [Fact]
+    public void NotBetween_IntegerLiterals()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "age NOT BETWEEN 18 AND 25");
+        var expression = grammar.Create(node);
+
+        Assert.NotNull(expression.BetweenExpr);
+        var between = expression.BetweenExpr!;
+
+        Assert.True(between.IsNegated);
+
+        // Operand
+        Assert.NotNull(between.Operand.Column);
+        Assert.Equal("age", between.Operand.Column.ColumnName);
+
+        // Lower bound
+        Assert.NotNull(between.LowerBound.Value);
+        Assert.Equal(18, between.LowerBound.Value.Int);
+
+        // Upper bound
+        Assert.NotNull(between.UpperBound.Value);
+        Assert.Equal(25, between.UpperBound.Value.Int);
+    }
+
+    [Fact]
+    public void Between_ColumnReferenceBounds()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "created_at BETWEEN start_date AND end_date");
+        var expression = grammar.Create(node);
+
+        Assert.NotNull(expression.BetweenExpr);
+        var between = expression.BetweenExpr!;
+
+        Assert.False(between.IsNegated);
+
+        Assert.NotNull(between.Operand.Column);
+        Assert.Equal("created_at", between.Operand.Column.ColumnName);
+
+        Assert.NotNull(between.LowerBound.Column);
+        Assert.Equal("start_date", between.LowerBound.Column.ColumnName);
+
+        Assert.NotNull(between.UpperBound.Column);
+        Assert.Equal("end_date", between.UpperBound.Column.ColumnName);
+    }
+
+    [Fact]
+    public void Between_ToExpressionString()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "amount BETWEEN 100 AND 500");
+        var expression = grammar.Create(node);
+
+        Assert.Equal("amount BETWEEN 100 AND 500", expression.ToExpressionString());
+    }
+
+    [Fact]
+    public void NotBetween_ToExpressionString()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "age NOT BETWEEN 18 AND 25");
+        var expression = grammar.Create(node);
+
+        Assert.Equal("age NOT BETWEEN 18 AND 25", expression.ToExpressionString());
+    }
+
 }

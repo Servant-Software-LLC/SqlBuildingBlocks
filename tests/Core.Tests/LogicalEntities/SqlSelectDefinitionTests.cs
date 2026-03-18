@@ -13,7 +13,7 @@ public class SqlSelectDefinitionTests
         // Setup
         SqlSelectDefinition sqlSelectDefinition = new();
         sqlSelectDefinition.Columns.Add(new SqlParameterColumn(new SqlParameter("Test")));
-        sqlSelectDefinition.WhereClause = new(new(new SqlLiteralValue(5)), SqlBinaryOperator.Equal, new(new SqlParameter("Age")));
+        sqlSelectDefinition.WhereClause = new SqlExpression(new SqlBinaryExpression(new(new SqlLiteralValue(5)), SqlBinaryOperator.Equal, new(new SqlParameter("Age"))));
 
         DbParameterCollection parameters = new FakeParameterCollection();
         AddParameter(parameters, "Test", "Bob");
@@ -28,7 +28,7 @@ public class SqlSelectDefinitionTests
         Assert.IsType<SqlLiteralValueColumn>(firstColumn);
         Assert.Equal("Bob", ((SqlLiteralValueColumn)firstColumn).Value.Value);
 
-        var rightExpression = sqlSelectDefinition.WhereClause.Right;
+        var rightExpression = sqlSelectDefinition.WhereClause!.BinExpr!.Right;
         Assert.NotNull(rightExpression.Value);
         Assert.Equal(5, rightExpression.Value.Value);
     }
@@ -95,7 +95,7 @@ public class SqlSelectDefinitionTests
                                               SqlBinaryOperator.Equal, 
                                               new(new SqlColumnRef(null, null, "BlogId"))
                                           );
-        sqlSelectDefinition.WhereClause = whereClause;
+        sqlSelectDefinition.WhereClause = new SqlExpression(whereClause);
 
         FakeFunctionProvider functionProvider = new();
 
@@ -111,7 +111,7 @@ public class SqlSelectDefinitionTests
         Assert.Equal(2, sqlLiteralValueColumn.Value.Value);
 
         //LAST_INSERT_ID where clause left expression should be a literal value now.
-        var whereClauseLeft = sqlSelectDefinition.WhereClause.Left;
+        var whereClauseLeft = sqlSelectDefinition.WhereClause!.BinExpr!.Left;
         Assert.NotNull(whereClauseLeft.Value);
         Assert.Equal(3m, whereClauseLeft.Value.Value);
     }

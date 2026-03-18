@@ -12,6 +12,7 @@ public class Expr : NonTerminal
 {
     private const string binExprTermName = "binExpr";
     private const string isNullExprTermName = "isNullExpr";
+    private const string betweenExprTermName = "betweenExpr";
 
     private readonly Grammar grammar;
     private FuncCall? funcCall;
@@ -74,12 +75,13 @@ public class Expr : NonTerminal
         var IN = grammar.ToTerm("IN");
         var IS = grammar.ToTerm("IS");
         var NULL = grammar.ToTerm("NULL");
+        var BETWEEN = grammar.ToTerm("BETWEEN");
 
         // Define operator precedence and associativity
 
         grammar.RegisterOperators(10, Associativity.Left, MULTIPLY, DIVIDE, MOD);
         grammar.RegisterOperators(9, Associativity.Left, PLUS, MINUS);
-        grammar.RegisterOperators(8, Associativity.Left, EQUAL, GREATER_THAN, LESS_THAN, GREATER_THAN_EQUAL, LESS_THAN_EQUAL, NOT_EQUAL_TO, NOT_EQUAL_TO_EXCL, NOT_LESS_THAN, NOT_GREATER_THAN, LIKE, IN);
+        grammar.RegisterOperators(8, Associativity.Left, EQUAL, GREATER_THAN, LESS_THAN, GREATER_THAN_EQUAL, LESS_THAN_EQUAL, NOT_EQUAL_TO, NOT_EQUAL_TO_EXCL, NOT_LESS_THAN, NOT_GREATER_THAN, LIKE, IN, BETWEEN);
         grammar.RegisterOperators(7, Associativity.Left, BITWISE_AND, BITWISE_OR, BITWISE_XOR);
         // IS has same precedence as comparison operators; registering it resolves the shift-reduce conflict
         // for the isNullExpr postfix production (expr IS NULL / expr IS NOT NULL).
@@ -120,7 +122,29 @@ public class Expr : NonTerminal
         var isNullExpr = new NonTerminal(isNullExprTermName);
         isNullExpr.Rule = this + IS + NULL | this + IS + NOT + NULL;
 
-        Rule = term | unExpr | binExpr | isNullExpr;
+        // BETWEEN / NOT BETWEEN — ternary range predicates
+        // betweenBound restricts the lower/upper bound to arithmetic-level expressions so that the
+        // AND keyword cannot be consumed as a logical-AND binary operator within the bound, which
+        // would create an unresolvable shift-reduce conflict with the logical AND operator.
+        var betweenArithOp = new NonTerminal("betweenArithOp");
+        betweenArithOp.Rule = PLUS | MINUS | MULTIPLY | DIVIDE | MOD
+                             | BITWISE_AND | BITWISE_OR | BITWISE_XOR
+                             | EQUAL | GREATER_THAN | LESS_THAN | GREATER_THAN_EQUAL | LESS_THAN_EQUAL
+                             | NOT_EQUAL_TO | NOT_EQUAL_TO_EXCL | NOT_LESS_THAN | NOT_GREATER_THAN
+                             | LIKE | IN;
+
+        var betweenBound = new NonTerminal("betweenBound");
+        betweenBound.Rule = term
+                          | unExpr
+                          | betweenBound + betweenArithOp + betweenBound;
+
+        var betweenExpr = new NonTerminal(betweenExprTermName);
+        betweenExpr.Rule = this + BETWEEN + betweenBound + AND + betweenBound
+                         | this + NOT + BETWEEN + betweenBound + AND + betweenBound;
+
+        betweenArithOp.SetFlag(TermFlags.InheritPrecedence);
+
+        Rule = term | unExpr | binExpr | isNullExpr | betweenExpr;
 
         //Note: we cannot declare binOp as transient because it includes operators "NOT LIKE", "NOT IN" consisting of two tokens.
         // Transient non-terminals cannot have more than one non-punctuation child nodes.
@@ -129,7 +153,7 @@ public class Expr : NonTerminal
         grammar.MarkTransient(this /*expression*/, term, unOp);
         binOp.SetFlag(TermFlags.InheritPrecedence);
 
-        grammar.MarkReservedWords("IS");
+        grammar.MarkReservedWords("IS", "BETWEEN");
     }
 
     public virtual SqlExpression Create(ParseTreeNode expression)
@@ -146,6 +170,12 @@ public class Expr : NonTerminal
         if (nodeTermName == isNullExprTermName)
         {
             return new(CreateIsNullExpression(expression));
+        }
+
+        //Is this a BETWEEN / NOT BETWEEN expression?
+        if (nodeTermName == betweenExprTermName)
+        {
+            return new(CreateBetweenExpression(expression));
         }
 
         //Is this node a column reference?
@@ -172,6 +202,22 @@ public class Expr : NonTerminal
             return new(LiteralValue!.Create(expression));
         }
 
+        // Is this a betweenBound node (a bound expression inside BETWEEN)?
+        if (nodeTermName == "betweenBound")
+        {
+            if (expression.ChildNodes.Count == 1)
+            {
+                // Single child (term or unExpr) — delegate to the child
+                return Create(expression.ChildNodes[0]);
+            }
+
+            // 3 children: betweenBound betweenArithOp betweenBound
+            var left = Create(expression.ChildNodes[0]);
+            var operatorSymbol = expression.ChildNodes[1].ChildNodes[0].Token.Text;
+            var right = Create(expression.ChildNodes[2]);
+            return new(new SqlBinaryExpression(left, CreateOperator(operatorSymbol), right));
+        }
+
         throw new ArgumentException($"The {nameof(SqlExpression)} class does not know how to parse the {nameof(ParseTreeNode)} provided to its ctor");
     }
 
@@ -188,6 +234,34 @@ public class Expr : NonTerminal
         var right = Create(binExpr.ChildNodes[2]);
 
         return new(left, CreateOperator(operatorSymbol), right);
+    }
+
+    protected internal SqlBetweenExpression CreateBetweenExpression(ParseTreeNode betweenExprNode)
+    {
+        if (betweenExprNode.Term.Name != betweenExprTermName)
+        {
+            var thisMethod = MethodBase.GetCurrentMethod() as MethodInfo;
+            throw new ArgumentException($"Cannot create building block of type {thisMethod!.ReturnType}.  The TermName for node is {betweenExprNode.Term.Name} which does not match {betweenExprTermName}", nameof(betweenExprNode));
+        }
+
+        // Children for BETWEEN:     expr BETWEEN expr AND expr => [0]=expr, [1]=BETWEEN, [2]=expr, [3]=AND, [4]=expr
+        // Children for NOT BETWEEN: expr NOT BETWEEN expr AND expr => [0]=expr, [1]=NOT, [2]=BETWEEN, [3]=expr, [4]=AND, [5]=expr
+        var isNegated = betweenExprNode.ChildNodes.Count == 6;
+
+        if (isNegated)
+        {
+            var operand = Create(betweenExprNode.ChildNodes[0]);
+            var lowerBound = Create(betweenExprNode.ChildNodes[3]);
+            var upperBound = Create(betweenExprNode.ChildNodes[5]);
+            return new(operand, lowerBound, upperBound, isNegated: true);
+        }
+        else
+        {
+            var operand = Create(betweenExprNode.ChildNodes[0]);
+            var lowerBound = Create(betweenExprNode.ChildNodes[2]);
+            var upperBound = Create(betweenExprNode.ChildNodes[4]);
+            return new(operand, lowerBound, upperBound, isNegated: false);
+        }
     }
 
     protected internal SqlBinaryExpression CreateIsNullExpression(ParseTreeNode isNullExpr)

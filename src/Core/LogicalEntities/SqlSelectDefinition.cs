@@ -13,7 +13,7 @@ public class SqlSelectDefinition
 
     public IList<SqlJoin> Joins { get; set; } = new List<SqlJoin>();
 
-    public SqlBinaryExpression? WhereClause { get; set; }
+    public SqlExpression? WhereClause { get; set; }
 
     public IList<SqlOrderByColumn> OrderBy { get; set; } = new List<SqlOrderByColumn>();
 
@@ -132,6 +132,9 @@ public class SqlSelectDefinition
     }
 
     public void AcceptWhereClause(ISqlExpressionVisitor sqlExpressionVisitor) => WhereClause?.Accept(sqlExpressionVisitor);
+
+    /// <summary>Returns the WHERE clause as a <see cref="SqlBinaryExpression"/> if it is one, or null otherwise.</summary>
+    public SqlBinaryExpression? WhereClauseAsBinary => WhereClause?.BinExpr;
 
     public void AccessLimitOffset(ISqlValueVisitor sqlValueVisitor) => Limit?.Accept(sqlValueVisitor);
 }

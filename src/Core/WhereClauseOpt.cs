@@ -27,7 +27,7 @@ public class WhereClauseOpt : NonTerminal
 
     public Expr Expr { get; }
 
-    public virtual SqlBinaryExpression? Create(ParseTreeNode whereClause)
+    public virtual SqlExpression? Create(ParseTreeNode whereClause)
     {
         if (whereClause.Term.Name != TermName)
         {
@@ -42,9 +42,13 @@ public class WhereClauseOpt : NonTerminal
 
         // The WHERE expression may be an isNullExpr (IS NULL / IS NOT NULL) rather than a binExpr.
         if (exprNode.Term.Name == "isNullExpr")
-            return Expr.CreateIsNullExpression(exprNode);
+            return new SqlExpression(Expr.CreateIsNullExpression(exprNode));
 
-        return Expr.CreateBinaryExpression(exprNode);
+        // The WHERE expression may be a betweenExpr (BETWEEN / NOT BETWEEN).
+        if (exprNode.Term.Name == "betweenExpr")
+            return new SqlExpression(Expr.CreateBetweenExpression(exprNode));
+
+        return new SqlExpression(Expr.CreateBinaryExpression(exprNode));
     }
 
 }

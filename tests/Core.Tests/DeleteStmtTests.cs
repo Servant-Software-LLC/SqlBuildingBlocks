@@ -49,10 +49,12 @@ public class DeleteStmtTests
         //Assert WHERE
         var whereClause = deleteStmt.WhereClause;
         Assert.NotNull(whereClause);
-        Assert.NotNull(whereClause.Left.Column);
-        Assert.Equal("name", whereClause.Left.Column.ColumnName);
-        Assert.NotNull(whereClause.Right.Value);
-        Assert.Equal("Joe", whereClause.Right.Value.String);
+        var whereClauseBin = whereClause!.BinExpr;
+        Assert.NotNull(whereClauseBin);
+        Assert.NotNull(whereClauseBin!.Left.Column);
+        Assert.Equal("name", whereClauseBin.Left.Column.ColumnName);
+        Assert.NotNull(whereClauseBin.Right!.Value);
+        Assert.Equal("Joe", whereClauseBin.Right.Value.String);
     }
 
     [Fact]
