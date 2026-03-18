@@ -32,8 +32,9 @@ public class Stmt : NonTerminal
         DeleteStmt deleteStmt = new(grammar, selectStmt.TableName, whereClauseOpt, updateStmt.ReturningClauseOpt);
         CreateTableStmt createTableStmt = new(grammar, selectStmt.Id);
         AlterStmt alterStmt = new(grammar, selectStmt.Id, createTableStmt.ColumnDef);
+        DropTableStmt dropTableStmt = new(grammar, selectStmt.Id);
 
-        var internalState = DetermineInternalState(selectStmt, insertStmt, updateStmt, deleteStmt, createTableStmt, alterStmt);
+        var internalState = DetermineInternalState(selectStmt, insertStmt, updateStmt, deleteStmt, createTableStmt, alterStmt, dropTableStmt);
         stmts = internalState.Stmts;
         Rule = internalState.Rule;
         grammar.MarkTransient(this);
@@ -63,6 +64,7 @@ public class Stmt : NonTerminal
         DeleteStmt? deleteStmt = null;
         CreateTableStmt? createTableStmt = null;
         AlterStmt? alterStmt = null;
+        DropTableStmt? dropTableStmt = null;
 
         //Compose the rule for this instance from all of the provided statments.
         for (int i = 0; i < stmts.Length; i++)
@@ -92,6 +94,9 @@ public class Stmt : NonTerminal
                 case AlterStmt alterStmt1:
                     alterStmt = alterStmt1;
                     break;
+                case DropTableStmt dropTableStmt1:
+                    dropTableStmt = dropTableStmt1;
+                    break;
                 default:
                     throw new ArgumentOutOfRangeException($"The statement of type {stmt.GetType()} was not expected.");
             }
@@ -102,7 +107,7 @@ public class Stmt : NonTerminal
                 rule |= stmts[i];
         }
 
-        return new(rule!, new(selectStmt, insertStmt, updateStmt, deleteStmt, createTableStmt, alterStmt));
+        return new(rule!, new(selectStmt, insertStmt, updateStmt, deleteStmt, createTableStmt, alterStmt, dropTableStmt));
     }
 
     public virtual SqlDefinition Create(ParseTreeNode stmt)
@@ -159,6 +164,15 @@ public class Stmt : NonTerminal
                 throw new ArgumentNullException(nameof(stmts.AlterStmt), $"Unable to create a {nameof(SqlDefinition)} instance for Irony term, {stmt.Term.Name}, because a {typeof(AlterStmt)} was not provided to the ctor of {nameof(Stmt)}");
 
             return new(stmts.AlterStmt.Create(stmt));
+        }
+
+        //DROP TABLE
+        if (stmt.Term.Name == DropTableStmt.TermName)
+        {
+            if (stmts.DropTableStmt == null)
+                throw new ArgumentNullException(nameof(stmts.DropTableStmt), $"Unable to create a {nameof(SqlDefinition)} instance for Irony term, {stmt.Term.Name}, because a {typeof(DropTableStmt)} was not provided to the ctor of {nameof(Stmt)}");
+
+            return new(stmts.DropTableStmt.Create(stmt));
         }
 
         var thisMethod = MethodBase.GetCurrentMethod() as MethodInfo;

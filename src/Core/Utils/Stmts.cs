@@ -6,7 +6,7 @@
 /// </summary>
 internal class Stmts
 {
-    public Stmts(SelectStmt? selectStmt, InsertStmt? insertStmt, UpdateStmt? updateStmt, DeleteStmt? deleteStmt, CreateTableStmt? createTableStmt, AlterStmt? alterStmt)
+    public Stmts(SelectStmt? selectStmt, InsertStmt? insertStmt, UpdateStmt? updateStmt, DeleteStmt? deleteStmt, CreateTableStmt? createTableStmt, AlterStmt? alterStmt, DropTableStmt? dropTableStmt = null)
     {
         SelectStmt = selectStmt;
         InsertStmt = insertStmt;
@@ -14,6 +14,7 @@ internal class Stmts
         DeleteStmt = deleteStmt;
         CreateTableStmt = createTableStmt;
         AlterStmt = alterStmt;
+        DropTableStmt = dropTableStmt;
     }
 
     public SelectStmt? SelectStmt { get; }
@@ -22,4 +23,5 @@ internal class Stmts
     public DeleteStmt? DeleteStmt { get; }
     public CreateTableStmt? CreateTableStmt { get; }
     public AlterStmt? AlterStmt { get; }
+    public DropTableStmt? DropTableStmt { get; }
 }

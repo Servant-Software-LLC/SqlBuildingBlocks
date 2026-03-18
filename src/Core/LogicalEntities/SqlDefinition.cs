@@ -12,6 +12,7 @@ public class SqlDefinition
     public SqlDefinition(SqlDeleteDefinition delete) => Delete = delete ?? throw new ArgumentNullException(nameof(delete));
     public SqlDefinition(SqlCreateTableDefinition create) => Create = create ?? throw new ArgumentNullException(nameof(create));
     public SqlDefinition(SqlAlterTableDefinition alter) => Alter = alter ?? throw new ArgumentNullException(nameof(alter));
+    public SqlDefinition(SqlDropTableDefinition drop) => Drop = drop ?? throw new ArgumentNullException(nameof(drop));
 
     //Only one of the following properties will ever be set.  Bounded by the ctors.
     public SqlSelectDefinition? Select { get; }
@@ -20,6 +21,7 @@ public class SqlDefinition
     public SqlDeleteDefinition? Delete { get;}
     public SqlCreateTableDefinition? Create { get; }
     public SqlAlterTableDefinition? Alter { get; }
+    public SqlDropTableDefinition? Drop { get; }
 
     public void ResolveParameters(DbParameterCollection parameters)
     {
@@ -55,6 +57,7 @@ public class SqlDefinition
         if (Delete != null) return Delete.ToString();
         if (Create != null) return Create.ToString();
         if (Alter != null) return Alter.ToString();
+        if (Drop != null) return Drop.ToString();
 
         return "SQL definition type not set";
     }
