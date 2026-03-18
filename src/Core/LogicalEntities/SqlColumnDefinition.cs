@@ -14,4 +14,8 @@ public class SqlColumnDefinition
 
     public bool AllowNulls { get; set; } = true;
 
+    public SqlLiteralValue? DefaultLiteralValue { get; set; }
+
+    public SqlFunction? DefaultFunctionValue { get; set; }
+
 }

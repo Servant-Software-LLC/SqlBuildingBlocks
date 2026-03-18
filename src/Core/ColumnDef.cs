@@ -7,40 +7,54 @@ namespace SqlBuildingBlocks;
 
 public class ColumnDef : NonTerminal
 {
+    private const string DefaultOptName = "defaultOpt";
+    private const string DefaultFuncCallName = "defaultFuncCall";
+
     public static string TermName => MethodBase.GetCurrentMethod().DeclaringType.Name.CamelCase();
 
     public ColumnDef(Grammar grammar, Id id)
         : this(grammar, id, new DataType(grammar))
     {
-        
+
     }
     public ColumnDef(Grammar grammar, Id id, DataType dataType)
         : base(TermName)
     {
         Id = id ?? throw new ArgumentNullException(nameof(id));
         DataType = dataType ?? throw new ArgumentNullException(nameof(dataType));
+        LiteralValue = new LiteralValue(grammar);
 
         var NULL = grammar.ToTerm("NULL");
         var NOT = grammar.ToTerm("NOT");
         var UNIQUE = grammar.ToTerm("UNIQUE");
         var KEY = grammar.ToTerm("KEY");
         var PRIMARY = grammar.ToTerm("PRIMARY");
+        var DEFAULT = grammar.ToTerm("DEFAULT");
 
         var nullSpecOpt = new NonTerminal("nullSpecOpt");
         var uniqueOpt = new NonTerminal("uniqueOpt");
         var primaryKeyOpt = new NonTerminal("primaryKeyOpt");
+        var defaultOpt = new NonTerminal(DefaultOptName);
+        var defaultFuncCall = new NonTerminal(DefaultFuncCallName);
 
         //Inline constraints
         nullSpecOpt.Rule = NULL | NOT + NULL | grammar.Empty;
         uniqueOpt.Rule = UNIQUE | grammar.Empty;
         primaryKeyOpt.Rule = PRIMARY + KEY | grammar.Empty;
 
-        Rule = id.SimpleId + DataType + nullSpecOpt + uniqueOpt + primaryKeyOpt;
+        // DEFAULT value: literal or no-arg function call (e.g. GETDATE(), NOW())
+        defaultFuncCall.Rule = id.SimpleId + "(" + ")";
+        defaultOpt.Rule = DEFAULT + LiteralValue | DEFAULT + defaultFuncCall | grammar.Empty;
+        grammar.MarkPunctuation(DEFAULT);
+
+        Rule = id.SimpleId + DataType + defaultOpt + nullSpecOpt + uniqueOpt + primaryKeyOpt;
     }
 
     public Id Id { get; }
 
     public DataType DataType { get; }
+
+    public LiteralValue LiteralValue { get; }
 
     public SqlColumnDefinition? Create(ParseTreeNode definition, IList<SqlConstraintDefinition> constraintDefinitions)
     {
@@ -52,15 +66,31 @@ public class ColumnDef : NonTerminal
 
         SqlColumnDefinition sqlColumnDefinition = new(columnName, dataTypeName);
 
+        //DEFAULT value
+        var defaultOpt = definition.ChildNodes[2];
+        if (defaultOpt.ChildNodes.Count > 0)
+        {
+            var defaultChild = defaultOpt.ChildNodes[0];
+            if (defaultChild.Term.Name == DefaultFuncCallName)
+            {
+                var funcName = Id.SimpleId.Create(defaultChild.ChildNodes[0]);
+                sqlColumnDefinition.DefaultFunctionValue = new SqlFunction(funcName);
+            }
+            else
+            {
+                sqlColumnDefinition.DefaultLiteralValue = LiteralValue.Create(defaultChild);
+            }
+        }
+
         //NULL or NOT NULL
-        var nullSpecOpt = definition.ChildNodes[2];
+        var nullSpecOpt = definition.ChildNodes[3];
         if (nullSpecOpt.ChildNodes.Count > 0)
         {
             sqlColumnDefinition.AllowNulls = nullSpecOpt.ChildNodes.Count == 1;
         }
 
         //UNIQUE
-        var uniqueOpt = definition.ChildNodes[3];
+        var uniqueOpt = definition.ChildNodes[4];
         if (uniqueOpt.ChildNodes.Count > 0)
         {
             var uniqueConstraint = new SqlUniqueConstraint();
@@ -69,7 +99,7 @@ public class ColumnDef : NonTerminal
         }
 
         //PRIMARY KEY
-        var primaryKeyOpt = definition.ChildNodes[4];
+        var primaryKeyOpt = definition.ChildNodes[5];
         if (primaryKeyOpt.ChildNodes.Count > 0)
         {
             var primaryKeyConstraint = new SqlPrimaryKeyConstraint();

@@ -28,6 +28,68 @@ public class CreateTableStmtTests
 
 
     [Fact]
+    public void DefaultLiteralValue()
+    {
+        //Setup
+        const string sql = @"
+CREATE TABLE [Audit] (
+    [Id] INTEGER,
+    [Status] VARCHAR(50) DEFAULT 'active',
+    [Count] INTEGER DEFAULT 0,
+    [Active] BOOLEAN DEFAULT TRUE
+)
+";
+
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, sql);
+
+        //Act
+        var sqlCreateTableDefinition = grammar.Create(node);
+
+        //Assert
+        Assert.Equal(4, sqlCreateTableDefinition.Columns.Count);
+
+        Assert.Null(sqlCreateTableDefinition.Columns[0].DefaultLiteralValue);
+        Assert.Null(sqlCreateTableDefinition.Columns[0].DefaultFunctionValue);
+
+        Assert.Equal("active", sqlCreateTableDefinition.Columns[1].DefaultLiteralValue!.String);
+        Assert.Null(sqlCreateTableDefinition.Columns[1].DefaultFunctionValue);
+
+        Assert.Equal(0, sqlCreateTableDefinition.Columns[2].DefaultLiteralValue!.Int);
+        Assert.Null(sqlCreateTableDefinition.Columns[2].DefaultFunctionValue);
+
+        Assert.Equal(true, sqlCreateTableDefinition.Columns[3].DefaultLiteralValue!.Boolean);
+        Assert.Null(sqlCreateTableDefinition.Columns[3].DefaultFunctionValue);
+    }
+
+    [Fact]
+    public void DefaultFuncCall()
+    {
+        //Setup
+        const string sql = @"
+CREATE TABLE [Log] (
+    [Id] INTEGER,
+    [CreatedAt] TIMESTAMP DEFAULT GETDATE()
+)
+";
+
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, sql);
+
+        //Act
+        var sqlCreateTableDefinition = grammar.Create(node);
+
+        //Assert
+        Assert.Equal(2, sqlCreateTableDefinition.Columns.Count);
+
+        Assert.Null(sqlCreateTableDefinition.Columns[0].DefaultLiteralValue);
+        Assert.Null(sqlCreateTableDefinition.Columns[0].DefaultFunctionValue);
+
+        Assert.Null(sqlCreateTableDefinition.Columns[1].DefaultLiteralValue);
+        Assert.Equal("GETDATE", sqlCreateTableDefinition.Columns[1].DefaultFunctionValue!.FunctionName);
+    }
+
+    [Fact]
     public void BasicTable()
     {
         //Setup
