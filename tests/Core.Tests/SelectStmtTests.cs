@@ -709,6 +709,9 @@ public class SelectStmtTests
         var node = GrammarParser.Parse(grammar, "SELECT * FROM (SELECT [customer_id] FROM [orders] WHERE [amount] = (SELECT MAX([amount]) FROM [orders])) AS dt");
 
         Assert.Equal(SelectStmt.TermName, node.Term.Name);
+    }
+
+    [Fact]
     public void Select_WithScalarSubqueryInWhere_ResolvesCorrelatedOuterReference()
     {
         TestGrammar grammar = new();

@@ -436,6 +436,7 @@ public class ExprTests
         Assert.Equal("parSelectStmt", parseTree.Root.ChildNodes[2].Term.Name);
     }
 
+    [Fact]
     public void ScalarSubquery_ParsesAsExpression()
     {
         TestGrammar grammar = new();
