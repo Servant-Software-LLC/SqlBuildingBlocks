@@ -13,6 +13,8 @@ public class SqlSelectDefinition
 
     public IList<SqlJoin> Joins { get; set; } = new List<SqlJoin>();
 
+    public IList<SqlSetOperation> SetOperations { get; set; } = new List<SqlSetOperation>();
+
     public SqlExpression? WhereClause { get; set; }
 
     public IList<SqlOrderByColumn> OrderBy { get; set; } = new List<SqlOrderByColumn>();

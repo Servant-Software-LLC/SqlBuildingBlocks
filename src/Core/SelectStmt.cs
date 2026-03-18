@@ -9,6 +9,8 @@ namespace SqlBuildingBlocks;
 public class SelectStmt : NonTerminal
 {
     private const string sAggregate = "aggregate";
+    private const string sSelectCore = "selectCore";
+    private const string sSetOperationListOpt = "setOperationListOpt";
     private const bool ignoreCase = true;  //Exposure of this field may come later.
 
     protected readonly Grammar grammar;
@@ -47,6 +49,10 @@ public class SelectStmt : NonTerminal
         var INTO = grammar.ToTerm("INTO");
         var FROM = grammar.ToTerm("FROM");
         var BY = grammar.ToTerm("BY");
+        var UNION = grammar.ToTerm("UNION");
+        var ALL = grammar.ToTerm("ALL");
+        var INTERSECT = grammar.ToTerm("INTERSECT");
+        var EXCEPT = grammar.ToTerm("EXCEPT");
 
         var selRestrOpt = new NonTerminal("selRestrOpt");
         selRestrOpt.Rule = grammar.Empty | "ALL" | "DISTINCT";
@@ -89,8 +95,20 @@ public class SelectStmt : NonTerminal
         var orderClauseOpt = new NonTerminal("orderClauseOpt");
         orderClauseOpt.Rule = grammar.Empty | "ORDER" + BY + OrderByList;
 
-        Rule = SELECT + selRestrOpt + selList + intoClauseOpt + fromClauseOpt + WhereClauseOpt +
-                        groupClauseOpt + havingClauseOpt + orderClauseOpt;
+        var selectCore = new NonTerminal(sSelectCore);
+        selectCore.Rule = SELECT + selRestrOpt + selList + intoClauseOpt + fromClauseOpt + WhereClauseOpt +
+                          groupClauseOpt + havingClauseOpt;
+
+        var setOperator = new NonTerminal("setOperator");
+        setOperator.Rule = UNION + ALL | UNION | INTERSECT | EXCEPT;
+
+        var setOperation = new NonTerminal("setOperation");
+        setOperation.Rule = setOperator + selectCore;
+
+        var setOperationListOpt = new NonTerminal(sSetOperationListOpt);
+        setOperationListOpt.Rule = grammar.MakeStarRule(setOperationListOpt, setOperation);
+
+        Rule = selectCore + setOperationListOpt + orderClauseOpt;
 
         grammar.MarkPunctuation("(", ")");
     }
@@ -129,24 +147,58 @@ public class SelectStmt : NonTerminal
             throw new ArgumentException($"Cannot create building block of type {thisMethod!.ReturnType}.  The TermName for node is {selectStmt.Term.Name} which does not match {TermName}", nameof(selectStmt));
         }
 
-        var selList = selectStmt.ChildNodes[2];
-        if (selList.Term.Name != nameof(selList))
-            throw new Exception($"The {nameof(selectStmt)} provided to the ctor of {nameof(SqlSelectDefinition)} did not have a {nameof(selList)} as its third child node.");
+        UpdateSelectCore(selectStmt.ChildNodes[0], sqlSelectDefinition);
 
-        AddColumns(sqlSelectDefinition, selList);
-
-        var fromClauseOpt = selectStmt.ChildNodes[4];
-        if (fromClauseOpt.Term.Name == nameof(fromClauseOpt))
-        {
-            AddTables(sqlSelectDefinition, fromClauseOpt);
-        }
-
-        //WHERE clause
-        sqlSelectDefinition.WhereClause = WhereClauseOpt?.Create(selectStmt.ChildNodes[5]);
+        AddSetOperations(sqlSelectDefinition, selectStmt.ChildNodes[1]);
 
         //ORDER BY clause
         if (OrderByList != null)
-            sqlSelectDefinition.OrderBy = OrderByList.Create(selectStmt.ChildNodes[8]);
+            sqlSelectDefinition.OrderBy = OrderByList.Create(selectStmt.ChildNodes[2]);
+    }
+
+    protected virtual void UpdateSelectCore(ParseTreeNode selectCore, SqlSelectDefinition sqlSelectDefinition)
+    {
+        if (selectCore.Term.Name != sSelectCore)
+            throw new ArgumentException($"Expected a '{sSelectCore}' node but received '{selectCore.Term.Name}'.", nameof(selectCore));
+
+        var selList = selectCore.ChildNodes[2];
+        if (selList.Term.Name != nameof(selList))
+            throw new Exception($"The {nameof(selectCore)} provided to the ctor of {nameof(SqlSelectDefinition)} did not have a {nameof(selList)} as its third child node.");
+
+        AddColumns(sqlSelectDefinition, selList);
+
+        var fromClauseOpt = selectCore.ChildNodes[4];
+        if (fromClauseOpt.Term.Name == nameof(fromClauseOpt))
+            AddTables(sqlSelectDefinition, fromClauseOpt);
+
+        sqlSelectDefinition.WhereClause = WhereClauseOpt?.Create(selectCore.ChildNodes[5]);
+    }
+
+    protected virtual void AddSetOperations(SqlSelectDefinition sqlSelectDefinition, ParseTreeNode setOperationListOpt)
+    {
+        if (setOperationListOpt.Term.Name != sSetOperationListOpt)
+            throw new ArgumentException($"Expected a '{sSetOperationListOpt}' node but received '{setOperationListOpt.Term.Name}'.", nameof(setOperationListOpt));
+
+        foreach (var setOperationNode in setOperationListOpt.ChildNodes)
+        {
+            var rightSelect = new SqlSelectDefinition();
+            UpdateSelectCore(setOperationNode.ChildNodes[1], rightSelect);
+            sqlSelectDefinition.SetOperations.Add(new SqlSetOperation(CreateSetOperator(setOperationNode.ChildNodes[0]), rightSelect));
+        }
+    }
+
+    protected virtual SqlSetOperator CreateSetOperator(ParseTreeNode setOperatorNode)
+    {
+        var symbol = string.Join(" ", setOperatorNode.ChildNodes.Select(child => child.Token?.Text?.ToUpperInvariant()));
+
+        return symbol switch
+        {
+            "UNION" => SqlSetOperator.Union,
+            "UNION ALL" => SqlSetOperator.UnionAll,
+            "INTERSECT" => SqlSetOperator.Intersect,
+            "EXCEPT" => SqlSetOperator.Except,
+            _ => throw new ArgumentException($"Unsupported set operator '{symbol}'.", nameof(setOperatorNode)),
+        };
     }
 
 

@@ -519,4 +519,50 @@ public class SelectStmtTests
         Assert.Equal("status", rightBinExpr.Left.Column.ColumnName);
     }
 
+    [Fact]
+    public void Select_Union_ChainsSetOperation()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "SELECT id FROM employees UNION SELECT id FROM contractors");
+
+        var selectStmt = ((SelectStmt)grammar.Root).Create(node);
+
+        Assert.Single(selectStmt.SetOperations);
+        Assert.Equal(SqlSetOperator.Union, selectStmt.SetOperations[0].Operator);
+        Assert.Equal("employees", selectStmt.Table!.TableName);
+        Assert.Equal("contractors", selectStmt.SetOperations[0].Right.Table!.TableName);
+    }
+
+    [Fact]
+    public void Select_UnionAll_Intersect_Except_AreParsedInOrder()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "SELECT id FROM a UNION ALL SELECT id FROM b INTERSECT SELECT id FROM c EXCEPT SELECT id FROM d");
+
+        var selectStmt = ((SelectStmt)grammar.Root).Create(node);
+
+        Assert.Equal(3, selectStmt.SetOperations.Count);
+        Assert.Equal(SqlSetOperator.UnionAll, selectStmt.SetOperations[0].Operator);
+        Assert.Equal("b", selectStmt.SetOperations[0].Right.Table!.TableName);
+        Assert.Equal(SqlSetOperator.Intersect, selectStmt.SetOperations[1].Operator);
+        Assert.Equal("c", selectStmt.SetOperations[1].Right.Table!.TableName);
+        Assert.Equal(SqlSetOperator.Except, selectStmt.SetOperations[2].Operator);
+        Assert.Equal("d", selectStmt.SetOperations[2].Right.Table!.TableName);
+    }
+
+    [Fact]
+    public void Select_Union_WithOrderBy_AppliesToFinalResult()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "SELECT id FROM employees UNION SELECT id FROM contractors ORDER BY id DESC");
+
+        var selectStmt = ((SelectStmt)grammar.Root).Create(node);
+
+        Assert.Single(selectStmt.SetOperations);
+        Assert.Single(selectStmt.OrderBy);
+        Assert.Equal("id", selectStmt.OrderBy[0].ColumnName);
+        Assert.True(selectStmt.OrderBy[0].Descending);
+        Assert.Empty(selectStmt.SetOperations[0].Right.OrderBy);
+    }
+
 }
