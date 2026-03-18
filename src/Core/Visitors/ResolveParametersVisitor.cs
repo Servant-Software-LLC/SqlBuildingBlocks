@@ -91,6 +91,8 @@ public class ResolveParametersVisitor : ISqlExpressionVisitor, ISqlValueVisitor
 
     public SqlExpression? Visit(SqlLiteralValue value) => null;
 
+    public void Visit(SqlCastExpression castExpr) { }
+
     public SqlLimitValue? Visit(SqlLimitValue limit)
     {
         if (limit.Parameter != null)

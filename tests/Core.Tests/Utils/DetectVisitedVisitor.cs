@@ -2,6 +2,7 @@
 using SqlBuildingBlocks.LogicalEntities;
 using Xunit;
 
+
 namespace SqlBuildingBlocks.Core.Tests.Utils;
 
 internal class DetectVisitedVisitor : ISqlExpressionVisitor
@@ -66,4 +67,6 @@ internal class DetectVisitedVisitor : ISqlExpressionVisitor
         VisitedValue = true;
         return null;
     }
+
+    public void Visit(SqlCastExpression castExpr) { }
 }
