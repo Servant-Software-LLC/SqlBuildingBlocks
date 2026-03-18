@@ -417,6 +417,26 @@ public class ExprTests
     }
 
     [Fact]
+    public void In_Subquery_ParseTree_UsesScalarSubqueryExprNode()
+    {
+        TestGrammar grammar = new();
+        var parseTree = GrammarParser.ParseTree(grammar, "customer_id IN (SELECT id FROM orders)");
+
+        Assert.Equal("binExpr", parseTree.Root.Term.Name);
+        Assert.Equal("scalarSubqueryExpr", parseTree.Root.ChildNodes[2].Term.Name);
+    }
+
+    [Fact]
+    public void Equal_ScalarSubquery_ParseTree_UsesScalarSubqueryExprNode()
+    {
+        TestGrammar grammar = new();
+        var parseTree = GrammarParser.ParseTree(grammar, "amount = (SELECT MAX(total) FROM orders)");
+
+        Assert.Equal("binExpr", parseTree.Root.Term.Name);
+        Assert.Equal("scalarSubqueryExpr", parseTree.Root.ChildNodes[2].Term.Name);
+    }
+
+    [Fact]
     public void ScalarSubquery_ParsesAsExpression()
     {
         TestGrammar grammar = new();
@@ -499,6 +519,34 @@ public class ExprTests
         Assert.Equal(SqlBinaryOperator.In, binExpr.Operator);
         Assert.NotNull(binExpr.Left.Column);
         Assert.Equal("status", binExpr.Left.Column.ColumnName);
+    }
+
+    [Fact]
+    public void In_Tuple_ParseTree_UsesTupleNode()
+    {
+        TestGrammar grammar = new();
+        var parseTree = GrammarParser.ParseTree(grammar, "status IN (1, 2, 3)");
+
+        Assert.Equal("binExpr", parseTree.Root.Term.Name);
+        Assert.Equal("tuple", parseTree.Root.ChildNodes[2].Term.Name);
+    }
+
+    [Fact]
+    public void In_Subquery_ParsesWithoutTupleConflict()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "status IN (SELECT status FROM orders)");
+
+        Assert.Equal("binExpr", node.Term.Name);
+    }
+
+    [Fact]
+    public void Comparison_WithScalarSubquery_Parses()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "amount = (SELECT MAX(amount) FROM orders)");
+
+        Assert.Equal("binExpr", node.Term.Name);
     }
 
     // ── CAST ─────────────────────────────────────────────────────────────────

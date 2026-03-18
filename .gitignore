@@ -15,5 +15,6 @@ packages
 *.resources.dll
 *.metaproj
 *.metaproj.tmp
+.claude/
 
 
