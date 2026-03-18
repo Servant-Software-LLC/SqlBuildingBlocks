@@ -48,6 +48,7 @@ public class SqlBinaryExpression
         return Operator switch
         {
             SqlBinaryOperator.Equal => GetBinaryExpression(leftProperty, rightProperty, Expression.Equal),
+            SqlBinaryOperator.NotEqualTo => GetBinaryExpression(leftProperty, rightProperty, Expression.NotEqual),
             SqlBinaryOperator.LessThan => GetBinaryExpression(leftProperty, rightProperty, Expression.LessThan),
             SqlBinaryOperator.LessThanEqual => GetBinaryExpression(leftProperty, rightProperty, Expression.LessThanOrEqual),
             SqlBinaryOperator.GreaterThan => GetBinaryExpression(leftProperty, rightProperty, Expression.GreaterThan),
@@ -55,6 +56,9 @@ public class SqlBinaryExpression
             SqlBinaryOperator.And => Expression.And(leftProperty, rightProperty),
             SqlBinaryOperator.Or => Expression.Or(leftProperty, rightProperty),
             SqlBinaryOperator.Like => GetRegexIsMatchExpression(leftProperty, rightProperty),
+            SqlBinaryOperator.NotLike => Expression.Not(GetRegexIsMatchExpression(leftProperty, rightProperty)),
+            SqlBinaryOperator.In or SqlBinaryOperator.NotIn =>
+                throw new NotSupportedException($"LINQ expression generation for {Operator} is not supported. IN / NOT IN require tuple or subquery evaluation which is not implemented in the expression builder."),
             _ => throw new ArgumentException($"Invalid binary operator {Operator} in {nameof(GetExpression)}", nameof(Operator))
         };
     }

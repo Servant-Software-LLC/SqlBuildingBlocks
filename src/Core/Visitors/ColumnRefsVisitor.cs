@@ -30,6 +30,8 @@ class ColumnRefsVisitor : ISqlExpressionVisitor
     public void Visit(SqlBetweenExpression betweenExpr) { }
 
     public void Visit(SqlCaseExpression caseExpr) { }
+    
+    public void Visit(SqlInList inList) { }
 
     public SqlExpression? Visit(SqlColumnRef column)
     {

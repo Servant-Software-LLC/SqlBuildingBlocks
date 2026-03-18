@@ -368,5 +368,66 @@ public class ExprTests
 
         Assert.Equal("CASE WHEN x = 1 THEN 'yes' ELSE 'no' END", expression.ToExpressionString());
     }
+  
+    // ── NOT LIKE ──────────────────────────────────────────────────────────
+
+    [Fact]
+    public void NotLike_StringLiteral()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "name NOT LIKE 'A%'");
+        var expression = grammar.Create(node);
+
+        Assert.NotNull(expression.BinExpr);
+        var binExpr = expression.BinExpr!;
+
+        Assert.Equal(SqlBinaryOperator.NotLike, binExpr.Operator);
+        Assert.NotNull(binExpr.Left.Column);
+        Assert.Equal("name", binExpr.Left.Column.ColumnName);
+        Assert.NotNull(binExpr.Right!.Value);
+        Assert.Equal("A%", binExpr.Right.Value.String);
+    }
+
+    [Fact]
+    public void NotLike_ToExpressionString()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "name NOT LIKE 'A%'");
+        var expression = grammar.Create(node);
+
+        Assert.Equal("name NOT LIKE 'A%'", expression.ToExpressionString());
+    }
+
+    // ── NOT IN ────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void NotIn_Tuple()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "status NOT IN (1, 2, 3)");
+        var expression = grammar.Create(node);
+
+        Assert.NotNull(expression.BinExpr);
+        var binExpr = expression.BinExpr!;
+
+        Assert.Equal(SqlBinaryOperator.NotIn, binExpr.Operator);
+        Assert.NotNull(binExpr.Left.Column);
+        Assert.Equal("status", binExpr.Left.Column.ColumnName);
+    }
+
+    [Fact]
+    public void In_Tuple()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "status IN (1, 2, 3)");
+        var expression = grammar.Create(node);
+
+        Assert.NotNull(expression.BinExpr);
+        var binExpr = expression.BinExpr!;
+
+        Assert.Equal(SqlBinaryOperator.In, binExpr.Operator);
+        Assert.NotNull(binExpr.Left.Column);
+        Assert.Equal("status", binExpr.Left.Column.ColumnName);
+    }
 
 }
