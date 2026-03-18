@@ -10,6 +10,7 @@ internal class DetectVisitedVisitor : ISqlExpressionVisitor
     public bool VisitedBinaryExpression { get; private set; }
     public bool VisitedBetweenExpression { get; private set; }
     public bool VisitedCaseExpression { get; private set; }
+    public bool VisitedExistsExpression { get; private set; }
     public bool VisitedInList { get; private set; }
     public bool VisitedColumnRef { get; private set; }
     public bool VisitedParameter { get; private set; }
@@ -32,6 +33,12 @@ internal class DetectVisitedVisitor : ISqlExpressionVisitor
     {
         Assert.NotNull(caseExpr);
         VisitedCaseExpression = true;
+    }
+
+    public void Visit(SqlExistsExpression existsExpr)
+    {
+        Assert.NotNull(existsExpr);
+        VisitedExistsExpression = true;
     }
     
     public void Visit(SqlInList inList)

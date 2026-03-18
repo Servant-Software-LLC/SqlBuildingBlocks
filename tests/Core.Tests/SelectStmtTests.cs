@@ -637,4 +637,60 @@ public class SelectStmtTests
         Assert.Same(derivedJoin, total.TableRef);
     }
 
+    [Fact]
+    public void Select_WithExists_ResolvesNonCorrelatedSubquery()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "SELECT * FROM [employees] WHERE EXISTS (SELECT [id] FROM [orders] WHERE [amount] > 100)");
+
+        DatabaseConnectionProvider databaseConnectionProvider = new();
+        TableSchemaProvider tableSchemaProvider = new();
+        var selectStmt = grammar.Create(node, databaseConnectionProvider, tableSchemaProvider);
+
+        Assert.False(selectStmt.InvalidReferences, selectStmt.InvalidReferenceReason);
+        Assert.NotNull(selectStmt.WhereClause?.ExistsExpr);
+
+        var existsExpr = selectStmt.WhereClause!.ExistsExpr!;
+        Assert.False(existsExpr.IsNegated);
+        Assert.Equal("orders", existsExpr.SelectDefinition.Table!.TableName);
+        Assert.False(existsExpr.SelectDefinition.InvalidReferences, existsExpr.SelectDefinition.InvalidReferenceReason);
+    }
+
+    [Fact]
+    public void Select_WithExists_ResolvesCorrelatedOuterReference()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "SELECT * FROM [employees] WHERE EXISTS (SELECT [id] FROM [orders] WHERE [orders].[customer_id] = [employees].[id])");
+
+        DatabaseConnectionProvider databaseConnectionProvider = new();
+        TableSchemaProvider tableSchemaProvider = new();
+        var selectStmt = grammar.Create(node, databaseConnectionProvider, tableSchemaProvider);
+
+        Assert.False(selectStmt.InvalidReferences, selectStmt.InvalidReferenceReason);
+
+        var existsExpr = selectStmt.WhereClause!.ExistsExpr!;
+        var innerCondition = existsExpr.SelectDefinition.WhereClause!.BinExpr!;
+
+        var leftColumn = Assert.IsType<SqlColumn>(innerCondition.Left.Column!.Column);
+        Assert.Equal("orders", leftColumn.TableRef!.TableName);
+
+        var rightColumn = Assert.IsType<SqlColumn>(innerCondition.Right!.Column!.Column);
+        Assert.Equal("employees", rightColumn.TableRef!.TableName);
+        Assert.Same(selectStmt.Table, rightColumn.TableRef);
+    }
+
+    [Fact]
+    public void Select_WithNotExists_ResolvesSubquery()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "SELECT * FROM [employees] WHERE NOT EXISTS (SELECT [id] FROM [orders] WHERE [amount] > 100)");
+
+        DatabaseConnectionProvider databaseConnectionProvider = new();
+        TableSchemaProvider tableSchemaProvider = new();
+        var selectStmt = grammar.Create(node, databaseConnectionProvider, tableSchemaProvider);
+
+        Assert.False(selectStmt.InvalidReferences, selectStmt.InvalidReferenceReason);
+        Assert.True(selectStmt.WhereClause!.ExistsExpr!.IsNegated);
+    }
+
 }

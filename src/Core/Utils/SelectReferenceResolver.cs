@@ -11,14 +11,17 @@ class SelectReferenceResolver
     private readonly IDatabaseConnectionProvider databaseConnectionProvider;
     private readonly ITableSchemaProvider tableSchemaProvider;
     private readonly IFunctionProvider? functionProvider;
+    private readonly IList<SqlTable> outerTablesInScope;
 
     public SelectReferenceResolver(SqlSelectDefinition sqlSelectDefinition, IDatabaseConnectionProvider databaseConnectionProvider, 
-                                   ITableSchemaProvider tableSchemaProvider, IFunctionProvider? functionProvider)
+                                   ITableSchemaProvider tableSchemaProvider, IFunctionProvider? functionProvider,
+                                   IEnumerable<SqlTable>? outerTablesInScope = null)
     {
         this.sqlSelectDefinition = sqlSelectDefinition ?? throw new ArgumentNullException(nameof(sqlSelectDefinition));
         this.databaseConnectionProvider = databaseConnectionProvider ?? throw new ArgumentNullException(nameof(databaseConnectionProvider));
         this.tableSchemaProvider = tableSchemaProvider ?? throw new ArgumentNullException(nameof(tableSchemaProvider));
         this.functionProvider = functionProvider;
+        this.outerTablesInScope = outerTablesInScope?.ToList() ?? new List<SqlTable>();
     }
 
     /// <summary>
@@ -45,18 +48,20 @@ class SelectReferenceResolver
     public void ResolveReferences()
     {
         var tablesInSelect = sqlSelectDefinition.TablesInSelect;
+        var visibleTables = tablesInSelect.Concat(outerTablesInScope).ToList();
 
-        TableFinder columnNameToTables = new(tablesInSelect, tableSchemaProvider);
+        TableFinder selectColumnTables = new(tablesInSelect, tableSchemaProvider);
+        TableFinder visibleColumnTables = new(visibleTables, tableSchemaProvider);
 
-        DetermineTableReferencesOnColumns(tablesInSelect, columnNameToTables);
+        DetermineTableReferencesOnColumns(tablesInSelect, selectColumnTables);
         if (sqlSelectDefinition.InvalidReferences)
             return;
 
-        DetermineColumnReferencesOnJoinCondition(columnNameToTables);
+        DetermineColumnReferencesOnJoinCondition(visibleColumnTables, visibleTables);
         if (sqlSelectDefinition.InvalidReferences)
             return;
 
-        DetermineColumnReferencesOnWhereConditions(columnNameToTables);
+        DetermineColumnReferencesOnWhereConditions(visibleColumnTables, visibleTables);
     }
 
     private void ResolveTablesDatabase(SqlTable sqlTable, IDatabaseConnectionProvider databaseConnectionProvider)
@@ -165,14 +170,14 @@ class SelectReferenceResolver
 
     }
 
-    private void DetermineColumnReferencesOnJoinCondition(TableFinder columnNameToTables)
+    private void DetermineColumnReferencesOnJoinCondition(TableFinder columnNameToTables, IList<SqlTable> visibleTables)
     {
         if (sqlSelectDefinition.Joins == null || sqlSelectDefinition.Joins.Count == 0)
             return;
 
         foreach (var join in sqlSelectDefinition.Joins)
         {
-            WalkBinaryExpression_SetColumnReferences(join.Condition, columnNameToTables, true);
+            WalkBinaryExpression_SetColumnReferences(join.Condition, columnNameToTables, visibleTables, true);
         }
     }
 
@@ -206,56 +211,68 @@ class SelectReferenceResolver
 
     }
 
-    private void DetermineColumnReferencesOnWhereConditions(TableFinder columnNameToTables)
+    private void DetermineColumnReferencesOnWhereConditions(TableFinder columnNameToTables, IList<SqlTable> visibleTables)
     {
         if (sqlSelectDefinition.WhereClause == null)
             return;
 
-        WalkExpression_SetColumnReferences(sqlSelectDefinition.WhereClause, columnNameToTables, false);
+        WalkExpression_SetColumnReferences(sqlSelectDefinition.WhereClause, columnNameToTables, visibleTables, false);
     }
 
-    private void WalkBinaryExpression_SetColumnReferences(SqlBinaryExpression binaryExpression, TableFinder columnNameToTables, bool joinOnClause)
+    private void WalkBinaryExpression_SetColumnReferences(SqlBinaryExpression binaryExpression, TableFinder columnNameToTables, IList<SqlTable> visibleTables, bool joinOnClause)
     {
-        SetColumnReferences(binaryExpression.Left, columnNameToTables, joinOnClause);
+        SetColumnReferences(binaryExpression.Left, columnNameToTables, visibleTables, joinOnClause);
         if (binaryExpression.Right != null)
-            SetColumnReferences(binaryExpression.Right, columnNameToTables, joinOnClause);
+            SetColumnReferences(binaryExpression.Right, columnNameToTables, visibleTables, joinOnClause);
     }
 
-    private void WalkBetweenExpression_SetColumnReferences(SqlBetweenExpression betweenExpression, TableFinder columnNameToTables, bool joinOnClause)
+    private void WalkBetweenExpression_SetColumnReferences(SqlBetweenExpression betweenExpression, TableFinder columnNameToTables, IList<SqlTable> visibleTables, bool joinOnClause)
     {
-        SetColumnReferences(betweenExpression.Operand, columnNameToTables, joinOnClause);
-        SetColumnReferences(betweenExpression.LowerBound, columnNameToTables, joinOnClause);
-        SetColumnReferences(betweenExpression.UpperBound, columnNameToTables, joinOnClause);
+        SetColumnReferences(betweenExpression.Operand, columnNameToTables, visibleTables, joinOnClause);
+        SetColumnReferences(betweenExpression.LowerBound, columnNameToTables, visibleTables, joinOnClause);
+        SetColumnReferences(betweenExpression.UpperBound, columnNameToTables, visibleTables, joinOnClause);
     }
 
-    private void WalkExpression_SetColumnReferences(SqlExpression expression, TableFinder columnNameToTables, bool joinOnClause)
+    private void WalkExpression_SetColumnReferences(SqlExpression expression, TableFinder columnNameToTables, IList<SqlTable> visibleTables, bool joinOnClause)
     {
         if (expression.BinExpr != null)
         {
-            WalkBinaryExpression_SetColumnReferences(expression.BinExpr, columnNameToTables, joinOnClause);
+            WalkBinaryExpression_SetColumnReferences(expression.BinExpr, columnNameToTables, visibleTables, joinOnClause);
             return;
         }
 
         if (expression.BetweenExpr != null)
         {
-            WalkBetweenExpression_SetColumnReferences(expression.BetweenExpr, columnNameToTables, joinOnClause);
+            WalkBetweenExpression_SetColumnReferences(expression.BetweenExpr, columnNameToTables, visibleTables, joinOnClause);
             return;
         }
 
-        SetColumnReferences(expression, columnNameToTables, joinOnClause);
+        if (expression.ExistsExpr != null)
+        {
+            ResolveExistsExpression(expression.ExistsExpr, visibleTables);
+            return;
+        }
+
+        SetColumnReferences(expression, columnNameToTables, visibleTables, joinOnClause);
     }
 
-    private void SetColumnReferences(SqlExpression operand, TableFinder columnNameToTables, bool joinOnClause)
+    private void SetColumnReferences(SqlExpression operand, TableFinder columnNameToTables, IList<SqlTable> visibleTables, bool joinOnClause)
     {
         if (operand.BinExpr != null)
         {
-            WalkBinaryExpression_SetColumnReferences(operand.BinExpr, columnNameToTables, joinOnClause);
+            WalkBinaryExpression_SetColumnReferences(operand.BinExpr, columnNameToTables, visibleTables, joinOnClause);
             return;
         }
 
         if (operand.BetweenExpr != null)
         {
-            WalkBetweenExpression_SetColumnReferences(operand.BetweenExpr, columnNameToTables, joinOnClause);
+            WalkBetweenExpression_SetColumnReferences(operand.BetweenExpr, columnNameToTables, visibleTables, joinOnClause);
+            return;
+        }
+
+        if (operand.ExistsExpr != null)
+        {
+            ResolveExistsExpression(operand.ExistsExpr, visibleTables);
             return;
         }
 
@@ -401,5 +418,13 @@ class SelectReferenceResolver
         {
             table.SelectDefinition.ResolveReferences(databaseConnectionProvider, tableSchemaProvider, functionProvider);
         }
+    }
+
+    private void ResolveExistsExpression(SqlExistsExpression existsExpression, IEnumerable<SqlTable> visibleTables)
+    {
+        existsExpression.SelectDefinition.ResolveReferences(databaseConnectionProvider, tableSchemaProvider, functionProvider, visibleTables);
+
+        if (existsExpression.SelectDefinition.InvalidReferences)
+            sqlSelectDefinition.InvalidReferenceReason = existsExpression.SelectDefinition.InvalidReferenceReason;
     }
 }
