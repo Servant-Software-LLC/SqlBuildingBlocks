@@ -32,6 +32,8 @@ public class FunctionsEncounteredVisitor : ISqlExpressionVisitor
     public void Visit(SqlBetweenExpression betweenExpr) { }
 
     public void Visit(SqlCaseExpression caseExpr) { }
+
+    public void Visit(SqlExistsExpression existsExpr) { }
     
     public void Visit(SqlInList inList) { }
 

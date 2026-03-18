@@ -368,6 +368,53 @@ public class ExprTests
 
         Assert.Equal("CASE WHEN x = 1 THEN 'yes' ELSE 'no' END", expression.ToExpressionString());
     }
+
+    [Fact]
+    public void Exists_Subquery()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "EXISTS (SELECT id FROM orders WHERE amount > 100)");
+        var expression = grammar.Create(node);
+
+        Assert.NotNull(expression.ExistsExpr);
+        Assert.False(expression.ExistsExpr!.IsNegated);
+        Assert.Equal("orders", expression.ExistsExpr.SelectDefinition.Table!.TableName);
+    }
+
+    [Fact]
+    public void NotExists_Subquery()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "NOT EXISTS (SELECT id FROM orders WHERE amount > 100)");
+        var expression = grammar.Create(node);
+
+        Assert.NotNull(expression.ExistsExpr);
+        Assert.True(expression.ExistsExpr!.IsNegated);
+        Assert.Equal("orders", expression.ExistsExpr.SelectDefinition.Table!.TableName);
+    }
+
+    [Fact]
+    public void Exists_ToExpressionString()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "EXISTS (SELECT id FROM orders WHERE amount > 100)");
+        var expression = grammar.Create(node);
+
+        Assert.StartsWith("EXISTS (", expression.ToExpressionString());
+    }
+
+    [Fact]
+    public void Exists_AcceptsVisitor()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "EXISTS (SELECT id FROM orders WHERE amount > 100)");
+        var expression = grammar.Create(node);
+        DetectVisitedVisitor visitor = new();
+
+        expression.Accept(visitor);
+
+        Assert.True(visitor.VisitedExistsExpression);
+    }
   
     // ── NOT LIKE ──────────────────────────────────────────────────────────
 
