@@ -239,4 +239,144 @@ CREATE TABLE orders (
         Assert.NotNull(check.CheckConstraint);
         Assert.NotNull(check.CheckConstraint!.Expression.BinExpr);
     }
+
+    [Fact]
+    public void AutoIncrement_MySQL()
+    {
+        const string sql = @"
+CREATE TABLE users (
+    id INT AUTO_INCREMENT,
+    name VARCHAR(100)
+)
+";
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, sql);
+
+        var result = grammar.Create(node);
+
+        Assert.Equal(2, result.Columns.Count);
+        Assert.True(result.Columns[0].IsAutoIncrement);
+        Assert.Null(result.Columns[0].IdentitySeed);
+        Assert.Null(result.Columns[0].IdentityIncrement);
+        Assert.False(result.Columns[1].IsAutoIncrement);
+    }
+
+    [Fact]
+    public void AutoIncrement_SqlServerIdentity()
+    {
+        const string sql = @"
+CREATE TABLE orders (
+    id INT IDENTITY(1,1),
+    total DECIMAL(10,2)
+)
+";
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, sql);
+
+        var result = grammar.Create(node);
+
+        Assert.Equal(2, result.Columns.Count);
+        Assert.True(result.Columns[0].IsAutoIncrement);
+        Assert.Equal(1, result.Columns[0].IdentitySeed);
+        Assert.Equal(1, result.Columns[0].IdentityIncrement);
+        Assert.False(result.Columns[1].IsAutoIncrement);
+    }
+
+    [Fact]
+    public void AutoIncrement_SqlServerIdentity_CustomSeedIncrement()
+    {
+        const string sql = @"
+CREATE TABLE events (
+    id INT IDENTITY(100,5)
+)
+";
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, sql);
+
+        var result = grammar.Create(node);
+
+        Assert.Single(result.Columns);
+        Assert.True(result.Columns[0].IsAutoIncrement);
+        Assert.Equal(100, result.Columns[0].IdentitySeed);
+        Assert.Equal(5, result.Columns[0].IdentityIncrement);
+    }
+
+    [Fact]
+    public void AutoIncrement_PostgresSerial()
+    {
+        const string sql = @"
+CREATE TABLE products (
+    id SERIAL,
+    name VARCHAR(255)
+)
+";
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, sql);
+
+        var result = grammar.Create(node);
+
+        Assert.Equal(2, result.Columns.Count);
+        Assert.True(result.Columns[0].IsAutoIncrement);
+        Assert.Equal("SERIAL", result.Columns[0].DataType.Name);
+        Assert.Null(result.Columns[0].IdentitySeed);
+        Assert.Null(result.Columns[0].IdentityIncrement);
+        Assert.False(result.Columns[1].IsAutoIncrement);
+    }
+
+    [Fact]
+    public void AutoIncrement_PostgresBigSerial()
+    {
+        const string sql = @"
+CREATE TABLE logs (
+    id BIGSERIAL,
+    message VARCHAR(500)
+)
+";
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, sql);
+
+        var result = grammar.Create(node);
+
+        Assert.Equal(2, result.Columns.Count);
+        Assert.True(result.Columns[0].IsAutoIncrement);
+        Assert.Equal("BIGSERIAL", result.Columns[0].DataType.Name);
+    }
+
+    [Fact]
+    public void AutoIncrement_GeneratedAlwaysAsIdentity()
+    {
+        const string sql = @"
+CREATE TABLE employees (
+    id INT GENERATED ALWAYS AS IDENTITY,
+    name VARCHAR(100)
+)
+";
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, sql);
+
+        var result = grammar.Create(node);
+
+        Assert.Equal(2, result.Columns.Count);
+        Assert.True(result.Columns[0].IsAutoIncrement);
+        Assert.Null(result.Columns[0].IdentitySeed);
+        Assert.Null(result.Columns[0].IdentityIncrement);
+        Assert.False(result.Columns[1].IsAutoIncrement);
+    }
+
+    [Fact]
+    public void AutoIncrement_NonAutoIncrementColumn_IsFalse()
+    {
+        const string sql = @"
+CREATE TABLE items (
+    id INTEGER,
+    label VARCHAR(50)
+)
+";
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, sql);
+
+        var result = grammar.Create(node);
+
+        Assert.All(result.Columns, col => Assert.False(col.IsAutoIncrement));
+    }
 }

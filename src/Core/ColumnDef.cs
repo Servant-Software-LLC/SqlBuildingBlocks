@@ -10,6 +10,9 @@ public class ColumnDef : NonTerminal
     private const string DefaultOptName = "defaultOpt";
     private const string DefaultFuncCallName = "defaultFuncCall";
     private const string CheckOptName = "checkOpt";
+    private const string AutoIncrementOptName = "autoIncrementOpt";
+    private const string IdentitySpecName = "identitySpec";
+    private const string GeneratedAlwaysIdentName = "generatedAlwaysIdent";
 
     public static string TermName => MethodBase.GetCurrentMethod().DeclaringType.Name.CamelCase();
 
@@ -40,6 +43,12 @@ public class ColumnDef : NonTerminal
         var PRIMARY = grammar.ToTerm("PRIMARY");
         var DEFAULT = grammar.ToTerm("DEFAULT");
         var CHECK = grammar.ToTerm("CHECK");
+        var AUTO_INCREMENT = grammar.ToTerm("AUTO_INCREMENT");
+        var IDENTITY = grammar.ToTerm("IDENTITY");
+        var GENERATED = grammar.ToTerm("GENERATED");
+        var ALWAYS = grammar.ToTerm("ALWAYS");
+        var AS = grammar.ToTerm("AS");
+        var COMMA = grammar.ToTerm(",");
 
         var nullSpecOpt = new NonTerminal("nullSpecOpt");
         var uniqueOpt = new NonTerminal("uniqueOpt");
@@ -47,6 +56,9 @@ public class ColumnDef : NonTerminal
         var defaultOpt = new NonTerminal(DefaultOptName);
         var defaultFuncCall = new NonTerminal(DefaultFuncCallName);
         var checkOpt = new NonTerminal(CheckOptName);
+        var autoIncrementOpt = new NonTerminal(AutoIncrementOptName);
+        var identitySpec = new NonTerminal(IdentitySpecName);
+        var generatedAlwaysIdent = new NonTerminal(GeneratedAlwaysIdentName);
 
         //Inline constraints
         nullSpecOpt.Rule = NULL | NOT + NULL | grammar.Empty;
@@ -58,17 +70,24 @@ public class ColumnDef : NonTerminal
         defaultOpt.Rule = DEFAULT + LiteralValue | DEFAULT + defaultFuncCall | grammar.Empty;
         grammar.MarkPunctuation(DEFAULT);
 
+        // AUTO INCREMENT: AUTO_INCREMENT | IDENTITY(seed,increment) | GENERATED ALWAYS AS IDENTITY
+        // Reuse DataType's number literal to avoid introducing a second NumberLiteral terminal
+        var identityNumber = DataType.Number;
+        identitySpec.Rule = IDENTITY + "(" + identityNumber + COMMA + identityNumber + ")";
+        generatedAlwaysIdent.Rule = GENERATED + ALWAYS + AS + IDENTITY;
+        autoIncrementOpt.Rule = AUTO_INCREMENT | identitySpec | generatedAlwaysIdent | grammar.Empty;
+
         if (expr != null)
         {
             var checkExpr = new NonTerminal("columnCheckExpr");
             checkExpr.Rule = "(" + expr + ")";
             checkOpt.Rule = CHECK + checkExpr | grammar.Empty;
-            Rule = id.SimpleId + DataType + defaultOpt + nullSpecOpt + uniqueOpt + primaryKeyOpt + checkOpt;
+            Rule = id.SimpleId + DataType + autoIncrementOpt + defaultOpt + nullSpecOpt + uniqueOpt + primaryKeyOpt + checkOpt;
         }
         else
         {
             checkOpt.Rule = grammar.Empty;
-            Rule = id.SimpleId + DataType + defaultOpt + nullSpecOpt + uniqueOpt + primaryKeyOpt;
+            Rule = id.SimpleId + DataType + autoIncrementOpt + defaultOpt + nullSpecOpt + uniqueOpt + primaryKeyOpt;
         }
     }
 
@@ -88,8 +107,29 @@ public class ColumnDef : NonTerminal
 
         SqlColumnDefinition sqlColumnDefinition = new(columnName, dataTypeName);
 
+        // Set IsAutoIncrement for SERIAL-family types
+        if (dataTypeName.Name is "SERIAL" or "BIGSERIAL" or "SMALLSERIAL")
+            sqlColumnDefinition.IsAutoIncrement = true;
+
+        // AUTO INCREMENT (index 2)
+        var autoIncrementOpt = definition.ChildNodes[2];
+        if (autoIncrementOpt.ChildNodes.Count > 0)
+        {
+            sqlColumnDefinition.IsAutoIncrement = true;
+            var firstChild = autoIncrementOpt.ChildNodes[0];
+            if (firstChild.Term.Name == IdentitySpecName)
+            {
+                // identitySpec children: IDENTITY keyword + seed + increment (parens punctuation, comma may vary)
+                var identityNumbers = firstChild.ChildNodes
+                    .Where(n => n.Token != null && n.Token.Terminal is NumberLiteral)
+                    .ToList();
+                sqlColumnDefinition.IdentitySeed = Convert.ToInt32(identityNumbers[0].Token.Value);
+                sqlColumnDefinition.IdentityIncrement = Convert.ToInt32(identityNumbers[1].Token.Value);
+            }
+        }
+
         //DEFAULT value
-        var defaultOpt = definition.ChildNodes[2];
+        var defaultOpt = definition.ChildNodes[3];
         if (defaultOpt.ChildNodes.Count > 0)
         {
             var defaultChild = defaultOpt.ChildNodes[0];
@@ -105,14 +145,14 @@ public class ColumnDef : NonTerminal
         }
 
         //NULL or NOT NULL
-        var nullSpecOpt = definition.ChildNodes[3];
+        var nullSpecOpt = definition.ChildNodes[4];
         if (nullSpecOpt.ChildNodes.Count > 0)
         {
             sqlColumnDefinition.AllowNulls = nullSpecOpt.ChildNodes.Count == 1;
         }
 
         //UNIQUE
-        var uniqueOpt = definition.ChildNodes[4];
+        var uniqueOpt = definition.ChildNodes[5];
         if (uniqueOpt.ChildNodes.Count > 0)
         {
             var uniqueConstraint = new SqlUniqueConstraint();
@@ -121,7 +161,7 @@ public class ColumnDef : NonTerminal
         }
 
         //PRIMARY KEY
-        var primaryKeyOpt = definition.ChildNodes[5];
+        var primaryKeyOpt = definition.ChildNodes[6];
         if (primaryKeyOpt.ChildNodes.Count > 0)
         {
             var primaryKeyConstraint = new SqlPrimaryKeyConstraint();
@@ -130,9 +170,9 @@ public class ColumnDef : NonTerminal
         }
 
         // Inline CHECK constraint (only present when expr was provided)
-        if (expr != null && definition.ChildNodes.Count > 6)
+        if (expr != null && definition.ChildNodes.Count > 7)
         {
-            var checkOpt = definition.ChildNodes[6];
+            var checkOpt = definition.ChildNodes[7];
             if (checkOpt.ChildNodes.Count > 0)
             {
                 // checkOpt: CHECK + columnCheckExpr; columnCheckExpr has 1 child (expr) after parens removed

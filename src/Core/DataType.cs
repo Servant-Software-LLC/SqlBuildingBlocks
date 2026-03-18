@@ -17,18 +17,22 @@ public class DataType : NonTerminal
     {
         var COMMA = grammar.ToTerm(",");
         var number = new NumberLiteral("number");
+        Number = number;
 
         typeParamsOpt = new NonTerminal("typeParams");
         typeParamsOpt.Rule = "(" + number + ")" | "(" + number + COMMA + number + ")" | grammar.Empty;
 
         dataTypeNames = new NonTerminal("dataTypeNames");
-        dataTypeNames.Rule = grammar.ToTerm("BOOL") | "BOOLEAN" | "DATE" | "TIME" | "TIMESTAMP" | "DECIMAL" | "NUMERIC" | "REAL" | "FLOAT" | "SMALLINT" | "INTEGER" | "INT"
-                                     | "CHARACTER" | "CHAR" | "VARCHAR" | "NCHAR" | "NVARCHAR";
+        dataTypeNames.Rule = grammar.ToTerm("BOOL") | "BOOLEAN" | "DATE" | "TIME" | "TIMESTAMP" | "DECIMAL" | "NUMERIC" | "REAL" | "FLOAT" | "SMALLINT" | "INTEGER" | "INT" | "BIGINT"
+                                     | "CHARACTER" | "CHAR" | "VARCHAR" | "NCHAR" | "NVARCHAR"
+                                     | "SERIAL" | "BIGSERIAL" | "SMALLSERIAL";
 
         Rule = dataTypeNames + typeParamsOpt;
 
         grammar.MarkTransient(dataTypeNames);
     }
+
+    public NumberLiteral Number { get; private set; } = null!;
 
     public static Type? ToSystemType(string dataTypeName) =>
         dataTypeName switch
@@ -45,6 +49,10 @@ public class DataType : NonTerminal
             "SMALLINT" => typeof(short),
             "INTEGER" => typeof(int),
             "INT" => typeof(int),
+            "BIGINT" => typeof(long),
+            "SERIAL" => typeof(int),
+            "BIGSERIAL" => typeof(long),
+            "SMALLSERIAL" => typeof(short),
             "CHARACTER" => typeof(string),
             "CHAR" => typeof(string),
             "VARCHAR" => typeof(string),
@@ -76,33 +84,39 @@ public class DataType : NonTerminal
 
     protected virtual bool SetTypeParams(ParseTreeNode typeParams, SqlDataType sqlDataType)
     {
-        switch(typeParams.ChildNodes.Count)
+        // Filter to only number-bearing children (comma tokens may or may not appear as children)
+        var numericChildren = typeParams.ChildNodes
+            .Where(n => n.Token != null && n.Token.Terminal is NumberLiteral)
+            .ToList();
+
+        switch(numericChildren.Count)
         {
             case 0:
-                if (sqlDataType.Name == "BOOL" || sqlDataType.Name == "BOOLEAN" ||sqlDataType.Name == "DATE" || sqlDataType.Name == "TIME" || 
-                    sqlDataType.Name == "TIMESTAMP" || sqlDataType.Name == "REAL" || sqlDataType.Name == "FLOAT" || sqlDataType.Name == "SMALLINT" || 
-                    sqlDataType.Name == "INTEGER" || sqlDataType.Name == "INT" || sqlDataType.Name == "CHARACTER" || sqlDataType.Name == "CHAR" || 
-                    sqlDataType.Name == "VARCHAR" || sqlDataType.Name == "NCHAR" || sqlDataType.Name == "NVARCHAR")
+                if (sqlDataType.Name == "BOOL" || sqlDataType.Name == "BOOLEAN" ||sqlDataType.Name == "DATE" || sqlDataType.Name == "TIME" ||
+                    sqlDataType.Name == "TIMESTAMP" || sqlDataType.Name == "REAL" || sqlDataType.Name == "FLOAT" || sqlDataType.Name == "SMALLINT" ||
+                    sqlDataType.Name == "INTEGER" || sqlDataType.Name == "INT" || sqlDataType.Name == "BIGINT" || sqlDataType.Name == "CHARACTER" || sqlDataType.Name == "CHAR" ||
+                    sqlDataType.Name == "VARCHAR" || sqlDataType.Name == "NCHAR" || sqlDataType.Name == "NVARCHAR" ||
+                    sqlDataType.Name == "SERIAL" || sqlDataType.Name == "BIGSERIAL" || sqlDataType.Name == "SMALLSERIAL")
                     return true;
                 break;
             case 1:
                 if (sqlDataType.Name == "CHARACTER" || sqlDataType.Name == "CHAR" || sqlDataType.Name == "VARCHAR" ||
                     sqlDataType.Name == "NCHAR" || sqlDataType.Name == "NVARCHAR")
                 {
-                    sqlDataType.Length = (int)typeParams.ChildNodes[0].Token.Value;
+                    sqlDataType.Length = (int)numericChildren[0].Token.Value;
                     return true;
                 }
                 if (sqlDataType.Name == "TIME" || sqlDataType.Name == "TIMESTAMP")
                 {
-                    sqlDataType.Precision = (int)typeParams.ChildNodes[0].Token.Value;
+                    sqlDataType.Precision = (int)numericChildren[0].Token.Value;
                     return true;
                 }
                 break;
             case 2:
                 if (sqlDataType.Name == "DECIMAL" || sqlDataType.Name == "NUMERIC")
                 {
-                    sqlDataType.Precision = (int)typeParams.ChildNodes[0].Token.Value;
-                    sqlDataType.Scale = (int)typeParams.ChildNodes[1].Token.Value;
+                    sqlDataType.Precision = (int)numericChildren[0].Token.Value;
+                    sqlDataType.Scale = (int)numericChildren[1].Token.Value;
                     return true;
                 }
                 break;

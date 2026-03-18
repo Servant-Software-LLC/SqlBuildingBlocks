@@ -18,4 +18,10 @@ public class SqlColumnDefinition
 
     public SqlFunction? DefaultFunctionValue { get; set; }
 
+    public bool IsAutoIncrement { get; set; }
+
+    public int? IdentitySeed { get; set; }
+
+    public int? IdentityIncrement { get; set; }
+
 }
