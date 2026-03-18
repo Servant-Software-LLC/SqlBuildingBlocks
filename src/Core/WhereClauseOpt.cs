@@ -38,17 +38,7 @@ public class WhereClauseOpt : NonTerminal
         if (whereClause.ChildNodes.Count == 0)
             return null;
 
-        var exprNode = whereClause.ChildNodes[1];
-
-        // The WHERE expression may be an isNullExpr (IS NULL / IS NOT NULL) rather than a binExpr.
-        if (exprNode.Term.Name == "isNullExpr")
-            return new SqlExpression(Expr.CreateIsNullExpression(exprNode));
-
-        // The WHERE expression may be a betweenExpr (BETWEEN / NOT BETWEEN).
-        if (exprNode.Term.Name == "betweenExpr")
-            return new SqlExpression(Expr.CreateBetweenExpression(exprNode));
-
-        return new SqlExpression(Expr.CreateBinaryExpression(exprNode));
+        return Expr.Create(whereClause.ChildNodes[1]);
     }
 
 }

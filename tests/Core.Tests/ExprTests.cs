@@ -430,6 +430,37 @@ public class ExprTests
         Assert.Equal("status", binExpr.Left.Column.ColumnName);
     }
 
+    [Fact]
+    public void Exists_Subquery()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "EXISTS (SELECT order_id FROM orders WHERE orders.customer_id = customers.id)");
+        var expression = grammar.Create(node);
+
+        Assert.NotNull(expression.ExistsExpr);
+        var existsExpr = expression.ExistsExpr!;
+
+        Assert.False(existsExpr.IsNegated);
+        Assert.NotNull(existsExpr.SelectDefinition.Table);
+        Assert.Equal("orders", existsExpr.SelectDefinition.Table!.TableName);
+        Assert.Single(existsExpr.SelectDefinition.Columns);
+        Assert.Equal("order_id", ((SqlColumn)existsExpr.SelectDefinition.Columns[0]).ColumnName);
+        Assert.NotNull(existsExpr.SelectDefinition.WhereClause);
+        Assert.Equal(SqlBinaryOperator.Equal, existsExpr.SelectDefinition.WhereClause!.BinExpr!.Operator);
+    }
+
+    [Fact]
+    public void NotExists_Subquery_ToExpressionString()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "NOT EXISTS (SELECT order_id FROM orders)");
+        var expression = grammar.Create(node);
+
+        Assert.NotNull(expression.ExistsExpr);
+        Assert.True(expression.ExistsExpr!.IsNegated);
+        Assert.Equal("NOT EXISTS (<subquery>)", expression.ToExpressionString());
+    }
+
     // ── CAST ─────────────────────────────────────────────────────────────────
 
     [Fact]

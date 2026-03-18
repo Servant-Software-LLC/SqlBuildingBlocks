@@ -20,7 +20,12 @@ public interface ISqlExpressionVisitor
     /// Visits the <see cref="SqlCaseExpression"/> in the <see cref="SqlExpression"/> tree.
     /// </summary>
     void Visit(SqlCaseExpression caseExpr);
-  
+
+    /// <summary>
+    /// Visits the <see cref="SqlExistsExpression"/> in the <see cref="SqlExpression"/> tree.
+    /// </summary>
+    void Visit(SqlExistsExpression existsExpr);
+   
     /// Visits the <see cref="SqlInList"/> (the parenthesised value list on the right-hand side of IN / NOT IN).
     /// </summary>
     void Visit(SqlInList inList);
@@ -58,4 +63,5 @@ public interface ISqlExpressionVisitor
     /// </summary>
     /// <param name="castExpr"></param>
     void Visit(SqlCastExpression castExpr);
+
 }

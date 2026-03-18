@@ -15,11 +15,13 @@ public class Expr : NonTerminal
     private const string betweenExprTermName = "betweenExpr";
     private const string caseExprTermName = "caseExpr";
     private const string castExprTermName = "castExpr";
+    private const string existsExprTermName = "existsExpr";
 
     private DataType? dataType;
 
     private readonly Grammar grammar;
     private FuncCall? funcCall;
+    private SelectStmt? selectStmt;
 
     /// <summary>
     /// Helper ctor that assumes default <see cref="NonTerminal"/> types.  If you need different building blocks internally, use other ctor. 
@@ -56,6 +58,7 @@ public class Expr : NonTerminal
 
     public void InitializeRule(SelectStmt selectStmt, FuncCall funcCall, DataType dataType)
     {
+        this.selectStmt = selectStmt ?? throw new ArgumentNullException(nameof(selectStmt));
         this.funcCall = funcCall ?? throw new ArgumentNullException(nameof(funcCall));
         this.dataType = dataType ?? throw new ArgumentNullException(nameof(dataType));
 
@@ -84,6 +87,7 @@ public class Expr : NonTerminal
         var IS = grammar.ToTerm("IS");
         var NULL = grammar.ToTerm("NULL");
         var BETWEEN = grammar.ToTerm("BETWEEN");
+        var EXISTS = grammar.ToTerm("EXISTS");
 
         // Define operator precedence and associativity
 
@@ -183,10 +187,14 @@ public class Expr : NonTerminal
         var castExpr = new NonTerminal(castExprTermName);
         castExpr.Rule = CAST + "(" + this + "AS" + dataType + ")";
 
+        var existsExpr = new NonTerminal(existsExprTermName);
+        existsExpr.Rule = EXISTS + parSelectStmt
+                        | NOT + EXISTS + parSelectStmt;
+
         grammar.MarkPunctuation(CAST);
         grammar.MarkReservedWords("CAST");
 
-        Rule = term | unExpr | binExpr | isNullExpr | betweenExpr | caseExpr | castExpr;
+        Rule = term | unExpr | binExpr | isNullExpr | betweenExpr | caseExpr | castExpr | existsExpr;
 
         //Note: we cannot declare binOp as transient because it includes operators "NOT LIKE", "NOT IN" consisting of two tokens.
         // Transient non-terminals cannot have more than one non-punctuation child nodes.
@@ -195,7 +203,7 @@ public class Expr : NonTerminal
         grammar.MarkTransient(this /*expression*/, term, unOp);
         binOp.SetFlag(TermFlags.InheritPrecedence);
 
-        grammar.MarkReservedWords("IS", "BETWEEN");
+        grammar.MarkReservedWords("IS", "BETWEEN", "EXISTS");
     }
 
     public virtual SqlExpression Create(ParseTreeNode expression)
@@ -230,6 +238,11 @@ public class Expr : NonTerminal
         if (nodeTermName == castExprTermName)
         {
             return new(CreateCastExpression(expression));
+        }
+
+        if (nodeTermName == existsExprTermName)
+        {
+            return new(CreateExistsExpression(expression));
         }
 
         //Is this node a column reference?
@@ -386,6 +399,25 @@ public class Expr : NonTerminal
         var sqlDataType = dataType!.Create(castExprNode.ChildNodes[1]);
 
         return new(expression, sqlDataType);
+    }
+
+    protected internal SqlExistsExpression CreateExistsExpression(ParseTreeNode existsExprNode)
+    {
+        if (existsExprNode.Term.Name != existsExprTermName)
+        {
+            var thisMethod = MethodBase.GetCurrentMethod() as MethodInfo;
+            throw new ArgumentException($"Cannot create building block of type {thisMethod!.ReturnType}.  The TermName for node is {existsExprNode.Term.Name} which does not match {existsExprTermName}", nameof(existsExprNode));
+        }
+
+        if (selectStmt == null)
+            throw new InvalidOperationException("EXISTS expressions require Expr.InitializeRule to capture the SelectStmt grammar.");
+
+        var isNegated = existsExprNode.ChildNodes.Count == 3;
+        var parSelectStmtNode = existsExprNode.ChildNodes[existsExprNode.ChildNodes.Count - 1];
+        var subqueryNode = parSelectStmtNode.ChildNodes[0];
+        var subquery = selectStmt.Create(subqueryNode);
+
+        return new(subquery, isNegated);
     }
 
     internal static SqlBinaryOperator CreateOperator(string sBinaryOperator) =>

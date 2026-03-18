@@ -15,6 +15,7 @@ public class SqlExpression
     public SqlExpression(SqlBinaryExpression binExpr) => BinExpr = binExpr;
     public SqlExpression(SqlBetweenExpression betweenExpr) => BetweenExpr = betweenExpr;
     public SqlExpression(SqlCaseExpression caseExpr) => CaseExpr = caseExpr;
+    public SqlExpression(SqlExistsExpression existsExpr) => ExistsExpr = existsExpr;
     public SqlExpression(SqlInList inList) => InList = inList;
     public SqlExpression(SqlCastExpression castExpr) => CastExpr = castExpr;
 
@@ -26,6 +27,7 @@ public class SqlExpression
     public SqlBinaryExpression? BinExpr { get; private set; }
     public SqlBetweenExpression? BetweenExpr { get; private set; }
     public SqlCaseExpression? CaseExpr { get; private set; }
+    public SqlExistsExpression? ExistsExpr { get; private set; }
     public SqlInList? InList { get; private set; }
     public SqlCastExpression? CastExpr { get; private set; }
 
@@ -76,6 +78,12 @@ public class SqlExpression
             CaseExpr.Accept(visitor);
             return;
         }
+
+        if (ExistsExpr != null)
+        {
+            ExistsExpr.Accept(visitor);
+            return;
+        }
        
         if (InList != null)
         {
@@ -111,6 +119,9 @@ public class SqlExpression
         //TODO: Should we create a visitor to replace SqlFunction instances or is this a consumer specific type of visitor?
         if (Function != null)
             throw new Exception($"Linq {typeof(Expression)} could not be created because there is an unresolved {typeof(SqlFunction)} within it.  Call the {nameof(Accept)} method on the {typeof(SqlExpression)} instance, providing it a your own custom class derived from {typeof(ISqlExpressionVisitor)}");
+
+        if (ExistsExpr != null)
+            throw new NotSupportedException("LINQ expression generation for EXISTS / NOT EXISTS is not supported.");
 
         if (Parameter != null)
             throw new Exception($"Linq {typeof(Expression)} could not be created because there is an unresolved {typeof(SqlParameter)} within it.  Call the {nameof(Accept)} method on the {typeof(SqlExpression)} instance, providing it a {typeof(ResolveParametersVisitor)} instance.");
@@ -225,6 +236,7 @@ public class SqlExpression
         BinExpr = null;
         BetweenExpr = null;
         CaseExpr = null;
+        ExistsExpr = null;
         InList = null;
         CastExpr = null;
 
@@ -242,6 +254,8 @@ public class SqlExpression
             BetweenExpr = expression.BetweenExpr;
         else if (expression.CaseExpr != null)
             CaseExpr = expression.CaseExpr;
+        else if (expression.ExistsExpr != null)
+            ExistsExpr = expression.ExistsExpr;
         else if (expression.InList != null)
             InList = expression.InList;
         else if (expression.CastExpr != null)
@@ -253,6 +267,7 @@ public class SqlExpression
         if (BinExpr != null) return BinExpr.ToExpressionString();
         if (BetweenExpr != null) return BetweenExpr.ToExpressionString();
         if (CaseExpr != null) return CaseExpr.ToExpressionString();
+        if (ExistsExpr != null) return ExistsExpr.ToExpressionString();
         if (InList != null) return InList.ToExpressionString();
         if (CastExpr != null) return CastExpr.ToExpressionString();
         if (Column != null) return Column.ToExpressionString();
@@ -268,6 +283,7 @@ public class SqlExpression
         if (BinExpr != null) return BinExpr.ToString();
         if (BetweenExpr != null) return BetweenExpr.ToString();
         if (CaseExpr != null) return CaseExpr.ToString();
+        if (ExistsExpr != null) return ExistsExpr.ToString();
         if (InList != null) return InList.ToString();
         if (CastExpr != null) return CastExpr.ToString();
         if (Column != null) return Column.ToString();

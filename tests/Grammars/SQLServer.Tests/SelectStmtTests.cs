@@ -89,4 +89,18 @@ public class SelectStmtTests
         //Assert
         Assert.False(selectStmt.InvalidReferences, $"Unable to resolve the references with the SELECT statement.  Reason: {selectStmt.InvalidReferenceReason}");
     }
+
+    [Fact]
+    public void Select_Where_Exists_WithSquareBracketIdentifiers()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "SELECT [c].[CustomerName] FROM [Customers] c WHERE EXISTS (SELECT [o].[ID] FROM [Orders] o WHERE [o].[CustomerID] = [c].[ID])");
+
+        DatabaseConnectionProvider databaseConnectionProvider = new();
+        TableSchemaProvider tableSchemaProvider = new();
+        var selectStmt = grammar.Create(node, databaseConnectionProvider, tableSchemaProvider);
+
+        Assert.False(selectStmt.InvalidReferences, $"Unable to resolve the references with the SELECT statement.  Reason: {selectStmt.InvalidReferenceReason}");
+        Assert.NotNull(selectStmt.WhereClause?.ExistsExpr);
+    }
 }

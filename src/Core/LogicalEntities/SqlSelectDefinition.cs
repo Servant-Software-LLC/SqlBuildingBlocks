@@ -24,10 +24,11 @@ public class SqlSelectDefinition
     public string? InvalidReferenceReason { get; set; }
     public bool InvalidReferences => !string.IsNullOrEmpty(InvalidReferenceReason);
 
-    public void ResolveReferences(IDatabaseConnectionProvider databaseConnectionProvider, ITableSchemaProvider tableSchemaProvider, IFunctionProvider? functionProvider = null)
+    public void ResolveReferences(IDatabaseConnectionProvider databaseConnectionProvider, ITableSchemaProvider tableSchemaProvider, IFunctionProvider? functionProvider = null,
+                                  IList<SqlTable>? outerScopeTables = null)
     {
         //Resolve for all tables the database that they belong to.
-        SelectReferenceResolver referenceResolver = new(this, databaseConnectionProvider, tableSchemaProvider, functionProvider);
+        SelectReferenceResolver referenceResolver = new(this, databaseConnectionProvider, tableSchemaProvider, functionProvider, outerScopeTables);
 
         //Resolve the database of the tables.
         referenceResolver.ResolveTablesDatabase();

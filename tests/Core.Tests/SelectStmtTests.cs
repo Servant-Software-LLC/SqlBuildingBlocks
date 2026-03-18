@@ -637,4 +637,66 @@ public class SelectStmtTests
         Assert.Same(derivedJoin, total.TableRef);
     }
 
+    [Fact]
+    public void Select_Where_Exists_CorrelatedSubquery()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "SELECT * FROM Customers c WHERE EXISTS (SELECT o.ID FROM Orders o WHERE o.CustomerID = c.ID)");
+
+        DatabaseConnectionProvider databaseConnectionProvider = new();
+        TableSchemaProvider tableSchemaProvider = new();
+        var selectStmt = grammar.Create(node, databaseConnectionProvider, tableSchemaProvider);
+
+        Assert.False(selectStmt.InvalidReferences, selectStmt.InvalidReferenceReason);
+
+        var existsExpr = selectStmt.WhereClause?.ExistsExpr;
+        Assert.NotNull(existsExpr);
+        Assert.False(existsExpr!.IsNegated);
+
+        var subquery = existsExpr.SelectDefinition;
+        Assert.Equal("Orders", subquery.Table!.TableName);
+        Assert.Equal("o", subquery.Table.TableAlias);
+
+        var correlation = subquery.WhereClause!.BinExpr;
+        Assert.NotNull(correlation);
+        Assert.Equal(SqlBinaryOperator.Equal, correlation!.Operator);
+        Assert.Equal("CustomerID", correlation.Left.Column!.ColumnName);
+        Assert.Equal("Orders", ((SqlColumn)correlation.Left.Column.Column!).TableRef!.TableName);
+        Assert.Equal("ID", correlation.Right!.Column!.ColumnName);
+        Assert.Equal("Customers", ((SqlColumn)correlation.Right.Column.Column!).TableRef!.TableName);
+    }
+
+    [Fact]
+    public void Select_Where_NotExists()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "SELECT * FROM Customers c WHERE NOT EXISTS (SELECT o.ID FROM Orders o WHERE o.CustomerID = c.ID)");
+
+        DatabaseConnectionProvider databaseConnectionProvider = new();
+        TableSchemaProvider tableSchemaProvider = new();
+        var selectStmt = grammar.Create(node, databaseConnectionProvider, tableSchemaProvider);
+
+        Assert.False(selectStmt.InvalidReferences, selectStmt.InvalidReferenceReason);
+        Assert.True(selectStmt.WhereClause?.ExistsExpr?.IsNegated);
+    }
+
+    [Fact]
+    public void Select_Where_Exists_AndCondition()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "SELECT * FROM Customers c WHERE EXISTS (SELECT o.ID FROM Orders o WHERE o.CustomerID = c.ID) AND c.CustomerName = 'Acme'");
+
+        DatabaseConnectionProvider databaseConnectionProvider = new();
+        TableSchemaProvider tableSchemaProvider = new();
+        var selectStmt = grammar.Create(node, databaseConnectionProvider, tableSchemaProvider);
+
+        Assert.False(selectStmt.InvalidReferences, selectStmt.InvalidReferenceReason);
+
+        var andExpr = selectStmt.WhereClause?.BinExpr;
+        Assert.NotNull(andExpr);
+        Assert.Equal(SqlBinaryOperator.And, andExpr!.Operator);
+        Assert.NotNull(andExpr.Left.ExistsExpr);
+        Assert.Equal(SqlBinaryOperator.Equal, andExpr.Right!.BinExpr!.Operator);
+    }
+
 }

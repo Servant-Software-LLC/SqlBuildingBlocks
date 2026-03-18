@@ -11,14 +11,17 @@ class SelectReferenceResolver
     private readonly IDatabaseConnectionProvider databaseConnectionProvider;
     private readonly ITableSchemaProvider tableSchemaProvider;
     private readonly IFunctionProvider? functionProvider;
+    private readonly IList<SqlTable> outerScopeTables;
 
     public SelectReferenceResolver(SqlSelectDefinition sqlSelectDefinition, IDatabaseConnectionProvider databaseConnectionProvider, 
-                                   ITableSchemaProvider tableSchemaProvider, IFunctionProvider? functionProvider)
+                                   ITableSchemaProvider tableSchemaProvider, IFunctionProvider? functionProvider,
+                                   IList<SqlTable>? outerScopeTables = null)
     {
         this.sqlSelectDefinition = sqlSelectDefinition ?? throw new ArgumentNullException(nameof(sqlSelectDefinition));
         this.databaseConnectionProvider = databaseConnectionProvider ?? throw new ArgumentNullException(nameof(databaseConnectionProvider));
         this.tableSchemaProvider = tableSchemaProvider ?? throw new ArgumentNullException(nameof(tableSchemaProvider));
         this.functionProvider = functionProvider;
+        this.outerScopeTables = outerScopeTables ?? new List<SqlTable>();
     }
 
     /// <summary>
@@ -45,8 +48,9 @@ class SelectReferenceResolver
     public void ResolveReferences()
     {
         var tablesInSelect = sqlSelectDefinition.TablesInSelect;
+        var visibleTables = tablesInSelect.Concat(outerScopeTables).ToList();
 
-        TableFinder columnNameToTables = new(tablesInSelect, tableSchemaProvider);
+        TableFinder columnNameToTables = new(visibleTables, tableSchemaProvider);
 
         DetermineTableReferencesOnColumns(tablesInSelect, columnNameToTables);
         if (sqlSelectDefinition.InvalidReferences)
@@ -228,6 +232,15 @@ class SelectReferenceResolver
         SetColumnReferences(betweenExpression.UpperBound, columnNameToTables, joinOnClause);
     }
 
+    private void WalkExistsExpression_SetColumnReferences(SqlExistsExpression existsExpression)
+    {
+        var correlatedOuterTables = outerScopeTables.Concat(sqlSelectDefinition.TablesInSelect).Distinct().ToList();
+        existsExpression.SelectDefinition.ResolveReferences(databaseConnectionProvider, tableSchemaProvider, functionProvider, correlatedOuterTables);
+
+        if (existsExpression.SelectDefinition.InvalidReferences)
+            sqlSelectDefinition.InvalidReferenceReason = existsExpression.SelectDefinition.InvalidReferenceReason;
+    }
+
     private void WalkExpression_SetColumnReferences(SqlExpression expression, TableFinder columnNameToTables, bool joinOnClause)
     {
         if (expression.BinExpr != null)
@@ -239,6 +252,12 @@ class SelectReferenceResolver
         if (expression.BetweenExpr != null)
         {
             WalkBetweenExpression_SetColumnReferences(expression.BetweenExpr, columnNameToTables, joinOnClause);
+            return;
+        }
+
+        if (expression.ExistsExpr != null)
+        {
+            WalkExistsExpression_SetColumnReferences(expression.ExistsExpr);
             return;
         }
 
@@ -256,6 +275,12 @@ class SelectReferenceResolver
         if (operand.BetweenExpr != null)
         {
             WalkBetweenExpression_SetColumnReferences(operand.BetweenExpr, columnNameToTables, joinOnClause);
+            return;
+        }
+
+        if (operand.ExistsExpr != null)
+        {
+            WalkExistsExpression_SetColumnReferences(operand.ExistsExpr);
             return;
         }
 
