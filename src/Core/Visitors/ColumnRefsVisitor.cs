@@ -29,6 +29,8 @@ class ColumnRefsVisitor : ISqlExpressionVisitor
 
     public void Visit(SqlBetweenExpression betweenExpr) { }
 
+    public void Visit(SqlCaseExpression caseExpr) { }
+
     public SqlExpression? Visit(SqlColumnRef column)
     {
         var columnOfOperand = (SqlColumn)column.Column!;

@@ -72,6 +72,8 @@ public class ResolveParametersVisitor : ISqlExpressionVisitor, ISqlValueVisitor
 
     public void Visit(SqlBetweenExpression betweenExpr) { }
 
+    public void Visit(SqlCaseExpression caseExpr) { }
+
     public SqlExpression? Visit(SqlColumnRef column) => null;
 
     public SqlExpression? Visit(SqlParameter parameter)

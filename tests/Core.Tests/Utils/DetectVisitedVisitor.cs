@@ -8,6 +8,7 @@ internal class DetectVisitedVisitor : ISqlExpressionVisitor
 {
     public bool VisitedBinaryExpression { get; private set; }
     public bool VisitedBetweenExpression { get; private set; }
+    public bool VisitedCaseExpression { get; private set; }
     public bool VisitedColumnRef { get; private set; }
     public bool VisitedParameter { get; private set; }
     public bool VisitedFunction { get; private set; }
@@ -23,6 +24,12 @@ internal class DetectVisitedVisitor : ISqlExpressionVisitor
     {
         Assert.NotNull(betweenExpr);
         VisitedBetweenExpression = true;
+    }
+
+    public void Visit(SqlCaseExpression caseExpr)
+    {
+        Assert.NotNull(caseExpr);
+        VisitedCaseExpression = true;
     }
 
     SqlExpression ISqlExpressionVisitor.Visit(SqlColumnRef column)

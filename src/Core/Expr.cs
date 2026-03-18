@@ -13,6 +13,7 @@ public class Expr : NonTerminal
     private const string binExprTermName = "binExpr";
     private const string isNullExprTermName = "isNullExpr";
     private const string betweenExprTermName = "betweenExpr";
+    private const string caseExprTermName = "caseExpr";
 
     private readonly Grammar grammar;
     private FuncCall? funcCall;
@@ -144,7 +145,33 @@ public class Expr : NonTerminal
 
         betweenArithOp.SetFlag(TermFlags.InheritPrecedence);
 
-        Rule = term | unExpr | binExpr | isNullExpr | betweenExpr;
+        // CASE WHEN/THEN/ELSE/END — searched CASE expression
+        var CASE = grammar.ToTerm("CASE");
+        var WHEN = grammar.ToTerm("WHEN");
+        var THEN = grammar.ToTerm("THEN");
+        var ELSE = grammar.ToTerm("ELSE");
+        var END  = grammar.ToTerm("END");
+
+        var whenThen = new NonTerminal("whenThen");
+        whenThen.Rule = WHEN + this + THEN + this;
+
+        var whenThenList = new NonTerminal("whenThenList");
+        grammar.MakePlusRule(whenThenList, whenThen);
+
+        // elseOpt: ELSE and the surrounding keywords are stripped as punctuation so the
+        // node has 0 children (no ELSE) or 1 child (the ELSE expression).
+        var elseOpt = new NonTerminal("elseOpt");
+        elseOpt.Rule = grammar.Empty | ELSE + this;
+
+        var caseExpr = new NonTerminal(caseExprTermName);
+        caseExpr.Rule = CASE + whenThenList + elseOpt + END;
+
+        // Strip CASE, WHEN, THEN, ELSE, END from the parse tree so the creation method
+        // can work with only the expression children.
+        grammar.MarkPunctuation(CASE, WHEN, THEN, ELSE, END);
+        grammar.MarkReservedWords("CASE", "WHEN", "THEN", "ELSE", "END");
+
+        Rule = term | unExpr | binExpr | isNullExpr | betweenExpr | caseExpr;
 
         //Note: we cannot declare binOp as transient because it includes operators "NOT LIKE", "NOT IN" consisting of two tokens.
         // Transient non-terminals cannot have more than one non-punctuation child nodes.
@@ -176,6 +203,12 @@ public class Expr : NonTerminal
         if (nodeTermName == betweenExprTermName)
         {
             return new(CreateBetweenExpression(expression));
+        }
+
+        //Is this a CASE WHEN/THEN/ELSE/END expression?
+        if (nodeTermName == caseExprTermName)
+        {
+            return new(CreateCaseExpression(expression));
         }
 
         //Is this node a column reference?
@@ -279,6 +312,32 @@ public class Expr : NonTerminal
         var op = isNotNull ? SqlBinaryOperator.IsNotNull : SqlBinaryOperator.IsNull;
 
         return new(left, op, null);
+    }
+
+    protected internal SqlCaseExpression CreateCaseExpression(ParseTreeNode caseExprNode)
+    {
+        if (caseExprNode.Term.Name != caseExprTermName)
+        {
+            var thisMethod = MethodBase.GetCurrentMethod() as MethodInfo;
+            throw new ArgumentException($"Cannot create building block of type {thisMethod!.ReturnType}.  The TermName for node is {caseExprNode.Term.Name} which does not match {caseExprTermName}", nameof(caseExprNode));
+        }
+
+        // CASE, WHEN, THEN, ELSE, END are all marked as punctuation so they are stripped
+        // from the parse tree. caseExpr children: [whenThenList, elseOpt].
+        // whenThen children: [condExpr, resultExpr].
+        // elseOpt children: [] (no ELSE) or [expr] (has ELSE).
+        var whenThenListNode = caseExprNode.ChildNodes[0];
+        var elseOptNode      = caseExprNode.ChildNodes[1];
+
+        var whenClauses = whenThenListNode.ChildNodes
+            .Select(wt => (Create(wt.ChildNodes[0]), Create(wt.ChildNodes[1])))
+            .ToList<(SqlExpression, SqlExpression)>();
+
+        SqlExpression? elseResult = elseOptNode.ChildNodes.Count > 0
+            ? Create(elseOptNode.ChildNodes[0])
+            : null;
+
+        return new SqlCaseExpression(whenClauses, elseResult);
     }
 
     internal static SqlBinaryOperator CreateOperator(string sBinaryOperator) =>

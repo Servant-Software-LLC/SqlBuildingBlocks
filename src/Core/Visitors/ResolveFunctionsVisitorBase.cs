@@ -17,6 +17,8 @@ public abstract class ResolveFunctionsVisitorBase : ISqlExpressionVisitor, ISqlV
     public virtual void Visit(SqlBinaryExpression binExpr) { }
 
     public virtual void Visit(SqlBetweenExpression betweenExpr) { }
+
+    public virtual void Visit(SqlCaseExpression caseExpr) { }
     public virtual SqlExpression? Visit(SqlColumnRef column) => null;
     public virtual SqlExpression? Visit(SqlParameter parameter) => null;
     public SqlExpression? Visit(SqlFunction sqlFunction) => VisitReturnExpression(sqlFunction);

@@ -17,6 +17,11 @@ public interface ISqlExpressionVisitor
     void Visit(SqlBetweenExpression betweenExpr);
 
     /// <summary>
+    /// Visits the <see cref="SqlCaseExpression"/> in the <see cref="SqlExpression"/> tree.
+    /// </summary>
+    void Visit(SqlCaseExpression caseExpr);
+
+    /// <summary>
     /// Visits the <see cref="SqlColumnRef" in the <see cref="SqlExpression"/> tree./>
     /// </summary>
     /// <param name="column"></param>
