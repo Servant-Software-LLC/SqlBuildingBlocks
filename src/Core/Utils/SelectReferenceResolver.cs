@@ -29,6 +29,8 @@ class SelectReferenceResolver
         if (sqlSelectDefinition.Table is null)
             return;
 
+        ResolveDerivedTables();
+
         ResolveTablesDatabase(sqlSelectDefinition.Table, databaseConnectionProvider);
 
         foreach (var join in sqlSelectDefinition.Joins)
@@ -59,6 +61,9 @@ class SelectReferenceResolver
 
     private void ResolveTablesDatabase(SqlTable sqlTable, IDatabaseConnectionProvider databaseConnectionProvider)
     {
+        if (sqlTable is SqlDerivedTable)
+            return;
+
         if (string.IsNullOrEmpty(sqlTable.DatabaseName))
         {
             var defaultDatabase = databaseConnectionProvider.DefaultDatabase;
@@ -104,7 +109,7 @@ class SelectReferenceResolver
                     {
                         if ((tablesInSelect.Count == 1 && string.IsNullOrEmpty(column.TableName)) || ColumnReferencesTable(column, table))
                         {
-                            var columnsInSchema = tableSchemaProvider.GetColumns(table);
+                            var columnsInSchema = SelectDefinitionColumns.GetColumns(table, tableSchemaProvider);
                             if (columnsInSchema == null)
                             {
                                 sqlSelectDefinition.InvalidReferenceReason = $"The {tableSchemaProvider.GetType()}(an {nameof(ITableSchemaProvider)}) instance returned null when calling the {nameof(tableSchemaProvider.GetColumns)} method for the table {table}";
@@ -372,7 +377,7 @@ class SelectReferenceResolver
 
         foreach (SqlTable table in allColumns.TableRefs)
         {
-            var columns = tableSchemaProvider.GetColumns(table);
+            var columns = SelectDefinitionColumns.GetColumns(table, tableSchemaProvider);
             if (columns == null)
             {
                 sqlSelectDefinition.InvalidReferenceReason = $"The {nameof(tableSchemaProvider)} returned null for getting columns of table {table}";
@@ -390,4 +395,11 @@ class SelectReferenceResolver
         }
     }
 
+    private void ResolveDerivedTables()
+    {
+        foreach (var table in sqlSelectDefinition.TablesInSelect.OfType<SqlDerivedTable>())
+        {
+            table.SelectDefinition.ResolveReferences(databaseConnectionProvider, tableSchemaProvider, functionProvider);
+        }
+    }
 }

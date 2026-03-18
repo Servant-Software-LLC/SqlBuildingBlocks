@@ -565,4 +565,76 @@ public class SelectStmtTests
         Assert.Empty(selectStmt.SetOperations[0].Right.OrderBy);
     }
 
+    [Fact]
+    public void Select_WithDerivedTable_ResolvesOuterReferences()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "SELECT [customer_id], [total] FROM (SELECT [customer_id], SUM([amount]) AS [total] FROM [orders] GROUP BY [customer_id]) AS dt WHERE [total] > 1000");
+
+        DatabaseConnectionProvider databaseConnectionProvider = new();
+        TableSchemaProvider tableSchemaProvider = new();
+        var selectStmt = grammar.Create(node, databaseConnectionProvider, tableSchemaProvider);
+
+        Assert.False(selectStmt.InvalidReferences, selectStmt.InvalidReferenceReason);
+        Assert.IsType<SqlDerivedTable>(selectStmt.Table);
+
+        var derivedTable = (SqlDerivedTable)selectStmt.Table!;
+        Assert.Equal("dt", derivedTable.TableAlias);
+        Assert.Equal(2, derivedTable.SelectDefinition.Columns.Count);
+
+        var customerId = Assert.IsType<SqlColumn>(selectStmt.Columns[0]);
+        Assert.Equal("customer_id", customerId.ColumnName);
+        Assert.Same(derivedTable, customerId.TableRef);
+
+        var total = Assert.IsType<SqlColumn>(selectStmt.Columns[1]);
+        Assert.Equal("total", total.ColumnName);
+        Assert.Same(derivedTable, total.TableRef);
+
+        var whereColumn = Assert.IsType<SqlColumn>(selectStmt.WhereClause?.BinExpr?.Left.Column?.Column);
+        Assert.Same(derivedTable, whereColumn.TableRef);
+    }
+
+    [Fact]
+    public void Select_DerivedTableAllColumns_ExpandsInnerProjection()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "SELECT * FROM (SELECT [customer_id], SUM([amount]) AS [total] FROM [orders] GROUP BY [customer_id]) AS dt");
+
+        DatabaseConnectionProvider databaseConnectionProvider = new();
+        TableSchemaProvider tableSchemaProvider = new();
+        var selectStmt = grammar.Create(node, databaseConnectionProvider, tableSchemaProvider);
+
+        Assert.False(selectStmt.InvalidReferences, selectStmt.InvalidReferenceReason);
+
+        var allColumns = Assert.IsType<SqlAllColumns>(selectStmt.Columns[0]);
+        Assert.NotNull(allColumns.Columns);
+        Assert.Equal(2, allColumns.Columns!.Count);
+        Assert.Equal("customer_id", allColumns.Columns[0].ColumnName);
+        Assert.Equal("total", allColumns.Columns[1].ColumnName);
+    }
+
+    [Fact]
+    public void Select_WithJoinAgainstDerivedTable_ResolvesJoinColumns()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "SELECT [name], [total] FROM [employees] AS emp INNER JOIN (SELECT [customer_id], SUM([amount]) AS [total] FROM [orders] GROUP BY [customer_id]) AS dt ON [id] = [customer_id] WHERE [total] > 1000");
+
+        DatabaseConnectionProvider databaseConnectionProvider = new();
+        TableSchemaProvider tableSchemaProvider = new();
+        var selectStmt = grammar.Create(node, databaseConnectionProvider, tableSchemaProvider);
+
+        Assert.False(selectStmt.InvalidReferences, selectStmt.InvalidReferenceReason);
+        Assert.Single(selectStmt.Joins);
+        Assert.IsType<SqlDerivedTable>(selectStmt.Joins[0].Table);
+
+        var derivedJoin = (SqlDerivedTable)selectStmt.Joins[0].Table;
+        Assert.Equal("dt", derivedJoin.TableAlias);
+
+        var joinRightColumn = Assert.IsType<SqlColumn>(selectStmt.Joins[0].Condition.Right.Column!.Column);
+        Assert.Same(derivedJoin, joinRightColumn.TableRef);
+
+        var total = Assert.IsType<SqlColumn>(selectStmt.Columns[1]);
+        Assert.Same(derivedJoin, total.TableRef);
+    }
+
 }
