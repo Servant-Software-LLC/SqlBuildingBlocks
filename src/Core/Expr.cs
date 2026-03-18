@@ -14,6 +14,9 @@ public class Expr : NonTerminal
     private const string isNullExprTermName = "isNullExpr";
     private const string betweenExprTermName = "betweenExpr";
     private const string caseExprTermName = "caseExpr";
+    private const string castExprTermName = "castExpr";
+
+    private DataType? dataType;
 
     private readonly Grammar grammar;
     private FuncCall? funcCall;
@@ -48,9 +51,13 @@ public class Expr : NonTerminal
     /// <summary>
     /// Necessary to set the Rule here instead of in the ctor, due to a cycle in the definition of the Rule
     /// </summary>
-    public void InitializeRule(SelectStmt selectStmt, FuncCall funcCall)
+    public void InitializeRule(SelectStmt selectStmt, FuncCall funcCall) =>
+        InitializeRule(selectStmt, funcCall, new DataType(grammar));
+
+    public void InitializeRule(SelectStmt selectStmt, FuncCall funcCall, DataType dataType)
     {
         this.funcCall = funcCall ?? throw new ArgumentNullException(nameof(funcCall));
+        this.dataType = dataType ?? throw new ArgumentNullException(nameof(dataType));
 
         var NOT = grammar.ToTerm("NOT");
         var PLUS = grammar.ToTerm("+");
@@ -171,7 +178,15 @@ public class Expr : NonTerminal
         grammar.MarkPunctuation(CASE, WHEN, THEN, ELSE, END);
         grammar.MarkReservedWords("CASE", "WHEN", "THEN", "ELSE", "END");
 
-        Rule = term | unExpr | binExpr | isNullExpr | betweenExpr | caseExpr;
+        // CAST(expr AS dataType) — parens, AS, and CAST keyword are punctuation so children = [expr, dataType]
+        var CAST = grammar.ToTerm("CAST");
+        var castExpr = new NonTerminal(castExprTermName);
+        castExpr.Rule = CAST + "(" + this + "AS" + dataType + ")";
+
+        grammar.MarkPunctuation(CAST);
+        grammar.MarkReservedWords("CAST");
+
+        Rule = term | unExpr | binExpr | isNullExpr | betweenExpr | caseExpr | castExpr;
 
         //Note: we cannot declare binOp as transient because it includes operators "NOT LIKE", "NOT IN" consisting of two tokens.
         // Transient non-terminals cannot have more than one non-punctuation child nodes.
@@ -209,6 +224,12 @@ public class Expr : NonTerminal
         if (nodeTermName == caseExprTermName)
         {
             return new(CreateCaseExpression(expression));
+        }
+
+        //Is this a CAST expression?
+        if (nodeTermName == castExprTermName)
+        {
+            return new(CreateCastExpression(expression));
         }
 
         //Is this node a column reference?
@@ -350,6 +371,21 @@ public class Expr : NonTerminal
             : null;
 
         return new SqlCaseExpression(whenClauses, elseResult);
+    }
+
+    protected internal SqlCastExpression CreateCastExpression(ParseTreeNode castExprNode)
+    {
+        if (castExprNode.Term.Name != castExprTermName)
+        {
+            var thisMethod = MethodBase.GetCurrentMethod() as MethodInfo;
+            throw new ArgumentException($"Cannot create building block of type {thisMethod!.ReturnType}.  The TermName for node is {castExprNode.Term.Name} which does not match {castExprTermName}", nameof(castExprNode));
+        }
+
+        // Parens and AS are globally punctuation, so children = [expr, dataType]
+        var expression = Create(castExprNode.ChildNodes[0]);
+        var sqlDataType = dataType!.Create(castExprNode.ChildNodes[1]);
+
+        return new(expression, sqlDataType);
     }
 
     internal static SqlBinaryOperator CreateOperator(string sBinaryOperator) =>
