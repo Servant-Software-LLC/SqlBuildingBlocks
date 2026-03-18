@@ -58,6 +58,7 @@ public class TableSchemaProvider : ITableSchemaProvider
         if (table.TableName == "orders")
         {
             yield return new("id", typeof(int));
+            yield return new("customer_id", typeof(int));
             yield return new DataColumn("shipped_date", typeof(DateTime)) { AllowDBNull = true };
             yield return new("amount", typeof(decimal));
             yield return new("status", typeof(string));

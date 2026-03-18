@@ -47,7 +47,7 @@ public class TableFinder
             return new(null, matchedTable.InvalidReferenceReason);
 
         //Check the databases for this table.
-        var columnType = tableDataProvider.GetColumnType(matchedTable.SqlTable, columnRef.ColumnName);
+        var columnType = SelectDefinitionColumns.GetColumnType(matchedTable.SqlTable, columnRef.ColumnName, tableDataProvider);
         if (columnType is null)
             return new(null, $"There is no column named {columnRef} in the {matchedTable}'s schema.");
 
@@ -96,7 +96,7 @@ public class TableFinder
     {
         foreach (var table in tables)
         {
-            var columns = tableDataProvider.GetColumns(table);
+            var columns = SelectDefinitionColumns.GetColumns(table, tableDataProvider);
             if (columns == null)
                 continue;
 

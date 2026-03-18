@@ -111,6 +111,8 @@ public class SelectStmt : NonTerminal
         Rule = selectCore + setOperationListOpt + orderClauseOpt;
 
         grammar.MarkPunctuation("(", ")");
+
+        TableName.InitializeRule(this);
     }
 
     public Id Id { get; }
@@ -283,6 +285,9 @@ public class SelectStmt : NonTerminal
             var aggregateArg = columnType.ChildNodes[1].ChildNodes[0].Token.ValueString == "*" ? null : Expr!.Create(columnType.ChildNodes[1].ChildNodes[0]);
             sqlSelectDefinition.Columns.Add(
                 new SqlAggregate(aggregateName, aggregateArg)
+                {
+                    ColumnAlias = alias
+                }
             );
             return;
         }
