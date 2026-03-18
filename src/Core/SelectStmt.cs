@@ -11,6 +11,7 @@ public class SelectStmt : NonTerminal
     private const string sAggregate = "aggregate";
     private const string sSelectCore = "selectCore";
     private const string sSetOperationListOpt = "setOperationListOpt";
+    private const string sScalarSubqueryColumnSource = "scalarSubqueryColumnSource";
     private const bool ignoreCase = true;  //Exposure of this field may come later.
 
     protected readonly Grammar grammar;
@@ -66,8 +67,11 @@ public class SelectStmt : NonTerminal
         var aggregate = new NonTerminal(sAggregate);
         aggregate.Rule = aggregateName + "(" + aggregateArg + ")";
 
+        var scalarSubqueryColumnSource = new NonTerminal(sScalarSubqueryColumnSource);
+        scalarSubqueryColumnSource.Rule = "(" + this + ")";
+
         var columnSource = new NonTerminal("columnSource");
-        columnSource.Rule = aggregate | FuncCall | Id | Id + ".*";
+        columnSource.Rule = aggregate | FuncCall | Id | scalarSubqueryColumnSource | Id + ".*";
 
         var columnItem = new NonTerminal("columnItem");
         columnItem.Rule = columnSource + AliasOpt;
@@ -285,6 +289,17 @@ public class SelectStmt : NonTerminal
             var aggregateArg = columnType.ChildNodes[1].ChildNodes[0].Token.ValueString == "*" ? null : Expr!.Create(columnType.ChildNodes[1].ChildNodes[0]);
             sqlSelectDefinition.Columns.Add(
                 new SqlAggregate(aggregateName, aggregateArg)
+                {
+                    ColumnAlias = alias
+                }
+            );
+            return;
+        }
+
+        if (columnType.Term.Name == sScalarSubqueryColumnSource)
+        {
+            sqlSelectDefinition.Columns.Add(
+                new SqlScalarSubqueryColumn(Create(columnType.ChildNodes[0]))
                 {
                     ColumnAlias = alias
                 }

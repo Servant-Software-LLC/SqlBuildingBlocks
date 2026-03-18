@@ -75,6 +75,8 @@ public class ResolveParametersVisitor : ISqlExpressionVisitor, ISqlValueVisitor
     public void Visit(SqlCaseExpression caseExpr) { }
 
     public void Visit(SqlExistsExpression existsExpr) { }
+
+    public void Visit(SqlScalarSubqueryExpression scalarSubqueryExpr) { }
     
     public void Visit(SqlInList inList) { }
 

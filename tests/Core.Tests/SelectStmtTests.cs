@@ -709,6 +709,49 @@ public class SelectStmtTests
         var node = GrammarParser.Parse(grammar, "SELECT * FROM (SELECT [customer_id] FROM [orders] WHERE [amount] = (SELECT MAX([amount]) FROM [orders])) AS dt");
 
         Assert.Equal(SelectStmt.TermName, node.Term.Name);
+    public void Select_WithScalarSubqueryInWhere_ResolvesCorrelatedOuterReference()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "SELECT * FROM [employees] WHERE [age] > (SELECT [amount] FROM [orders] WHERE [orders].[customer_id] = [employees].[id])");
+
+        DatabaseConnectionProvider databaseConnectionProvider = new();
+        TableSchemaProvider tableSchemaProvider = new();
+        var selectStmt = grammar.Create(node, databaseConnectionProvider, tableSchemaProvider);
+
+        Assert.False(selectStmt.InvalidReferences, selectStmt.InvalidReferenceReason);
+
+        var scalarSubquery = selectStmt.WhereClause!.BinExpr!.Right!.ScalarSubqueryExpr!;
+        var innerCondition = scalarSubquery.SelectDefinition.WhereClause!.BinExpr!;
+
+        var leftColumn = Assert.IsType<SqlColumn>(innerCondition.Left.Column!.Column);
+        Assert.Equal("orders", leftColumn.TableRef!.TableName);
+
+        var rightColumn = Assert.IsType<SqlColumn>(innerCondition.Right!.Column!.Column);
+        Assert.Equal("employees", rightColumn.TableRef!.TableName);
+        Assert.Same(selectStmt.Table, rightColumn.TableRef);
+    }
+
+    [Fact]
+    public void Select_WithScalarSubqueryInProjection_ResolvesAliasForDerivedTable()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "SELECT [dt].[max_amount] FROM (SELECT [employees].[id], (SELECT [amount] FROM [orders] WHERE [orders].[customer_id] = [employees].[id]) AS [max_amount] FROM [employees]) AS [dt]");
+
+        DatabaseConnectionProvider databaseConnectionProvider = new();
+        TableSchemaProvider tableSchemaProvider = new();
+        var selectStmt = grammar.Create(node, databaseConnectionProvider, tableSchemaProvider);
+
+        Assert.False(selectStmt.InvalidReferences, selectStmt.InvalidReferenceReason);
+        Assert.IsType<SqlDerivedTable>(selectStmt.Table);
+
+        var derivedTable = (SqlDerivedTable)selectStmt.Table!;
+        var projectedSubquery = Assert.IsType<SqlScalarSubqueryColumn>(derivedTable.SelectDefinition.Columns[1]);
+
+        Assert.Equal("max_amount", projectedSubquery.ColumnAlias);
+        Assert.NotNull(projectedSubquery.ColumnType);
+
+        var projectedColumn = Assert.IsType<SqlColumn>(selectStmt.Columns[0]);
+        Assert.Same(derivedTable, projectedColumn.TableRef);
     }
 
 }

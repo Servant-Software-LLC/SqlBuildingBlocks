@@ -436,6 +436,29 @@ public class ExprTests
         Assert.Equal("parSelectStmt", parseTree.Root.ChildNodes[2].Term.Name);
     }
 
+    public void ScalarSubquery_ParsesAsExpression()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "(SELECT amount FROM orders WHERE orders.customer_id = customers.id)");
+        var expression = grammar.Create(node);
+
+        Assert.NotNull(expression.ScalarSubqueryExpr);
+        Assert.Equal("orders", expression.ScalarSubqueryExpr!.SelectDefinition.Table!.TableName);
+    }
+
+    [Fact]
+    public void ScalarSubquery_AcceptsVisitor()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "(SELECT amount FROM orders WHERE orders.customer_id = customers.id)");
+        var expression = grammar.Create(node);
+        DetectVisitedVisitor visitor = new();
+
+        expression.Accept(visitor);
+
+        Assert.True(visitor.VisitedScalarSubqueryExpression);
+    }
+  
     // ── NOT LIKE ──────────────────────────────────────────────────────────
 
     [Fact]

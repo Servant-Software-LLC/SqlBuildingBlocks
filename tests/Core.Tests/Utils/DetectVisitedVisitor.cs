@@ -11,6 +11,7 @@ internal class DetectVisitedVisitor : ISqlExpressionVisitor
     public bool VisitedBetweenExpression { get; private set; }
     public bool VisitedCaseExpression { get; private set; }
     public bool VisitedExistsExpression { get; private set; }
+    public bool VisitedScalarSubqueryExpression { get; private set; }
     public bool VisitedInList { get; private set; }
     public bool VisitedColumnRef { get; private set; }
     public bool VisitedParameter { get; private set; }
@@ -39,6 +40,12 @@ internal class DetectVisitedVisitor : ISqlExpressionVisitor
     {
         Assert.NotNull(existsExpr);
         VisitedExistsExpression = true;
+    }
+
+    public void Visit(SqlScalarSubqueryExpression scalarSubqueryExpr)
+    {
+        Assert.NotNull(scalarSubqueryExpr);
+        VisitedScalarSubqueryExpression = true;
     }
     
     public void Visit(SqlInList inList)
