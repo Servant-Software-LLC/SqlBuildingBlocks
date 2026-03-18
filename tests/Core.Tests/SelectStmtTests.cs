@@ -693,4 +693,22 @@ public class SelectStmtTests
         Assert.True(selectStmt.WhereClause!.ExistsExpr!.IsNegated);
     }
 
+    [Fact]
+    public void Select_WithExistsContainingInSubquery_Parses()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "SELECT * FROM [employees] WHERE EXISTS (SELECT [id] FROM [orders] WHERE [customer_id] IN (SELECT [id] FROM [customers]))");
+
+        Assert.Equal(SelectStmt.TermName, node.Term.Name);
+    }
+
+    [Fact]
+    public void Select_WithDerivedTableContainingScalarSubquery_Parses()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "SELECT * FROM (SELECT [customer_id] FROM [orders] WHERE [amount] = (SELECT MAX([amount]) FROM [orders])) AS dt");
+
+        Assert.Equal(SelectStmt.TermName, node.Term.Name);
+    }
+
 }
