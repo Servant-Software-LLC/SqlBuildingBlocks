@@ -21,6 +21,8 @@ class ContainsTablesVisitor : ISqlExpressionVisitor
 
     public void Visit(SqlBetweenExpression betweenExpr) { }
 
+    public void Visit(SqlInList inList) { }
+
     public SqlExpression? Visit(SqlColumnRef column)
     {
         if (column.Column is not SqlColumn columnOfOperand)

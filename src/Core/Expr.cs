@@ -202,6 +202,17 @@ public class Expr : NonTerminal
             return new(LiteralValue!.Create(expression));
         }
 
+        // Is this a tuple node — the parenthesised value list on the right-hand side of IN / NOT IN?
+        // tuple.Rule = "(" + exprList + ")".  The parentheses are marked as grammar-level
+        // punctuation (in SelectStmt and others), so they are stripped from the parse tree and
+        // the exprList becomes the only child.
+        if (nodeTermName == "tuple")
+        {
+            var exprListNode = expression.ChildNodes[0];
+            var items = exprListNode.ChildNodes.Select(Create).ToList();
+            return new(new LogicalEntities.SqlInList(items));
+        }
+
         // Is this a betweenBound node (a bound expression inside BETWEEN)?
         if (nodeTermName == "betweenBound")
         {
@@ -230,7 +241,8 @@ public class Expr : NonTerminal
         }
 
         var left = Create(binExpr.ChildNodes[0]);
-        var operatorSymbol = binExpr.ChildNodes[1].ChildNodes[0].Token.Text;
+        // binOp may contain multiple tokens (e.g. NOT + LIKE, NOT + IN), so combine them all.
+        var operatorSymbol = string.Join(" ", binExpr.ChildNodes[1].ChildNodes.Select(c => c.Token.Text.ToUpper()));
         var right = Create(binExpr.ChildNodes[2]);
 
         return new(left, CreateOperator(operatorSymbol), right);
@@ -289,9 +301,16 @@ public class Expr : NonTerminal
             "<=" => SqlBinaryOperator.LessThanEqual,
             ">" => SqlBinaryOperator.GreaterThan,
             ">=" => SqlBinaryOperator.GreaterThanEqual,
+            "<>" => SqlBinaryOperator.NotEqualTo,
+            "!=" => SqlBinaryOperator.NotEqualTo,
+            "!<" => SqlBinaryOperator.GreaterThanEqual,
+            "!>" => SqlBinaryOperator.LessThanEqual,
             "AND" => SqlBinaryOperator.And,
             "OR" => SqlBinaryOperator.Or,
             "LIKE" => SqlBinaryOperator.Like,
+            "NOT LIKE" => SqlBinaryOperator.NotLike,
+            "IN" => SqlBinaryOperator.In,
+            "NOT IN" => SqlBinaryOperator.NotIn,
             _ => throw new ArgumentException($"Invalid binary operator {sBinaryOperator}", nameof(sBinaryOperator))
         };
 
@@ -303,9 +322,13 @@ public class Expr : NonTerminal
             SqlBinaryOperator.LessThanEqual => "<=",
             SqlBinaryOperator.GreaterThan => ">",
             SqlBinaryOperator.GreaterThanEqual => ">=",
+            SqlBinaryOperator.NotEqualTo => "<>",
             SqlBinaryOperator.And => "AND",
             SqlBinaryOperator.Or => "OR",
             SqlBinaryOperator.Like => "LIKE",
+            SqlBinaryOperator.NotLike => "NOT LIKE",
+            SqlBinaryOperator.In => "IN",
+            SqlBinaryOperator.NotIn => "NOT IN",
             SqlBinaryOperator.IsNull => "IS NULL",
             SqlBinaryOperator.IsNotNull => "IS NOT NULL",
             _ => throw new ArgumentException($"Invalid binary operator {binaryOperator}", nameof(binaryOperator))

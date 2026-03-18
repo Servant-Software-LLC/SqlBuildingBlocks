@@ -2,5 +2,5 @@
 
 public enum SqlBinaryOperator
 {
-    Equal, LessThan, LessThanEqual, GreaterThan, GreaterThanEqual, And, Or, Like, IsNull, IsNotNull
+    Equal, NotEqualTo, LessThan, LessThanEqual, GreaterThan, GreaterThanEqual, And, Or, Like, NotLike, In, NotIn, IsNull, IsNotNull
 }
