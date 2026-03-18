@@ -101,6 +101,12 @@ class SelectReferenceResolver
                     //NOTE:  No resolution is yet determined for columns that are arguments of an aggregate.
                     break;
 
+                case SqlScalarSubqueryColumn scalarSubqueryColumn:
+                    ResolveScalarSubqueryColumn(scalarSubqueryColumn, tablesInSelect.Concat(outerTablesInScope));
+                    if (sqlSelectDefinition.InvalidReferences)
+                        return;
+                    break;
+
                 case SqlAllColumns allColumns:
                     DetermineAllColumnTableReferences(allColumns, tablesInSelect);
                     DetermineAllColumnColumns(allColumns);
@@ -253,6 +259,12 @@ class SelectReferenceResolver
             return;
         }
 
+        if (expression.ScalarSubqueryExpr != null)
+        {
+            ResolveScalarSubqueryExpression(expression.ScalarSubqueryExpr, visibleTables);
+            return;
+        }
+
         SetColumnReferences(expression, columnNameToTables, visibleTables, joinOnClause);
     }
 
@@ -273,6 +285,12 @@ class SelectReferenceResolver
         if (operand.ExistsExpr != null)
         {
             ResolveExistsExpression(operand.ExistsExpr, visibleTables);
+            return;
+        }
+
+        if (operand.ScalarSubqueryExpr != null)
+        {
+            ResolveScalarSubqueryExpression(operand.ScalarSubqueryExpr, visibleTables);
             return;
         }
 
@@ -427,4 +445,29 @@ class SelectReferenceResolver
         if (existsExpression.SelectDefinition.InvalidReferences)
             sqlSelectDefinition.InvalidReferenceReason = existsExpression.SelectDefinition.InvalidReferenceReason;
     }
+
+    private void ResolveScalarSubqueryExpression(SqlScalarSubqueryExpression scalarSubqueryExpression, IEnumerable<SqlTable> visibleTables)
+    {
+        ResolveScalarSubqueryDefinition(scalarSubqueryExpression.SelectDefinition, visibleTables);
+        if (!scalarSubqueryExpression.SelectDefinition.InvalidReferences)
+            scalarSubqueryExpression.ValueType = GetScalarSubqueryColumnType(scalarSubqueryExpression.SelectDefinition);
+    }
+
+    private void ResolveScalarSubqueryColumn(SqlScalarSubqueryColumn scalarSubqueryColumn, IEnumerable<SqlTable> visibleTables)
+    {
+        ResolveScalarSubqueryDefinition(scalarSubqueryColumn.SelectDefinition, visibleTables);
+        if (!scalarSubqueryColumn.SelectDefinition.InvalidReferences)
+            scalarSubqueryColumn.ColumnType = GetScalarSubqueryColumnType(scalarSubqueryColumn.SelectDefinition);
+    }
+
+    private void ResolveScalarSubqueryDefinition(SqlSelectDefinition scalarSubqueryDefinition, IEnumerable<SqlTable> visibleTables)
+    {
+        scalarSubqueryDefinition.ResolveReferences(databaseConnectionProvider, tableSchemaProvider, functionProvider, visibleTables);
+
+        if (scalarSubqueryDefinition.InvalidReferences)
+            sqlSelectDefinition.InvalidReferenceReason = scalarSubqueryDefinition.InvalidReferenceReason;
+    }
+
+    private static Type GetScalarSubqueryColumnType(SqlSelectDefinition scalarSubqueryDefinition) =>
+        SelectDefinitionColumns.GetColumns(scalarSubqueryDefinition).FirstOrDefault()?.DataType ?? typeof(object);
 }

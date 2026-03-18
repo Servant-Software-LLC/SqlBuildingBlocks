@@ -54,6 +54,7 @@ internal static class SelectDefinitionColumns
             SqlFunctionColumn functionColumn => functionColumn.Function.ValueType,
             SqlLiteralValueColumn literalValueColumn => literalValueColumn.Value.GetType(),
             SqlParameterColumn => typeof(object),
+            SqlScalarSubqueryColumn scalarSubqueryColumn => scalarSubqueryColumn.ColumnType,
             _ => typeof(object),
         };
 }

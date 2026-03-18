@@ -58,6 +58,7 @@ public class SqlSelectDefinition
     {
         //Since the ParameterToValueConverter is using named parameters, we can reuse the vistor multiple times.
         AcceptColumns(vistor);
+        AcceptScalarSubqueryColumns(vistor);
 
         AcceptBinaryExpressions(vistor);
     }
@@ -103,6 +104,7 @@ public class SqlSelectDefinition
                     case SqlLiteralValueColumn literalValueColumn:
                         sqlLiteralValue = visitor.Visit(literalValueColumn.Value);
                         break;
+
                 }
 
                 if (sqlLiteralValue != null)
@@ -128,6 +130,15 @@ public class SqlSelectDefinition
         AcceptWhereClause(sqlExpressionVisitor);
     }
 
+    public void AcceptColumnExpressions(ISqlExpressionVisitor sqlExpressionVisitor)
+    {
+        foreach (var scalarSubqueryColumn in Columns.OfType<SqlScalarSubqueryColumn>())
+        {
+            scalarSubqueryColumn.SelectDefinition.AcceptColumnExpressions(sqlExpressionVisitor);
+            scalarSubqueryColumn.SelectDefinition.AcceptBinaryExpressions(sqlExpressionVisitor);
+        }
+    }
+
     public void AcceptJoins(ISqlExpressionVisitor sqlExpressionVisitor)
     {
         foreach (SqlJoin join in Joins)
@@ -142,4 +153,13 @@ public class SqlSelectDefinition
     public SqlBinaryExpression? WhereClauseAsBinary => WhereClause?.BinExpr;
 
     public void AccessLimitOffset(ISqlValueVisitor sqlValueVisitor) => Limit?.Accept(sqlValueVisitor);
+
+    private void AcceptScalarSubqueryColumns<TVisitor>(TVisitor visitor)
+        where TVisitor : ISqlValueVisitor, ISqlExpressionVisitor
+    {
+        foreach (var scalarSubqueryColumn in Columns.OfType<SqlScalarSubqueryColumn>())
+        {
+            scalarSubqueryColumn.SelectDefinition.Accept(visitor);
+        }
+    }
 }
