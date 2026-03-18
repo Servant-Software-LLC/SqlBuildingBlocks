@@ -16,6 +16,7 @@ public class SqlExpression
     public SqlExpression(SqlBetweenExpression betweenExpr) => BetweenExpr = betweenExpr;
     public SqlExpression(SqlCaseExpression caseExpr) => CaseExpr = caseExpr;
     public SqlExpression(SqlExistsExpression existsExpr) => ExistsExpr = existsExpr;
+    public SqlExpression(SqlScalarSubqueryExpression scalarSubqueryExpr) => ScalarSubqueryExpr = scalarSubqueryExpr;
     public SqlExpression(SqlInList inList) => InList = inList;
     public SqlExpression(SqlCastExpression castExpr) => CastExpr = castExpr;
 
@@ -28,6 +29,7 @@ public class SqlExpression
     public SqlBetweenExpression? BetweenExpr { get; private set; }
     public SqlCaseExpression? CaseExpr { get; private set; }
     public SqlExistsExpression? ExistsExpr { get; private set; }
+    public SqlScalarSubqueryExpression? ScalarSubqueryExpr { get; private set; }
     public SqlInList? InList { get; private set; }
     public SqlCastExpression? CastExpr { get; private set; }
 
@@ -43,6 +45,9 @@ public class SqlExpression
 
             if (ExistsExpr != null)
                 return typeof(bool);
+
+            if (ScalarSubqueryExpr != null)
+                return ScalarSubqueryExpr.ValueType ?? typeof(object);
 
             throw new Exception($"Engine did not expect to have to get a {nameof(Type)} for {this}.");
         } 
@@ -87,6 +92,12 @@ public class SqlExpression
             ExistsExpr.Accept(visitor);
             return;
         }
+
+        if (ScalarSubqueryExpr != null)
+        {
+            ScalarSubqueryExpr.Accept(visitor);
+            return;
+        }
         
         if (InList != null)
         {
@@ -125,6 +136,9 @@ public class SqlExpression
 
         if (Parameter != null)
             throw new Exception($"Linq {typeof(Expression)} could not be created because there is an unresolved {typeof(SqlParameter)} within it.  Call the {nameof(Accept)} method on the {typeof(SqlExpression)} instance, providing it a {typeof(ResolveParametersVisitor)} instance.");
+
+        if (ScalarSubqueryExpr != null)
+            throw new NotSupportedException("Scalar subqueries are not supported by LINQ expression generation.");
 
         if (Column == null)
             throw new Exception("Operand wasn't a Column as expected.");
@@ -237,6 +251,7 @@ public class SqlExpression
         BetweenExpr = null;
         CaseExpr = null;
         ExistsExpr = null;
+        ScalarSubqueryExpr = null;
         InList = null;
         CastExpr = null;
 
@@ -256,6 +271,8 @@ public class SqlExpression
             CaseExpr = expression.CaseExpr;
         else if (expression.ExistsExpr != null)
             ExistsExpr = expression.ExistsExpr;
+        else if (expression.ScalarSubqueryExpr != null)
+            ScalarSubqueryExpr = expression.ScalarSubqueryExpr;
         else if (expression.InList != null)
             InList = expression.InList;
         else if (expression.CastExpr != null)
@@ -268,6 +285,7 @@ public class SqlExpression
         if (BetweenExpr != null) return BetweenExpr.ToExpressionString();
         if (CaseExpr != null) return CaseExpr.ToExpressionString();
         if (ExistsExpr != null) return ExistsExpr.ToExpressionString();
+        if (ScalarSubqueryExpr != null) return ScalarSubqueryExpr.ToExpressionString();
         if (InList != null) return InList.ToExpressionString();
         if (CastExpr != null) return CastExpr.ToExpressionString();
         if (Column != null) return Column.ToExpressionString();
@@ -284,6 +302,7 @@ public class SqlExpression
         if (BetweenExpr != null) return BetweenExpr.ToString();
         if (CaseExpr != null) return CaseExpr.ToString();
         if (ExistsExpr != null) return ExistsExpr.ToString();
+        if (ScalarSubqueryExpr != null) return ScalarSubqueryExpr.ToString();
         if (InList != null) return InList.ToString();
         if (CastExpr != null) return CastExpr.ToString();
         if (Column != null) return Column.ToString();

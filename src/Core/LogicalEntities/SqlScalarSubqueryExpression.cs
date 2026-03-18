@@ -2,16 +2,15 @@ using SqlBuildingBlocks.Interfaces;
 
 namespace SqlBuildingBlocks.LogicalEntities;
 
-public class SqlExistsExpression
+public class SqlScalarSubqueryExpression
 {
-    public SqlExistsExpression(SqlSelectDefinition selectDefinition, bool isNegated)
+    public SqlScalarSubqueryExpression(SqlSelectDefinition selectDefinition)
     {
         SelectDefinition = selectDefinition ?? throw new ArgumentNullException(nameof(selectDefinition));
-        IsNegated = isNegated;
     }
 
     public SqlSelectDefinition SelectDefinition { get; }
-    public bool IsNegated { get; }
+    public Type? ValueType { get; set; }
 
     public void Accept(ISqlExpressionVisitor visitor)
     {
@@ -20,11 +19,7 @@ public class SqlExistsExpression
         SelectDefinition.AcceptBinaryExpressions(visitor);
     }
 
-    public string ToExpressionString()
-    {
-        var keyword = IsNegated ? "NOT EXISTS" : "EXISTS";
-        return $"{keyword} ({SelectDefinition})";
-    }
+    public string ToExpressionString() => $"({SelectDefinition})";
 
     public override string ToString() => ToExpressionString();
 }

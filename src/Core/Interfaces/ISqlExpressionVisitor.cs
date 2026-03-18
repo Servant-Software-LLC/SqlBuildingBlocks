@@ -25,7 +25,12 @@ public interface ISqlExpressionVisitor
     /// Visits the <see cref="SqlExistsExpression"/> in the <see cref="SqlExpression"/> tree.
     /// </summary>
     void Visit(SqlExistsExpression existsExpr);
-   
+
+    /// <summary>
+    /// Visits the <see cref="SqlScalarSubqueryExpression"/> in the <see cref="SqlExpression"/> tree.
+    /// </summary>
+    void Visit(SqlScalarSubqueryExpression scalarSubqueryExpr);
+    
     /// Visits the <see cref="SqlInList"/> (the parenthesised value list on the right-hand side of IN / NOT IN).
     /// </summary>
     void Visit(SqlInList inList);

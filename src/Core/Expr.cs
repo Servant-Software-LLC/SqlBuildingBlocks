@@ -16,6 +16,7 @@ public class Expr : NonTerminal
     private const string caseExprTermName = "caseExpr";
     private const string castExprTermName = "castExpr";
     private const string existsExprTermName = "existsExpr";
+    private const string scalarSubqueryExprTermName = "scalarSubqueryExpr";
 
     private DataType? dataType;
 
@@ -107,13 +108,13 @@ public class Expr : NonTerminal
         var tuple = new NonTerminal("tuple");
         tuple.Rule = "(" + exprList + ")";
 
-        var parSelectStmt = new NonTerminal("parSelectStmt");
-        parSelectStmt.Rule = "(" + selectStmt + ")";
+        var scalarSubqueryExpr = new NonTerminal(scalarSubqueryExprTermName);
+        scalarSubqueryExpr.Rule = "(" + selectStmt + ")";
 
         var term = new NonTerminal("term");
 
         //The LiteralValue must come before Id, so that NULL doesn't get interpreted as a column name (i.e. as an Id).
-        term.Rule = LiteralValue | Id | Parameter | funcCall | tuple | parSelectStmt;// | inStmt;
+        term.Rule = LiteralValue | Id | Parameter | funcCall | tuple | scalarSubqueryExpr;// | inStmt;
 
         var unOp = new NonTerminal("unOp");
         unOp.Rule = NOT | "+" | "-" | "~";
@@ -244,6 +245,11 @@ public class Expr : NonTerminal
         if (nodeTermName == existsExprTermName)
         {
             return new(CreateExistsExpression(expression));
+        }
+
+        if (nodeTermName == scalarSubqueryExprTermName)
+        {
+            return new(CreateScalarSubqueryExpression(expression));
         }
 
         //Is this node a column reference?
@@ -414,6 +420,17 @@ public class Expr : NonTerminal
         var selectStmtNode = existsExprNode.ChildNodes[isNegated ? 2 : 1];
 
         return new(selectStmt!.Create(selectStmtNode), isNegated);
+    }
+
+    protected internal SqlScalarSubqueryExpression CreateScalarSubqueryExpression(ParseTreeNode scalarSubqueryExprNode)
+    {
+        if (scalarSubqueryExprNode.Term.Name != scalarSubqueryExprTermName)
+        {
+            var thisMethod = MethodBase.GetCurrentMethod() as MethodInfo;
+            throw new ArgumentException($"Cannot create building block of type {thisMethod!.ReturnType}.  The TermName for node is {scalarSubqueryExprNode.Term.Name} which does not match {scalarSubqueryExprTermName}", nameof(scalarSubqueryExprNode));
+        }
+
+        return new(selectStmt!.Create(scalarSubqueryExprNode.ChildNodes[0]));
     }
 
     internal static SqlBinaryOperator CreateOperator(string sBinaryOperator) =>
