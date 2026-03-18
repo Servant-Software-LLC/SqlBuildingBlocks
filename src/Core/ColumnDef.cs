@@ -1,4 +1,4 @@
-﻿using Irony.Parsing;
+using Irony.Parsing;
 using SqlBuildingBlocks.Extensions;
 using SqlBuildingBlocks.LogicalEntities;
 using System.Reflection;
@@ -9,8 +9,11 @@ public class ColumnDef : NonTerminal
 {
     private const string DefaultOptName = "defaultOpt";
     private const string DefaultFuncCallName = "defaultFuncCall";
+    private const string CheckOptName = "checkOpt";
 
     public static string TermName => MethodBase.GetCurrentMethod().DeclaringType.Name.CamelCase();
+
+    private Expr? expr;
 
     public ColumnDef(Grammar grammar, Id id)
         : this(grammar, id, new DataType(grammar))
@@ -18,11 +21,17 @@ public class ColumnDef : NonTerminal
 
     }
     public ColumnDef(Grammar grammar, Id id, DataType dataType)
+        : this(grammar, id, dataType, null)
+    {
+    }
+
+    public ColumnDef(Grammar grammar, Id id, DataType dataType, Expr? expr)
         : base(TermName)
     {
         Id = id ?? throw new ArgumentNullException(nameof(id));
         DataType = dataType ?? throw new ArgumentNullException(nameof(dataType));
         LiteralValue = new LiteralValue(grammar);
+        this.expr = expr;
 
         var NULL = grammar.ToTerm("NULL");
         var NOT = grammar.ToTerm("NOT");
@@ -30,12 +39,14 @@ public class ColumnDef : NonTerminal
         var KEY = grammar.ToTerm("KEY");
         var PRIMARY = grammar.ToTerm("PRIMARY");
         var DEFAULT = grammar.ToTerm("DEFAULT");
+        var CHECK = grammar.ToTerm("CHECK");
 
         var nullSpecOpt = new NonTerminal("nullSpecOpt");
         var uniqueOpt = new NonTerminal("uniqueOpt");
         var primaryKeyOpt = new NonTerminal("primaryKeyOpt");
         var defaultOpt = new NonTerminal(DefaultOptName);
         var defaultFuncCall = new NonTerminal(DefaultFuncCallName);
+        var checkOpt = new NonTerminal(CheckOptName);
 
         //Inline constraints
         nullSpecOpt.Rule = NULL | NOT + NULL | grammar.Empty;
@@ -47,7 +58,18 @@ public class ColumnDef : NonTerminal
         defaultOpt.Rule = DEFAULT + LiteralValue | DEFAULT + defaultFuncCall | grammar.Empty;
         grammar.MarkPunctuation(DEFAULT);
 
-        Rule = id.SimpleId + DataType + defaultOpt + nullSpecOpt + uniqueOpt + primaryKeyOpt;
+        if (expr != null)
+        {
+            var checkExpr = new NonTerminal("columnCheckExpr");
+            checkExpr.Rule = "(" + expr + ")";
+            checkOpt.Rule = CHECK + checkExpr | grammar.Empty;
+            Rule = id.SimpleId + DataType + defaultOpt + nullSpecOpt + uniqueOpt + primaryKeyOpt + checkOpt;
+        }
+        else
+        {
+            checkOpt.Rule = grammar.Empty;
+            Rule = id.SimpleId + DataType + defaultOpt + nullSpecOpt + uniqueOpt + primaryKeyOpt;
+        }
     }
 
     public Id Id { get; }
@@ -105,6 +127,20 @@ public class ColumnDef : NonTerminal
             var primaryKeyConstraint = new SqlPrimaryKeyConstraint();
             primaryKeyConstraint.Columns.Add(columnName);
             constraintDefinitions.Add(new($"PK_{columnName}", primaryKeyConstraint));
+        }
+
+        // Inline CHECK constraint (only present when expr was provided)
+        if (expr != null && definition.ChildNodes.Count > 6)
+        {
+            var checkOpt = definition.ChildNodes[6];
+            if (checkOpt.ChildNodes.Count > 0)
+            {
+                // checkOpt: CHECK + columnCheckExpr; columnCheckExpr has 1 child (expr) after parens removed
+                var checkExprNode = checkOpt.ChildNodes[1]; // columnCheckExpr node
+                var exprNode = checkExprNode.ChildNodes[0];
+                var checkExpression = expr.Create(exprNode);
+                constraintDefinitions.Add(new($"CK_{columnName}", new SqlCheckConstraint(checkExpression)));
+            }
         }
 
         return sqlColumnDefinition;

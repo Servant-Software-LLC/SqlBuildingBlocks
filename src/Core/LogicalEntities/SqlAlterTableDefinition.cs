@@ -10,4 +10,6 @@ public class SqlAlterTableDefinition
     public IList<(SqlColumnDefinition Column, IList<SqlConstraintDefinition> Constraints)> ColumnsToAdd { get; private set; } = new List<(SqlColumnDefinition Column, IList<SqlConstraintDefinition> Constraints)>();
 
     public IList<string> ColumnsToDrop { get; private set; } = new List<string>();
+
+    public IList<SqlConstraintDefinition> ConstraintsToAdd { get; private set; } = new List<SqlConstraintDefinition>();
 }

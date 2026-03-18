@@ -1,4 +1,4 @@
-﻿using Irony.Parsing;
+using Irony.Parsing;
 using SqlBuildingBlocks.Extensions;
 using SqlBuildingBlocks.LogicalEntities;
 using System.Reflection;
@@ -13,12 +13,20 @@ public class AlterStmt : NonTerminal
         : this(grammar, id, new ColumnDef(grammar, id)) { }
     public AlterStmt(Grammar grammar, Id id, DataType dataType)
         : this(grammar, id, new ColumnDef(grammar, id, dataType)) { }
+    public AlterStmt(Grammar grammar, Id id, Expr expr)
+        : this(grammar, id, new ColumnDef(grammar, id, new DataType(grammar), expr), new ConstraintDef(grammar, id, expr)) { }
+    public AlterStmt(Grammar grammar, Id id, DataType dataType, Expr expr)
+        : this(grammar, id, new ColumnDef(grammar, id, dataType, expr), new ConstraintDef(grammar, id, expr)) { }
 
     public AlterStmt(Grammar grammar, Id id, ColumnDef columnDef)
+        : this(grammar, id, columnDef, null) { }
+
+    public AlterStmt(Grammar grammar, Id id, ColumnDef columnDef, ConstraintDef? constraintDef)
         : base(TermName)
     {
         Id = id ?? throw new ArgumentNullException(nameof(id));
         ColumnDef = columnDef ?? throw new ArgumentNullException(nameof(columnDef));
+        ConstraintDef = constraintDef;
 
         var ALTER = grammar.ToTerm("ALTER");
         var TABLE = grammar.ToTerm("TABLE");
@@ -28,8 +36,17 @@ public class AlterStmt : NonTerminal
         var COLUMN_Optional = new NonTerminal("ColumnOptional", grammar.Empty | COLUMN);
         var alterCmd = new NonTerminal("alterCmd");
 
-        alterCmd.Rule = ADD + COLUMN_Optional + columnDef
-                      | DROP + COLUMN_Optional + id;
+        if (constraintDef != null)
+        {
+            alterCmd.Rule = ADD + COLUMN_Optional + columnDef
+                          | DROP + COLUMN_Optional + id
+                          | ADD + constraintDef;
+        }
+        else
+        {
+            alterCmd.Rule = ADD + COLUMN_Optional + columnDef
+                          | DROP + COLUMN_Optional + id;
+        }
 
         Rule = ALTER + TABLE + id + alterCmd;
 
@@ -41,6 +58,7 @@ public class AlterStmt : NonTerminal
 
     public Id Id { get; }
     public ColumnDef ColumnDef { get; }
+    public ConstraintDef? ConstraintDef { get; }
 
     public virtual SqlAlterTableDefinition Create(ParseTreeNode alterStmt)
     {
@@ -67,10 +85,21 @@ public class AlterStmt : NonTerminal
 
         if (alterType == "ADD")
         {
-            var constraints = new List<SqlConstraintDefinition>();
-            var columnDef = ColumnDef.Create(alterCmd.ChildNodes[2], constraints);
-            if (columnDef != null)
-                sqlAlterTableDefinition.ColumnsToAdd.Add(new(columnDef, constraints));
+            // Check if this is ADD CONSTRAINT (2 children: ADD + constraintDef node)
+            if (ConstraintDef != null && alterCmd.ChildNodes.Count == 2 &&
+                alterCmd.ChildNodes[1].Term.Name == ConstraintDef.TermName)
+            {
+                var constraintResult = ConstraintDef.Create(alterCmd.ChildNodes[1], new List<SqlColumnDefinition>());
+                if (constraintResult.Constraint != null)
+                    sqlAlterTableDefinition.ConstraintsToAdd.Add(constraintResult.Constraint);
+            }
+            else
+            {
+                var constraints = new List<SqlConstraintDefinition>();
+                var columnDef = ColumnDef.Create(alterCmd.ChildNodes[2], constraints);
+                if (columnDef != null)
+                    sqlAlterTableDefinition.ColumnsToAdd.Add(new(columnDef, constraints));
+            }
         }
         else if (alterType == "DROP")
         {

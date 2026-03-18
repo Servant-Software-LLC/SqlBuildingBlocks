@@ -25,6 +25,34 @@ public class CreateTableStmtTests
 
     }
 
+    private class CheckTestGrammar : Grammar
+    {
+        public CheckTestGrammar()
+        {
+            SimpleId simpleId = new(this);
+            AliasOpt aliasOpt = new(this, simpleId);
+            Id id = new(this, simpleId);
+            LiteralValue literalValue = new(this);
+            TableName tableName = new(this, aliasOpt, id);
+            Parameter parameter = new(this);
+            Expr expr = new(this, id, literalValue, parameter);
+            FuncCall funcCall = new(this, id, expr);
+            JoinChainOpt joinChainOpt = new(this, tableName, expr);
+            WhereClauseOpt whereClauseOpt = new(this, expr);
+            OrderByList orderByList = new(this, id);
+            SelectStmt selectStmt = new(this, id, expr, aliasOpt, tableName, joinChainOpt, orderByList, whereClauseOpt, funcCall);
+            expr.InitializeRule(selectStmt, funcCall);
+
+            DataType dataType = new(this);
+            CreateTableStmt createTableStmt = new(this, id, dataType, expr);
+
+            Root = createTableStmt;
+        }
+
+        public SqlCreateTableDefinition Create(ParseTreeNode node) =>
+            ((CreateTableStmt)Root).Create(node);
+    }
+
 
 
     [Fact]
@@ -137,5 +165,78 @@ CREATE TABLE [SomeSetting] (
         var primaryKeyConstraint = constraint.PrimaryKeyConstraint;
         Assert.Single(primaryKeyConstraint.Columns);
         Assert.Equal("Id", primaryKeyConstraint.Columns[0]);
+    }
+
+    [Fact]
+    public void Check_NamedTableConstraint()
+    {
+        const string sql = @"
+CREATE TABLE employees (
+    age INTEGER,
+    salary INTEGER,
+    CONSTRAINT chk_age CHECK (age >= 18),
+    CONSTRAINT chk_salary CHECK (salary > 0)
+)
+";
+        var grammar = new CheckTestGrammar();
+        var node = GrammarParser.Parse(grammar, sql);
+
+        var result = grammar.Create(node);
+
+        Assert.Equal(2, result.Columns.Count);
+        Assert.Equal(2, result.Constraints.Count);
+
+        var chkAge = result.Constraints[0];
+        Assert.Equal("chk_age", chkAge.Name);
+        Assert.NotNull(chkAge.CheckConstraint);
+        Assert.NotNull(chkAge.CheckConstraint!.Expression.BinExpr);
+
+        var chkSalary = result.Constraints[1];
+        Assert.Equal("chk_salary", chkSalary.Name);
+        Assert.NotNull(chkSalary.CheckConstraint);
+    }
+
+    [Fact]
+    public void Check_UnnamedTableConstraint()
+    {
+        const string sql = @"
+CREATE TABLE products (
+    price INTEGER,
+    CHECK (price > 0)
+)
+";
+        var grammar = new CheckTestGrammar();
+        var node = GrammarParser.Parse(grammar, sql);
+
+        var result = grammar.Create(node);
+
+        Assert.Single(result.Columns);
+        Assert.Single(result.Constraints);
+
+        var check = result.Constraints[0];
+        Assert.Equal("", check.Name);
+        Assert.NotNull(check.CheckConstraint);
+    }
+
+    [Fact]
+    public void Check_InlineColumnConstraint()
+    {
+        const string sql = @"
+CREATE TABLE orders (
+    quantity INTEGER CHECK (quantity > 0)
+)
+";
+        var grammar = new CheckTestGrammar();
+        var node = GrammarParser.Parse(grammar, sql);
+
+        var result = grammar.Create(node);
+
+        Assert.Single(result.Columns);
+        Assert.Single(result.Constraints);
+
+        var check = result.Constraints[0];
+        Assert.Equal("CK_quantity", check.Name);
+        Assert.NotNull(check.CheckConstraint);
+        Assert.NotNull(check.CheckConstraint!.Expression.BinExpr);
     }
 }

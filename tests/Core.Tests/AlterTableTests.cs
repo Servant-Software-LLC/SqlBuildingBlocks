@@ -158,4 +158,73 @@ public class AlterTableTests
         Assert.Equal("Age", columnToDrop);
     }
 
+    private class CheckTestGrammar : Grammar
+    {
+        public CheckTestGrammar()
+        {
+            SimpleId simpleId = new(this);
+            AliasOpt aliasOpt = new(this, simpleId);
+            Id id = new(this, simpleId);
+            LiteralValue literalValue = new(this);
+            TableName tableName = new(this, aliasOpt, id);
+            Parameter parameter = new(this);
+            Expr expr = new(this, id, literalValue, parameter);
+            FuncCall funcCall = new(this, id, expr);
+            JoinChainOpt joinChainOpt = new(this, tableName, expr);
+            WhereClauseOpt whereClauseOpt = new(this, expr);
+            OrderByList orderByList = new(this, id);
+            SelectStmt selectStmt = new(this, id, expr, aliasOpt, tableName, joinChainOpt, orderByList, whereClauseOpt, funcCall);
+            expr.InitializeRule(selectStmt, funcCall);
+
+            DataType dataType = new(this);
+            AlterStmt alterStmt = new(this, id, dataType, expr);
+
+            Root = alterStmt;
+        }
+
+        public SqlAlterTableDefinition Create(ParseTreeNode node) =>
+            ((AlterStmt)Root).Create(node);
+    }
+
+    [Fact]
+    public void AddConstraint_Check_Named()
+    {
+        const string sql = "ALTER TABLE employees ADD CONSTRAINT chk_age CHECK (age >= 18)";
+
+        var grammar = new CheckTestGrammar();
+        var node = GrammarParser.Parse(grammar, sql);
+
+        var result = grammar.Create(node);
+
+        Assert.Equal("employees", result.Table!.TableName);
+        Assert.Empty(result.ColumnsToAdd);
+        Assert.Empty(result.ColumnsToDrop);
+        Assert.Single(result.ConstraintsToAdd);
+
+        var constraint = result.ConstraintsToAdd[0];
+        Assert.Equal("chk_age", constraint.Name);
+        Assert.NotNull(constraint.CheckConstraint);
+        Assert.NotNull(constraint.CheckConstraint!.Expression.BinExpr);
+    }
+
+    [Fact]
+    public void AddConstraint_Check_Unnamed()
+    {
+        const string sql = "ALTER TABLE employees ADD CHECK (salary > 0)";
+
+        var grammar = new CheckTestGrammar();
+        var node = GrammarParser.Parse(grammar, sql);
+
+        var result = grammar.Create(node);
+
+        Assert.Equal("employees", result.Table!.TableName);
+        Assert.Empty(result.ColumnsToAdd);
+        Assert.Empty(result.ColumnsToDrop);
+        Assert.Single(result.ConstraintsToAdd);
+
+        var constraint = result.ConstraintsToAdd[0];
+        Assert.Equal("", constraint.Name);
+        Assert.NotNull(constraint.CheckConstraint);
+    }
+
 }

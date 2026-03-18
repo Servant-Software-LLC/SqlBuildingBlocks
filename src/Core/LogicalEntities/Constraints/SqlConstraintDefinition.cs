@@ -8,6 +8,8 @@ public class SqlConstraintDefinition
         UniqueConstraint = sqlUniqueConstraint ?? throw new ArgumentNullException(nameof(sqlUniqueConstraint));
     public SqlConstraintDefinition(string name, SqlForeignKeyConstraint sqlForeignKeyConstraint) : this(name) =>
         ForeignKeyConstraint = sqlForeignKeyConstraint ?? throw new ArgumentNullException(nameof(sqlForeignKeyConstraint));
+    public SqlConstraintDefinition(string name, SqlCheckConstraint sqlCheckConstraint) : this(name) =>
+        CheckConstraint = sqlCheckConstraint ?? throw new ArgumentNullException(nameof(sqlCheckConstraint));
     private SqlConstraintDefinition(string name) => Name = name ?? throw new ArgumentNullException(nameof(name));
 
     public string Name { get; }
@@ -16,4 +18,5 @@ public class SqlConstraintDefinition
     public SqlPrimaryKeyConstraint? PrimaryKeyConstraint { get; }
     public SqlUniqueConstraint? UniqueConstraint { get; }
     public SqlForeignKeyConstraint? ForeignKeyConstraint { get; }
+    public SqlCheckConstraint? CheckConstraint { get; }
 }

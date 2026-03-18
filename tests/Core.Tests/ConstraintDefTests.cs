@@ -26,6 +26,35 @@ public class ConstraintDefTests
             ((ConstraintDef)Root).Create(createTableStmt, columns);
     }
 
+    private class CheckTestGrammar : Grammar
+    {
+        public CheckTestGrammar()
+        {
+            SimpleId simpleId = new(this);
+            AliasOpt aliasOpt = new(this, simpleId);
+            Id id = new(this, simpleId);
+            LiteralValue literalValue = new(this);
+            TableName tableName = new(this, aliasOpt, id);
+            Parameter parameter = new(this);
+            Expr expr = new(this, id, literalValue, parameter);
+            FuncCall funcCall = new(this, id, expr);
+            JoinChainOpt joinChainOpt = new(this, tableName, expr);
+            WhereClauseOpt whereClauseOpt = new(this, expr);
+            OrderByList orderByList = new(this, id);
+            SelectStmt selectStmt = new(this, id, expr, aliasOpt, tableName, joinChainOpt, orderByList, whereClauseOpt, funcCall);
+            expr.InitializeRule(selectStmt, funcCall);
+
+            ConstraintDef constraintDef = new(this, id, expr);
+
+            Root = constraintDef;
+
+            MarkPunctuation("(", ")");
+        }
+
+        public (SqlConstraintDefinition? Constraint, bool Handled) Create(ParseTreeNode node, IList<SqlColumnDefinition> columns) =>
+            ((ConstraintDef)Root).Create(node, columns);
+    }
+
     [Fact]
     public void ForeignKey_BasicNoActions()
     {
@@ -156,5 +185,54 @@ public class ConstraintDefTests
         Assert.NotNull(fk);
         Assert.Equal("Parent", fk.ParentTable.TableName);
         Assert.Equal("dbo", fk.ParentTable.DatabaseName);
+    }
+
+    [Fact]
+    public void Check_Named_SimpleComparison()
+    {
+        var grammar = new CheckTestGrammar();
+        var sql = "CONSTRAINT chk_age CHECK (age >= 18)";
+        var node = GrammarParser.Parse(grammar, sql);
+
+        var result = grammar.Create(node, new List<SqlColumnDefinition>());
+
+        Assert.True(result.Handled);
+        Assert.NotNull(result.Constraint);
+        Assert.Equal("chk_age", result.Constraint!.Name);
+        var check = result.Constraint.CheckConstraint;
+        Assert.NotNull(check);
+        Assert.NotNull(check!.Expression.BinExpr);
+    }
+
+    [Fact]
+    public void Check_Named_WithAndCondition()
+    {
+        var grammar = new CheckTestGrammar();
+        var sql = "CONSTRAINT chk_salary CHECK (salary > 0 AND salary < 1000000)";
+        var node = GrammarParser.Parse(grammar, sql);
+
+        var result = grammar.Create(node, new List<SqlColumnDefinition>());
+
+        Assert.True(result.Handled);
+        var check = result.Constraint!.CheckConstraint;
+        Assert.NotNull(check);
+        Assert.NotNull(check!.Expression.BinExpr);
+    }
+
+    [Fact]
+    public void Check_Unnamed_TableLevel()
+    {
+        var grammar = new CheckTestGrammar();
+        var sql = "CHECK (age >= 18)";
+        var node = GrammarParser.Parse(grammar, sql);
+
+        var result = grammar.Create(node, new List<SqlColumnDefinition>());
+
+        Assert.True(result.Handled);
+        Assert.NotNull(result.Constraint);
+        Assert.Equal("", result.Constraint!.Name);
+        var check = result.Constraint.CheckConstraint;
+        Assert.NotNull(check);
+        Assert.NotNull(check!.Expression.BinExpr);
     }
 }

@@ -12,12 +12,14 @@ public class CreateTableStmt : NonTerminal
     public static string TermName => MethodBase.GetCurrentMethod().DeclaringType.Name.CamelCase();
 
     /// <summary>
-    /// Helper ctor that assumes default <see cref="NonTerminal"/> types.  If you need different building blocks internally, use other ctor. 
+    /// Helper ctor that assumes default <see cref="NonTerminal"/> types.  If you need different building blocks internally, use other ctor.
     /// </summary>
     /// <param name="grammar"></param>
     public CreateTableStmt(Grammar grammar) : this(grammar, new Id(grammar)) { }
     public CreateTableStmt(Grammar grammar, Id id) : this(grammar, id, new ColumnDef(grammar, id), new ConstraintDef(grammar, id)) { }
     public CreateTableStmt(Grammar grammar, Id id, DataType dataType) : this(grammar, id, new ColumnDef(grammar, id, dataType), new ConstraintDef(grammar, id)) { }
+    public CreateTableStmt(Grammar grammar, Id id, Expr expr) : this(grammar, id, new ColumnDef(grammar, id, new DataType(grammar), expr), new ConstraintDef(grammar, id, expr)) { }
+    public CreateTableStmt(Grammar grammar, Id id, DataType dataType, Expr expr) : this(grammar, id, new ColumnDef(grammar, id, dataType, expr), new ConstraintDef(grammar, id, expr)) { }
     public CreateTableStmt(Grammar grammar, Id id, ColumnDef columnDef, ConstraintDef constraintDef)
         : base(TermName)
     {

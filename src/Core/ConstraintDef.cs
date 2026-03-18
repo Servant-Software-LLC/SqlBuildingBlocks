@@ -1,4 +1,4 @@
-﻿using Irony.Parsing;
+using Irony.Parsing;
 using SqlBuildingBlocks.Extensions;
 using SqlBuildingBlocks.LogicalEntities;
 using System.Reflection;
@@ -12,11 +12,16 @@ public class ConstraintDef : NonTerminal
     private KeyTerm PRIMARY;
     private SimpleIdList simpleIdList;
     private IdList idList;
+    private Expr? expr;
 
     public ConstraintDef(Grammar grammar, Id id)
+        : this(grammar, id, null) { }
+
+    public ConstraintDef(Grammar grammar, Id id, Expr? expr)
         : base(TermName)
     {
         Id = id ?? throw new ArgumentNullException(nameof(id));
+        this.expr = expr;
 
         var CONSTRAINT = grammar.ToTerm("CONSTRAINT");
         PRIMARY = grammar.ToTerm("PRIMARY");
@@ -32,6 +37,7 @@ public class ConstraintDef : NonTerminal
         var SET = grammar.ToTerm("SET");
         var NULL = grammar.ToTerm("NULL");
         var DEFAULT = grammar.ToTerm("DEFAULT");
+        var CHECK = grammar.ToTerm("CHECK");
 
         var idlistPar = new NonTerminal("idlistPar");
         var constraintTypeOpt = new NonTerminal("constraintTypeOpt");
@@ -62,7 +68,20 @@ public class ConstraintDef : NonTerminal
                                 | UNIQUE + simpleIdListPar
                                 | "FOREIGN" + KEY + idlistPar + "REFERENCES" + id + idlistPar + fkActionList;
 
-        Rule = CONSTRAINT + id.SimpleId + constraintTypeOpt;
+        if (expr != null)
+        {
+            var checkExpr = new NonTerminal("checkExpr");
+            checkExpr.Rule = "(" + expr + ")";
+            constraintTypeOpt.Rule |= CHECK + checkExpr;
+
+            // Unnamed table-level CHECK: CHECK (expr)
+            Rule = CONSTRAINT + id.SimpleId + constraintTypeOpt
+                 | CHECK + checkExpr;
+        }
+        else
+        {
+            Rule = CONSTRAINT + id.SimpleId + constraintTypeOpt;
+        }
     }
 
     public Id Id { get; }
@@ -72,13 +91,33 @@ public class ConstraintDef : NonTerminal
         if (definition.Term.Name != TermName)
             return (null, false);
 
+        // Unnamed CHECK form: CHECK + checkExpr → definition has 2 children: [CHECK_token, checkExpr_node]
+        if (definition.ChildNodes.Count == 2 && expr != null)
+        {
+            // checkExpr node contains the expr (parens are punctuation)
+            var checkExprNode = definition.ChildNodes[1];
+            var exprNode = checkExprNode.ChildNodes[0];
+            var checkExpression = expr.Create(exprNode);
+            return (new("", new SqlCheckConstraint(checkExpression)), true);
+        }
+
         var constraintName = Id.SimpleId.Create(definition.ChildNodes[1]);
         var constraintTypeOpt = definition.ChildNodes[2];
 
         switch (constraintTypeOpt.ChildNodes.Count)
         {
-            //Only UNIQUE has 2 child nodes
+            //Only UNIQUE or CHECK has 2 child nodes
             case 2:
+                // CHECK constraint: CHECK + checkExpr
+                if (expr != null && string.Equals(constraintTypeOpt.ChildNodes[0].Term.Name, "CHECK", StringComparison.OrdinalIgnoreCase))
+                {
+                    var checkExprNode = constraintTypeOpt.ChildNodes[1];
+                    var exprNode = checkExprNode.ChildNodes[0];
+                    var checkExpression = expr.Create(exprNode);
+                    return (new(constraintName, new SqlCheckConstraint(checkExpression)), true);
+                }
+
+                // UNIQUE constraint
                 SqlUniqueConstraint sqlUniqueConstraint = new();
                 var uniqueColumns = simpleIdList.Create(constraintTypeOpt.ChildNodes[1].ChildNodes[0]);
                 foreach (var column in uniqueColumns)
