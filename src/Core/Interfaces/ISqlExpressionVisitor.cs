@@ -17,6 +17,10 @@ public interface ISqlExpressionVisitor
     void Visit(SqlBetweenExpression betweenExpr);
 
     /// <summary>
+    /// Visits the <see cref="SqlCaseExpression"/> in the <see cref="SqlExpression"/> tree.
+    /// </summary>
+    void Visit(SqlCaseExpression caseExpr);
+  
     /// Visits the <see cref="SqlInList"/> (the parenthesised value list on the right-hand side of IN / NOT IN).
     /// </summary>
     void Visit(SqlInList inList);

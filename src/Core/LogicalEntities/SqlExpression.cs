@@ -14,6 +14,7 @@ public class SqlExpression
     public SqlExpression(SqlLiteralValue value) => Value = value;
     public SqlExpression(SqlBinaryExpression binExpr) => BinExpr = binExpr;
     public SqlExpression(SqlBetweenExpression betweenExpr) => BetweenExpr = betweenExpr;
+    public SqlExpression(SqlCaseExpression caseExpr) => CaseExpr = caseExpr;
     public SqlExpression(SqlInList inList) => InList = inList;
 
     //Logic within this class should enforce that only one of these properties is ever set.
@@ -23,6 +24,7 @@ public class SqlExpression
     public SqlLiteralValue? Value { get; private set; }
     public SqlBinaryExpression? BinExpr { get; private set; }
     public SqlBetweenExpression? BetweenExpr { get; private set; }
+    public SqlCaseExpression? CaseExpr { get; private set; }
     public SqlInList? InList { get; private set; }
 
     public Type Type 
@@ -67,6 +69,12 @@ public class SqlExpression
             return;
         }
 
+        if (CaseExpr != null)
+        {
+            CaseExpr.Accept(visitor);
+            return;
+        }
+      
         if (InList != null)
         {
             InList.Accept(visitor);
@@ -208,6 +216,7 @@ public class SqlExpression
         Value = null;
         BinExpr = null;
         BetweenExpr = null;
+        CaseExpr = null;
         InList = null;
 
         if (expression.Column != null)
@@ -222,6 +231,8 @@ public class SqlExpression
             BinExpr = expression.BinExpr;
         else if (expression.BetweenExpr != null)
             BetweenExpr = expression.BetweenExpr;
+        else if (expression.CaseExpr != null)
+            CaseExpr = expression.CaseExpr;
         else if (expression.InList != null)
             InList = expression.InList;
     }
@@ -230,6 +241,7 @@ public class SqlExpression
     {
         if (BinExpr != null) return BinExpr.ToExpressionString();
         if (BetweenExpr != null) return BetweenExpr.ToExpressionString();
+        if (CaseExpr != null) return CaseExpr.ToExpressionString();
         if (InList != null) return InList.ToExpressionString();
         if (Column != null) return Column.ToExpressionString();
         if (Parameter != null) return Parameter.ToExpressionString();
@@ -243,6 +255,7 @@ public class SqlExpression
     {
         if (BinExpr != null) return BinExpr.ToString();
         if (BetweenExpr != null) return BetweenExpr.ToString();
+        if (CaseExpr != null) return CaseExpr.ToString();
         if (InList != null) return InList.ToString();
         if (Column != null) return Column.ToString();
         if (Parameter != null) return Parameter.ToString();

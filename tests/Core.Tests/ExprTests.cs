@@ -304,6 +304,71 @@ public class ExprTests
         Assert.Equal("age NOT BETWEEN 18 AND 25", expression.ToExpressionString());
     }
 
+    // ── CASE WHEN/THEN/ELSE/END ───────────────────────────────────────────
+
+    [Fact]
+    public void CaseWhen_SingleClause_NoElse()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "CASE WHEN status = 1 THEN 'active' END");
+        var expression = grammar.Create(node);
+
+        Assert.NotNull(expression.CaseExpr);
+        var caseExpr = expression.CaseExpr!;
+
+        Assert.Single(caseExpr.WhenClauses);
+        Assert.Null(caseExpr.ElseResult);
+
+        var (condition, result) = caseExpr.WhenClauses[0];
+        Assert.NotNull(condition.BinExpr);
+        Assert.Equal("status", condition.BinExpr!.Left.Column!.ColumnName);
+        Assert.NotNull(result.Value);
+        Assert.Equal("active", result.Value!.String);
+    }
+
+    [Fact]
+    public void CaseWhen_MultipleClausesWithElse()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "CASE WHEN score >= 90 THEN 'A' WHEN score >= 80 THEN 'B' ELSE 'C' END");
+        var expression = grammar.Create(node);
+
+        Assert.NotNull(expression.CaseExpr);
+        var caseExpr = expression.CaseExpr!;
+
+        Assert.Equal(2, caseExpr.WhenClauses.Count);
+        Assert.NotNull(caseExpr.ElseResult);
+        Assert.Equal("C", caseExpr.ElseResult!.Value!.String);
+
+        var (cond1, res1) = caseExpr.WhenClauses[0];
+        Assert.Equal(SqlBinaryOperator.GreaterThanEqual, cond1.BinExpr!.Operator);
+        Assert.Equal("A", res1.Value!.String);
+
+        var (cond2, res2) = caseExpr.WhenClauses[1];
+        Assert.Equal(SqlBinaryOperator.GreaterThanEqual, cond2.BinExpr!.Operator);
+        Assert.Equal("B", res2.Value!.String);
+    }
+
+    [Fact]
+    public void CaseWhen_ToExpressionString_NoElse()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "CASE WHEN x = 1 THEN 'yes' END");
+        var expression = grammar.Create(node);
+
+        Assert.Equal("CASE WHEN x = 1 THEN 'yes' END", expression.ToExpressionString());
+    }
+
+    [Fact]
+    public void CaseWhen_ToExpressionString_WithElse()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "CASE WHEN x = 1 THEN 'yes' ELSE 'no' END");
+        var expression = grammar.Create(node);
+
+        Assert.Equal("CASE WHEN x = 1 THEN 'yes' ELSE 'no' END", expression.ToExpressionString());
+    }
+  
     // ── NOT LIKE ──────────────────────────────────────────────────────────
 
     [Fact]
