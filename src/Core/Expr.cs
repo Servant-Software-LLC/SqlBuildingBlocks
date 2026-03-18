@@ -183,6 +183,7 @@ public class Expr : NonTerminal
         grammar.MarkPunctuation(CASE, WHEN, THEN, ELSE, END);
         grammar.MarkReservedWords("CASE", "WHEN", "THEN", "ELSE", "END");
 
+
         // CAST(expr AS dataType) — parens, AS, and CAST keyword are punctuation so children = [expr, dataType]
         var CAST = grammar.ToTerm("CAST");
         var castExpr = new NonTerminal(castExprTermName);
@@ -235,6 +236,7 @@ public class Expr : NonTerminal
             return new(CreateCaseExpression(expression));
         }
 
+
         //Is this a CAST expression?
         if (nodeTermName == castExprTermName)
         {
@@ -251,6 +253,7 @@ public class Expr : NonTerminal
         {
             return new(CreateScalarSubqueryExpression(expression));
         }
+
 
         //Is this node a column reference?
         if (nodeTermName == Id.TermName)
@@ -393,6 +396,7 @@ public class Expr : NonTerminal
         return new SqlCaseExpression(whenClauses, elseResult);
     }
 
+
     protected internal SqlCastExpression CreateCastExpression(ParseTreeNode castExprNode)
     {
         if (castExprNode.Term.Name != castExprTermName)
@@ -432,6 +436,7 @@ public class Expr : NonTerminal
 
         return new(selectStmt!.Create(scalarSubqueryExprNode.ChildNodes[0]));
     }
+
 
     internal static SqlBinaryOperator CreateOperator(string sBinaryOperator) =>
         sBinaryOperator.ToUpper() switch

@@ -107,12 +107,13 @@ public class SqlExpression
             ScalarSubqueryExpr.Accept(visitor);
             return;
         }
-        
+
         if (InList != null)
         {
             InList.Accept(visitor);
             return;
         }
+
 
         if (CastExpr != null)
         {
@@ -137,6 +138,7 @@ public class SqlExpression
             JsonExpr.Accept(visitor);
             return;
         }
+
 
     }
 

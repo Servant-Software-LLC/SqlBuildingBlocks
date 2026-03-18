@@ -103,6 +103,7 @@ public class ResolveParametersVisitor : ISqlExpressionVisitor, ISqlValueVisitor
 
     public void Visit(SqlJsonExpression jsonExpr) { }
 
+
     public SqlLimitValue? Visit(SqlLimitValue limit)
     {
         if (limit.Parameter != null)
