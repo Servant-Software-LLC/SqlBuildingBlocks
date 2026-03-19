@@ -20,6 +20,12 @@ public class SqlAggregate : ISqlColumn, ISqlColumnWithAlias
 
     public SqlExpression? Argument { get; set; }
 
+    /// <summary>
+    /// Whether the DISTINCT keyword was specified in the aggregate function.
+    /// e.g. COUNT(DISTINCT col), SUM(DISTINCT col)
+    /// </summary>
+    public bool IsDistinct { get; set; }
+
     public string? ColumnAlias { get; set; }
 
     /// <summary>
