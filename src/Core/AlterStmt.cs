@@ -7,6 +7,8 @@ namespace SqlBuildingBlocks;
 
 public class AlterStmt : NonTerminal
 {
+    private const string AlterColumnDefTermName = "alterColumnDef";
+
     public static string TermName => MethodBase.GetCurrentMethod().DeclaringType.Name.CamelCase();
 
     public AlterStmt(Grammar grammar, Id id)
@@ -33,23 +35,40 @@ public class AlterStmt : NonTerminal
         var ADD = grammar.ToTerm("ADD");
         var DROP = grammar.ToTerm("DROP");
         var RENAME = grammar.ToTerm("RENAME");
+        var MODIFY = grammar.ToTerm("MODIFY");
+        var CHANGE = grammar.ToTerm("CHANGE");
         var COLUMN = grammar.ToTerm("COLUMN");
         var TO = grammar.ToTerm("TO");
+        var TYPE = grammar.ToTerm("TYPE");
+        var NULL = grammar.ToTerm("NULL");
+        var NOT = grammar.ToTerm("NOT");
         var COLUMN_Optional = new NonTerminal("ColumnOptional", grammar.Empty | COLUMN);
         var alterCmd = new NonTerminal("alterCmd");
+        var alterColumnDef = new NonTerminal(AlterColumnDefTermName);
+        var nullSpecOpt = new NonTerminal("alterColumnNullSpecOpt");
+
+        nullSpecOpt.Rule = NULL | NOT + NULL | grammar.Empty;
+        alterColumnDef.Rule = TYPE + ColumnDef.DataType
+                            | ColumnDef.DataType + nullSpecOpt;
 
         if (constraintDef != null)
         {
             alterCmd.Rule = ADD + COLUMN_Optional + columnDef
                           | DROP + COLUMN_Optional + id
                           | ADD + constraintDef
-                          | RENAME + COLUMN_Optional + id + TO + id;
+                          | RENAME + COLUMN_Optional + id + TO + id
+                          | MODIFY + COLUMN_Optional + columnDef
+                          | CHANGE + COLUMN_Optional + id + columnDef
+                          | ALTER + COLUMN_Optional + id + alterColumnDef;
         }
         else
         {
             alterCmd.Rule = ADD + COLUMN_Optional + columnDef
                           | DROP + COLUMN_Optional + id
-                          | RENAME + COLUMN_Optional + id + TO + id;
+                          | RENAME + COLUMN_Optional + id + TO + id
+                          | MODIFY + COLUMN_Optional + columnDef
+                          | CHANGE + COLUMN_Optional + id + columnDef
+                          | ALTER + COLUMN_Optional + id + alterColumnDef;
         }
 
         Rule = ALTER + TABLE + id + alterCmd;
@@ -85,36 +104,86 @@ public class AlterStmt : NonTerminal
 
         var alterCmd = alterStmt.ChildNodes[1];
 
-        var alterType = alterCmd.ChildNodes[0].FindTokenAndGetText();
+        var alterColumnDefNode = alterCmd.ChildNodes.FirstOrDefault(node => node.Term.Name == AlterColumnDefTermName);
+        if (alterColumnDefNode != null)
+        {
+            var columnIdNode = alterCmd.ChildNodes.First(node => node.Term.Name == Id.TermName);
+            var columnName = GetSimpleId(columnIdNode);
+            var columnDef = CreateAlterColumnDefinition(alterColumnDefNode, columnName);
+            sqlAlterTableDefinition.ColumnsToAlter.Add(new(columnName, columnDef, SqlAlterColumnOperation.Alter));
+            return;
+        }
+
+        var alterType = alterCmd.ChildNodes
+            .Select(node => node.FindTokenAndGetText())
+            .FirstOrDefault(text => !string.IsNullOrEmpty(text));
+
+        var idNodes = alterCmd.ChildNodes.Where(node => node.Term.Name == Id.TermName).ToList();
+        var columnDefNode = alterCmd.ChildNodes.FirstOrDefault(node => node.Term.Name == ColumnDef.TermName);
 
         if (alterType == "ADD")
         {
             // Check if this is ADD CONSTRAINT (2 children: ADD + constraintDef node)
-            if (ConstraintDef != null && alterCmd.ChildNodes.Count == 2 &&
-                alterCmd.ChildNodes[1].Term.Name == ConstraintDef.TermName)
+            if (ConstraintDef != null && alterCmd.ChildNodes.Any(node => node.Term.Name == ConstraintDef.TermName))
             {
-                var constraintResult = ConstraintDef.Create(alterCmd.ChildNodes[1], new List<SqlColumnDefinition>());
+                var constraintNode = alterCmd.ChildNodes.First(node => node.Term.Name == ConstraintDef.TermName);
+                var constraintResult = ConstraintDef.Create(constraintNode, new List<SqlColumnDefinition>());
                 if (constraintResult.Constraint != null)
                     sqlAlterTableDefinition.ConstraintsToAdd.Add(constraintResult.Constraint);
             }
-            else
+            else if (columnDefNode != null)
             {
                 var constraints = new List<SqlConstraintDefinition>();
-                var columnDef = ColumnDef.Create(alterCmd.ChildNodes[2], constraints);
+                var columnDef = ColumnDef.Create(columnDefNode, constraints);
                 if (columnDef != null)
                     sqlAlterTableDefinition.ColumnsToAdd.Add(new(columnDef, constraints));
             }
         }
         else if (alterType == "DROP")
         {
-            var columnName = alterCmd.ChildNodes[2].ChildNodes[0].ChildNodes[0].Token.ValueString;
+            var columnName = GetSimpleId(idNodes.Single());
             sqlAlterTableDefinition.ColumnsToDrop.Add(columnName);
         }
         else if (alterType == "RENAME")
         {
-            var oldName = alterCmd.ChildNodes[2].ChildNodes[0].ChildNodes[0].Token.ValueString;
-            var newName = alterCmd.ChildNodes[3].ChildNodes[0].ChildNodes[0].Token.ValueString;
+            var oldName = GetSimpleId(idNodes[0]);
+            var newName = GetSimpleId(idNodes[1]);
             sqlAlterTableDefinition.ColumnsToRename.Add((oldName, newName));
         }
+        else if (alterType == "MODIFY" && columnDefNode != null)
+        {
+            var constraints = new List<SqlConstraintDefinition>();
+            var columnDef = ColumnDef.Create(columnDefNode, constraints);
+            if (columnDef != null)
+                sqlAlterTableDefinition.ColumnsToAlter.Add(new(columnDef.ColumnName, columnDef, SqlAlterColumnOperation.Modify));
+        }
+        else if (alterType == "CHANGE" && columnDefNode != null)
+        {
+            var oldName = GetSimpleId(idNodes.Single());
+            var constraints = new List<SqlConstraintDefinition>();
+            var columnDef = ColumnDef.Create(columnDefNode, constraints);
+            if (columnDef != null)
+                sqlAlterTableDefinition.ColumnsToAlter.Add(new(oldName, columnDef, SqlAlterColumnOperation.Change));
+        }
+    }
+
+    private string GetSimpleId(ParseTreeNode idNode) => Id.SimpleId.Create(idNode.ChildNodes[0]);
+
+    private SqlColumnDefinition CreateAlterColumnDefinition(ParseTreeNode alterColumnDef, string columnName)
+    {
+        var dataTypeNode = alterColumnDef.ChildNodes[0].Term.Name == "TYPE"
+            ? alterColumnDef.ChildNodes[1]
+            : alterColumnDef.ChildNodes[0];
+
+        var columnDefinition = new SqlColumnDefinition(columnName, ColumnDef.DataType.Create(dataTypeNode));
+
+        if (alterColumnDef.ChildNodes[0].Term.Name != "TYPE" && alterColumnDef.ChildNodes.Count > 1)
+        {
+            var nullSpecOpt = alterColumnDef.ChildNodes[1];
+            if (nullSpecOpt.ChildNodes.Count > 0)
+                columnDefinition.AllowNulls = nullSpecOpt.ChildNodes.Count == 1;
+        }
+
+        return columnDefinition;
     }
 }

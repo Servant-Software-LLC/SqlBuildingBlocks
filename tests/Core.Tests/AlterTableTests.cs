@@ -271,4 +271,92 @@ public class AlterTableTests
         Assert.Equal("BirthYear", newName);
     }
 
+    [Fact]
+    public void AlterColumn_Type_Ansi()
+    {
+        const string sql = @"ALTER TABLE products ALTER COLUMN price TYPE DECIMAL(12,4)";
+
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, sql);
+
+        var result = grammar.Create(node);
+
+        Assert.Equal("products", result.Table!.TableName);
+        Assert.Empty(result.ColumnsToAdd);
+        Assert.Empty(result.ColumnsToDrop);
+        Assert.Empty(result.ColumnsToRename);
+        Assert.Single(result.ColumnsToAlter);
+
+        var action = result.ColumnsToAlter[0];
+        Assert.Equal("price", action.SourceColumnName);
+        Assert.Equal("price", action.Column.ColumnName);
+        Assert.Equal("DECIMAL", action.Column.DataType.Name);
+        Assert.Equal(12, action.Column.DataType.Precision);
+        Assert.Equal(4, action.Column.DataType.Scale);
+    }
+
+    [Fact]
+    public void ModifyColumn_MySql()
+    {
+        const string sql = @"ALTER TABLE products MODIFY COLUMN price DECIMAL(12,4) NOT NULL";
+
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, sql);
+
+        var result = grammar.Create(node);
+
+        Assert.Equal("products", result.Table!.TableName);
+        Assert.Single(result.ColumnsToAlter);
+
+        var action = result.ColumnsToAlter[0];
+        Assert.Equal("price", action.SourceColumnName);
+        Assert.Equal("price", action.Column.ColumnName);
+        Assert.Equal("DECIMAL", action.Column.DataType.Name);
+        Assert.Equal(12, action.Column.DataType.Precision);
+        Assert.Equal(4, action.Column.DataType.Scale);
+        Assert.False(action.Column.AllowNulls);
+    }
+
+    [Fact]
+    public void ChangeColumn_MySql()
+    {
+        const string sql = @"ALTER TABLE products CHANGE COLUMN old_name new_name VARCHAR(100)";
+
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, sql);
+
+        var result = grammar.Create(node);
+
+        Assert.Equal("products", result.Table!.TableName);
+        Assert.Single(result.ColumnsToAlter);
+
+        var action = result.ColumnsToAlter[0];
+        Assert.Equal("old_name", action.SourceColumnName);
+        Assert.Equal("new_name", action.Column.ColumnName);
+        Assert.Equal("VARCHAR", action.Column.DataType.Name);
+        Assert.Equal(100, action.Column.DataType.Length);
+    }
+
+    [Fact]
+    public void AlterColumn_SqlServer()
+    {
+        const string sql = @"ALTER TABLE products ALTER COLUMN price DECIMAL(12,4) NOT NULL";
+
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, sql);
+
+        var result = grammar.Create(node);
+
+        Assert.Equal("products", result.Table!.TableName);
+        Assert.Single(result.ColumnsToAlter);
+
+        var action = result.ColumnsToAlter[0];
+        Assert.Equal("price", action.SourceColumnName);
+        Assert.Equal("price", action.Column.ColumnName);
+        Assert.Equal("DECIMAL", action.Column.DataType.Name);
+        Assert.Equal(12, action.Column.DataType.Precision);
+        Assert.Equal(4, action.Column.DataType.Scale);
+        Assert.False(action.Column.AllowNulls);
+    }
+
 }

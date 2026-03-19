@@ -13,5 +13,7 @@ public class SqlAlterTableDefinition
 
     public IList<(string OldName, string NewName)> ColumnsToRename { get; private set; } = new List<(string OldName, string NewName)>();
 
+    public IList<SqlAlterColumnAction> ColumnsToAlter { get; private set; } = new List<SqlAlterColumnAction>();
+
     public IList<SqlConstraintDefinition> ConstraintsToAdd { get; private set; } = new List<SqlConstraintDefinition>();
 }
