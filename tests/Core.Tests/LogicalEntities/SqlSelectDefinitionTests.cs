@@ -40,14 +40,17 @@ public class SqlSelectDefinitionTests
         SqlInsertDefinition sqlInsertDefinition = new();
 
         //Only the values are parameters in an insert statement.
-        sqlInsertDefinition.Values = new List<SqlExpression>
+        sqlInsertDefinition.Values = new List<IList<SqlExpression>>
         {
-            new(new SqlParameter("TestString")),
-            new(new SqlParameter("TestInt")),
-            new(new SqlParameter("TestFloat")),
-            new(new SqlParameter("TestDouble")),
-            new(new SqlParameter("TestDecimal")),
-            new(new SqlParameter("TestBool"))
+            new List<SqlExpression>
+            {
+                new(new SqlParameter("TestString")),
+                new(new SqlParameter("TestInt")),
+                new(new SqlParameter("TestFloat")),
+                new(new SqlParameter("TestDouble")),
+                new(new SqlParameter("TestDecimal")),
+                new(new SqlParameter("TestBool"))
+            }
         };
 
         DbParameterCollection parameters = new FakeParameterCollection();
@@ -62,13 +65,15 @@ public class SqlSelectDefinitionTests
         sqlInsertDefinition.ResolveParameters(parameters);
 
         // Assert
-        Assert.Equal(6, sqlInsertDefinition.Values.Count);
-        Assert.Equal("Bob", sqlInsertDefinition.Values[0].Value.String);
-        Assert.Equal(5, sqlInsertDefinition.Values[1].Value.Int);
-        Assert.Equal(5.1f, sqlInsertDefinition.Values[2].Value.Float);
-        Assert.Equal(5.2d, sqlInsertDefinition.Values[3].Value.Double);
-        Assert.Equal(5.5m, sqlInsertDefinition.Values[4].Value.Decimal);
-        Assert.Equal(true, sqlInsertDefinition.Values[5].Value.Boolean);
+        Assert.Single(sqlInsertDefinition.Values);
+        var row = sqlInsertDefinition.Values[0];
+        Assert.Equal(6, row.Count);
+        Assert.Equal("Bob", row[0].Value.String);
+        Assert.Equal(5, row[1].Value.Int);
+        Assert.Equal(5.1f, row[2].Value.Float);
+        Assert.Equal(5.2d, row[3].Value.Double);
+        Assert.Equal(5.5m, row[4].Value.Decimal);
+        Assert.Equal(true, row[5].Value.Boolean);
     }
 
     private static void AddParameter(DbParameterCollection parameters, string parameterName, object value)

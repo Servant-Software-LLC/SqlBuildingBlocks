@@ -14,7 +14,7 @@ public class SqlInsertDefinitionTests
         SqlInsertDefinition sqlInsertDefinition = new();
         sqlInsertDefinition.Columns.Add(new(null, "Blogs", "Url"));
         sqlInsertDefinition.Table = new(null, "Blogs");
-        sqlInsertDefinition.Values = new List<SqlExpression>() { new SqlExpression(new SqlParameter("p0")) };
+        sqlInsertDefinition.Values = new List<IList<SqlExpression>>() { new List<SqlExpression> { new SqlExpression(new SqlParameter("p0")) } };
 
         DbParameterCollection parameters = new FakeParameterCollection();
         DbParameter testParameter = new FakeDbParameter
@@ -29,7 +29,8 @@ public class SqlInsertDefinitionTests
 
         // Assert
         Assert.Single(sqlInsertDefinition.Values);
-        var valueExpression = sqlInsertDefinition.Values[0];
+        Assert.Single(sqlInsertDefinition.Values[0]);
+        var valueExpression = sqlInsertDefinition.Values[0][0];
         Assert.Null(valueExpression.Parameter);
         Assert.NotNull(valueExpression.Value);
         var literalValue = valueExpression.Value;
