@@ -8,6 +8,8 @@ namespace SqlBuildingBlocks;
 public class AlterStmt : NonTerminal
 {
     private const string AlterColumnDefTermName = "alterColumnDef";
+    private const string AlterColumnDefaultDefTermName = "alterColumnDefaultDef";
+    private const string AlterColumnDefaultFuncCallTermName = "alterColumnDefaultFuncCall";
 
     public static string TermName => MethodBase.GetCurrentMethod().DeclaringType.Name.CamelCase();
 
@@ -41,16 +43,24 @@ public class AlterStmt : NonTerminal
         var COLUMN = grammar.ToTerm("COLUMN");
         var TO = grammar.ToTerm("TO");
         var TYPE = grammar.ToTerm("TYPE");
+        var SET = grammar.ToTerm("SET");
         var NULL = grammar.ToTerm("NULL");
         var NOT = grammar.ToTerm("NOT");
+        var DEFAULT = grammar.ToTerm("DEFAULT");
         var COLUMN_Optional = new NonTerminal("ColumnOptional", grammar.Empty | COLUMN);
         var alterCmd = new NonTerminal("alterCmd");
         var alterColumnDef = new NonTerminal(AlterColumnDefTermName);
+        var alterColumnDefaultDef = new NonTerminal(AlterColumnDefaultDefTermName);
+        var alterColumnDefaultFuncCall = new NonTerminal(AlterColumnDefaultFuncCallTermName);
         var nullSpecOpt = new NonTerminal("alterColumnNullSpecOpt");
 
         nullSpecOpt.Rule = NULL | NOT + NULL | grammar.Empty;
         alterColumnDef.Rule = TYPE + ColumnDef.DataType
                             | ColumnDef.DataType + nullSpecOpt;
+        alterColumnDefaultFuncCall.Rule = id.SimpleId + "(" + ")";
+        alterColumnDefaultDef.Rule = SET + DEFAULT + ColumnDef.LiteralValue
+                                   | SET + DEFAULT + alterColumnDefaultFuncCall
+                                   | DROP + DEFAULT;
 
         if (constraintDef != null)
         {
@@ -61,7 +71,8 @@ public class AlterStmt : NonTerminal
                           | RENAME + COLUMN_Optional + id + TO + id
                           | MODIFY + COLUMN_Optional + columnDef
                           | CHANGE + COLUMN_Optional + id + columnDef
-                          | ALTER + COLUMN_Optional + id + alterColumnDef;
+                          | ALTER + COLUMN_Optional + id + alterColumnDef
+                          | ALTER + COLUMN_Optional + id + alterColumnDefaultDef;
         }
         else
         {
@@ -71,7 +82,8 @@ public class AlterStmt : NonTerminal
                           | RENAME + COLUMN_Optional + id + TO + id
                           | MODIFY + COLUMN_Optional + columnDef
                           | CHANGE + COLUMN_Optional + id + columnDef
-                          | ALTER + COLUMN_Optional + id + alterColumnDef;
+                          | ALTER + COLUMN_Optional + id + alterColumnDef
+                          | ALTER + COLUMN_Optional + id + alterColumnDefaultDef;
         }
 
         Rule = ALTER + TABLE + id + alterCmd;
@@ -114,6 +126,15 @@ public class AlterStmt : NonTerminal
             var columnName = GetSimpleId(columnIdNode);
             var columnDef = CreateAlterColumnDefinition(alterColumnDefNode, columnName);
             sqlAlterTableDefinition.ColumnsToAlter.Add(new(columnName, columnDef, SqlAlterColumnOperation.Alter));
+            return;
+        }
+
+        var alterColumnDefaultDefNode = alterCmd.ChildNodes.FirstOrDefault(node => node.Term.Name == AlterColumnDefaultDefTermName);
+        if (alterColumnDefaultDefNode != null)
+        {
+            var columnIdNode = alterCmd.ChildNodes.First(node => node.Term.Name == Id.TermName);
+            var columnName = GetSimpleId(columnIdNode);
+            sqlAlterTableDefinition.ColumnDefaultsToAlter.Add(CreateAlterColumnDefaultAction(alterColumnDefaultDefNode, columnName));
             return;
         }
 
@@ -191,5 +212,21 @@ public class AlterStmt : NonTerminal
         }
 
         return columnDefinition;
+    }
+
+    private SqlAlterColumnDefaultAction CreateAlterColumnDefaultAction(ParseTreeNode alterColumnDefaultDef, string columnName)
+    {
+        var operation = alterColumnDefaultDef.ChildNodes[0].Term.Name;
+        if (operation == "DROP")
+            return new(columnName, SqlAlterColumnDefaultOperation.DropDefault);
+
+        var defaultValueNode = alterColumnDefaultDef.ChildNodes[alterColumnDefaultDef.ChildNodes.Count - 1];
+        if (defaultValueNode.Term.Name == AlterColumnDefaultFuncCallTermName)
+        {
+            var funcName = Id.SimpleId.Create(defaultValueNode.ChildNodes[0]);
+            return new(columnName, SqlAlterColumnDefaultOperation.SetDefault, defaultFunctionValue: new SqlFunction(funcName));
+        }
+
+        return new(columnName, SqlAlterColumnDefaultOperation.SetDefault, defaultLiteralValue: ColumnDef.LiteralValue.Create(defaultValueNode));
     }
 }

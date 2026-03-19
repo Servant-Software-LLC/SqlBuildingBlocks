@@ -452,4 +452,68 @@ public class AlterTableTests
         Assert.False(action.Column.AllowNulls);
     }
 
+    [Fact]
+    public void AlterColumn_SetDefault()
+    {
+        const string sql = @"ALTER TABLE products ALTER COLUMN status SET DEFAULT 'pending'";
+
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, sql);
+
+        var result = grammar.Create(node);
+
+        Assert.Equal("products", result.Table!.TableName);
+        Assert.Empty(result.ColumnsToAlter);
+        Assert.Single(result.ColumnDefaultsToAlter);
+
+        var action = result.ColumnDefaultsToAlter[0];
+        Assert.Equal(SqlAlterColumnDefaultOperation.SetDefault, action.Operation);
+        Assert.Equal("status", action.SourceColumnName);
+        Assert.NotNull(action.DefaultLiteralValue);
+        Assert.Equal("pending", action.DefaultLiteralValue!.Value);
+        Assert.Null(action.DefaultFunctionValue);
+    }
+
+    [Fact]
+    public void AlterColumn_SetDefault_Function()
+    {
+        const string sql = @"ALTER TABLE products ALTER COLUMN created_at SET DEFAULT GETDATE()";
+
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, sql);
+
+        var result = grammar.Create(node);
+
+        Assert.Equal("products", result.Table!.TableName);
+        Assert.Empty(result.ColumnsToAlter);
+        Assert.Single(result.ColumnDefaultsToAlter);
+
+        var action = result.ColumnDefaultsToAlter[0];
+        Assert.Equal(SqlAlterColumnDefaultOperation.SetDefault, action.Operation);
+        Assert.Equal("created_at", action.SourceColumnName);
+        Assert.Null(action.DefaultLiteralValue);
+        Assert.Equal("GETDATE", action.DefaultFunctionValue!.FunctionName);
+    }
+
+    [Fact]
+    public void AlterColumn_DropDefault()
+    {
+        const string sql = @"ALTER TABLE products ALTER COLUMN status DROP DEFAULT";
+
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, sql);
+
+        var result = grammar.Create(node);
+
+        Assert.Equal("products", result.Table!.TableName);
+        Assert.Empty(result.ColumnsToAlter);
+        Assert.Single(result.ColumnDefaultsToAlter);
+
+        var action = result.ColumnDefaultsToAlter[0];
+        Assert.Equal(SqlAlterColumnDefaultOperation.DropDefault, action.Operation);
+        Assert.Equal("status", action.SourceColumnName);
+        Assert.Null(action.DefaultLiteralValue);
+        Assert.Null(action.DefaultFunctionValue);
+    }
+
 }
