@@ -20,6 +20,10 @@ public class SelectStmt : NonTerminal
     private const string sWindowOrderByOpt = "windowOrderByOpt";
     private const string sWindowFrameOpt = "windowFrameOpt";
     private const string sWindowFrameBound = "windowFrameBound";
+    private const string sGroupClauseOpt = "groupClauseOpt";
+    private const string sGroupingSetSpec = "groupingSetSpec";
+    private const string sGroupingSetElement = "groupingSetElement";
+    private const string sGroupByElement = "groupByElement";
     private const bool ignoreCase = true;  //Exposure of this field may come later.
 
     protected readonly Grammar grammar;
@@ -149,8 +153,33 @@ public class SelectStmt : NonTerminal
 
         IdList idList = new IdList(grammar, Id);
 
-        var groupClauseOpt = new NonTerminal("groupClauseOpt");
-        groupClauseOpt.Rule = grammar.Empty | "GROUP" + BY + idList;
+        var ROLLUP = grammar.ToTerm("ROLLUP");
+        var CUBE = grammar.ToTerm("CUBE");
+        var GROUPING = grammar.ToTerm("GROUPING");
+        var SETS = grammar.ToTerm("SETS");
+
+        // GROUPING SETS element: (col1, col2) or ()
+        var groupingSetElement = new NonTerminal(sGroupingSetElement);
+        groupingSetElement.Rule = "(" + idList + ")" | "(" + ")";
+
+        var groupingSetElementList = new NonTerminal("groupingSetElementList");
+        groupingSetElementList.Rule = grammar.MakePlusRule(groupingSetElementList, COMMA, groupingSetElement);
+
+        // Grouping set specifications: ROLLUP(...), CUBE(...), GROUPING SETS(...)
+        var groupingSetSpec = new NonTerminal(sGroupingSetSpec);
+        groupingSetSpec.Rule = ROLLUP + "(" + idList + ")"
+                             | CUBE + "(" + idList + ")"
+                             | GROUPING + SETS + "(" + groupingSetElementList + ")";
+
+        // A GROUP BY element can be a plain column or a grouping set spec
+        var groupByElement = new NonTerminal(sGroupByElement);
+        groupByElement.Rule = Id | groupingSetSpec;
+
+        var groupByElementList = new NonTerminal("groupByElementList");
+        groupByElementList.Rule = grammar.MakePlusRule(groupByElementList, COMMA, groupByElement);
+
+        var groupClauseOpt = new NonTerminal(sGroupClauseOpt);
+        groupClauseOpt.Rule = grammar.Empty | "GROUP" + BY + groupByElementList;
 
         var havingClauseOpt = new NonTerminal("havingClauseOpt");
         havingClauseOpt.Rule = grammar.Empty | "HAVING" + expr;
@@ -258,6 +287,21 @@ public class SelectStmt : NonTerminal
             AddTables(sqlSelectDefinition, fromClauseOpt);
 
         sqlSelectDefinition.WhereClause = WhereClauseOpt?.Create(selectCore.ChildNodes[5]);
+
+        // GROUP BY clause
+        var groupClauseOptNode = selectCore.ChildNodes[6];
+        if (groupClauseOptNode.Term.Name == sGroupClauseOpt && groupClauseOptNode.ChildNodes.Count > 0)
+        {
+            sqlSelectDefinition.GroupBy = CreateGroupByClause(groupClauseOptNode);
+        }
+
+        // HAVING clause: havingClauseOpt → grammar.Empty | "HAVING" + expr
+        // When non-empty, child 0 is HAVING keyword, child 1 is expr
+        var havingClauseOptNode = selectCore.ChildNodes[7];
+        if (havingClauseOptNode.ChildNodes.Count > 0)
+        {
+            sqlSelectDefinition.HavingClause = Expr.Create(havingClauseOptNode.ChildNodes[1]);
+        }
     }
 
     protected virtual void AddSetOperations(SqlSelectDefinition sqlSelectDefinition, ParseTreeNode setOperationListOpt)
@@ -467,6 +511,96 @@ public class SelectStmt : NonTerminal
 
         foreach (SqlJoin sqlJoin in sqlJoins)
             sqlSelectDefinition.Joins.Add(sqlJoin);
+    }
+
+    /// <summary>
+    /// Creates a <see cref="SqlGroupByClause"/> from a groupClauseOpt parse tree node.
+    /// </summary>
+    protected virtual SqlGroupByClause CreateGroupByClause(ParseTreeNode groupClauseOptNode)
+    {
+        var groupBy = new SqlGroupByClause();
+
+        // groupClauseOpt → GROUP + BY + groupByElementList
+        // After GROUP and BY are consumed, we have the groupByElementList
+        var groupByElementList = groupClauseOptNode.ChildNodes[groupClauseOptNode.ChildNodes.Count - 1];
+
+        foreach (var elementNode in groupByElementList.ChildNodes)
+        {
+            // groupByElement → Id | groupingSetSpec
+            var child = elementNode.ChildNodes[0];
+
+            if (child.Term.Name == Id.TermName)
+            {
+                var columnBaseValues = Id.GetColumnBaseValues(child);
+                string columnName = columnBaseValues.TableName != null
+                    ? $"{columnBaseValues.TableName}.{columnBaseValues.ColumnName}"
+                    : columnBaseValues.ColumnName;
+                groupBy.Columns.Add(columnName);
+            }
+            else if (child.Term.Name == sGroupingSetSpec)
+            {
+                groupBy.GroupingSets.Add(CreateGroupingSet(child));
+            }
+        }
+
+        return groupBy;
+    }
+
+    /// <summary>
+    /// Creates a <see cref="SqlGroupingSet"/> from a groupingSetSpec parse tree node.
+    /// </summary>
+    protected virtual SqlGroupingSet CreateGroupingSet(ParseTreeNode groupingSetSpecNode)
+    {
+        var firstChild = groupingSetSpecNode.ChildNodes[0];
+        var keyword = firstChild.Token?.Text?.ToUpperInvariant() ?? firstChild.Term.Name.ToUpperInvariant();
+
+        if (keyword == "ROLLUP" || keyword == "CUBE")
+        {
+            var type = keyword == "ROLLUP" ? GroupingSetType.Rollup : GroupingSetType.Cube;
+            var groupingSet = new SqlGroupingSet(type);
+
+            // ROLLUP/CUBE + "(" + idList + ")"  → after punctuation stripping: [idList]
+            var idListNode = groupingSetSpecNode.ChildNodes[groupingSetSpecNode.ChildNodes.Count - 1];
+            foreach (var idNode in idListNode.ChildNodes)
+            {
+                var columnBaseValues = Id.GetColumnBaseValues(idNode);
+                string columnName = columnBaseValues.TableName != null
+                    ? $"{columnBaseValues.TableName}.{columnBaseValues.ColumnName}"
+                    : columnBaseValues.ColumnName;
+                groupingSet.Sets.Add(new List<string> { columnName });
+            }
+
+            return groupingSet;
+        }
+
+        // GROUPING SETS
+        var gsSet = new SqlGroupingSet(GroupingSetType.GroupingSets);
+
+        // GROUPING + SETS + "(" + groupingSetElementList + ")"
+        // After punctuation stripping: [groupingSetElementList]
+        var elementListNode = groupingSetSpecNode.ChildNodes[groupingSetSpecNode.ChildNodes.Count - 1];
+        foreach (var elementNode in elementListNode.ChildNodes)
+        {
+            // groupingSetElement → "(" + idList + ")" | "(" + ")"
+            // After punctuation stripping: [idList] or []
+            var columns = new List<string>();
+            if (elementNode.ChildNodes.Count > 0)
+            {
+                var idListInSet = elementNode.ChildNodes[0];
+                foreach (var idNode in idListInSet.ChildNodes)
+                {
+                    var columnBaseValues = Id.GetColumnBaseValues(idNode);
+                    string columnName = columnBaseValues.TableName != null
+                        ? $"{columnBaseValues.TableName}.{columnBaseValues.ColumnName}"
+                        : columnBaseValues.ColumnName;
+                    columns.Add(columnName);
+                }
+            }
+
+            gsSet.Sets.Add(columns);
+        }
+
+        return gsSet;
     }
 
     /// <summary>

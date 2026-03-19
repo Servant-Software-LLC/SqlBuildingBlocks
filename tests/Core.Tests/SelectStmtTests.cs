@@ -1807,4 +1807,218 @@ public class SelectStmtTests
         Assert.True(sumCol.IsDistinct);
     }
 
+    // ── GROUP BY with ROLLUP / CUBE / GROUPING SETS (#46) ───────────────
+
+    [Fact]
+    public void Select_GroupBy_SimpleColumns()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "SELECT department, COUNT(*) FROM employees GROUP BY department");
+
+        var selectStmt = ((SelectStmt)grammar.Root).Create(node);
+
+        Assert.NotNull(selectStmt.GroupBy);
+        Assert.Single(selectStmt.GroupBy!.Columns);
+        Assert.Equal("department", selectStmt.GroupBy.Columns[0]);
+        Assert.Empty(selectStmt.GroupBy.GroupingSets);
+    }
+
+    [Fact]
+    public void Select_GroupBy_MultipleColumns()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "SELECT department, region, COUNT(*) FROM employees GROUP BY department, region");
+
+        var selectStmt = ((SelectStmt)grammar.Root).Create(node);
+
+        Assert.NotNull(selectStmt.GroupBy);
+        Assert.Equal(2, selectStmt.GroupBy!.Columns.Count);
+        Assert.Equal("department", selectStmt.GroupBy.Columns[0]);
+        Assert.Equal("region", selectStmt.GroupBy.Columns[1]);
+    }
+
+    [Fact]
+    public void Select_GroupBy_Rollup()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "SELECT department, region, COUNT(*) FROM employees GROUP BY ROLLUP(department, region)");
+
+        var selectStmt = ((SelectStmt)grammar.Root).Create(node);
+
+        Assert.NotNull(selectStmt.GroupBy);
+        Assert.Empty(selectStmt.GroupBy!.Columns);
+        Assert.Single(selectStmt.GroupBy.GroupingSets);
+
+        var rollup = selectStmt.GroupBy.GroupingSets[0];
+        Assert.Equal(GroupingSetType.Rollup, rollup.Type);
+        Assert.Equal(2, rollup.Sets.Count);
+        Assert.Equal("department", rollup.Sets[0][0]);
+        Assert.Equal("region", rollup.Sets[1][0]);
+    }
+
+    [Fact]
+    public void Select_GroupBy_Cube()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "SELECT department, region, COUNT(*) FROM employees GROUP BY CUBE(department, region)");
+
+        var selectStmt = ((SelectStmt)grammar.Root).Create(node);
+
+        Assert.NotNull(selectStmt.GroupBy);
+        Assert.Empty(selectStmt.GroupBy!.Columns);
+        Assert.Single(selectStmt.GroupBy.GroupingSets);
+
+        var cube = selectStmt.GroupBy.GroupingSets[0];
+        Assert.Equal(GroupingSetType.Cube, cube.Type);
+        Assert.Equal(2, cube.Sets.Count);
+        Assert.Equal("department", cube.Sets[0][0]);
+        Assert.Equal("region", cube.Sets[1][0]);
+    }
+
+    [Fact]
+    public void Select_GroupBy_GroupingSets()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "SELECT department, region, COUNT(*) FROM employees GROUP BY GROUPING SETS((department), (region), ())");
+
+        var selectStmt = ((SelectStmt)grammar.Root).Create(node);
+
+        Assert.NotNull(selectStmt.GroupBy);
+        Assert.Empty(selectStmt.GroupBy!.Columns);
+        Assert.Single(selectStmt.GroupBy.GroupingSets);
+
+        var gs = selectStmt.GroupBy.GroupingSets[0];
+        Assert.Equal(GroupingSetType.GroupingSets, gs.Type);
+        Assert.Equal(3, gs.Sets.Count);
+
+        // First set: (department)
+        Assert.Single(gs.Sets[0]);
+        Assert.Equal("department", gs.Sets[0][0]);
+
+        // Second set: (region)
+        Assert.Single(gs.Sets[1]);
+        Assert.Equal("region", gs.Sets[1][0]);
+
+        // Third set: () — empty grouping set
+        Assert.Empty(gs.Sets[2]);
+    }
+
+    [Fact]
+    public void Select_GroupBy_GroupingSets_MultipleColumnsInSet()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "SELECT department, region, city, COUNT(*) FROM employees " +
+            "GROUP BY GROUPING SETS((department, region), (city), ())");
+
+        var selectStmt = ((SelectStmt)grammar.Root).Create(node);
+
+        Assert.NotNull(selectStmt.GroupBy);
+        var gs = selectStmt.GroupBy!.GroupingSets[0];
+        Assert.Equal(GroupingSetType.GroupingSets, gs.Type);
+        Assert.Equal(3, gs.Sets.Count);
+
+        // First set: (department, region)
+        Assert.Equal(2, gs.Sets[0].Count);
+        Assert.Equal("department", gs.Sets[0][0]);
+        Assert.Equal("region", gs.Sets[0][1]);
+
+        // Second set: (city)
+        Assert.Single(gs.Sets[1]);
+        Assert.Equal("city", gs.Sets[1][0]);
+
+        // Third set: ()
+        Assert.Empty(gs.Sets[2]);
+    }
+
+    [Fact]
+    public void Select_GroupBy_Rollup_SingleColumn()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "SELECT year, SUM(sales) FROM revenue GROUP BY ROLLUP(year)");
+
+        var selectStmt = ((SelectStmt)grammar.Root).Create(node);
+
+        Assert.NotNull(selectStmt.GroupBy);
+        var rollup = selectStmt.GroupBy!.GroupingSets[0];
+        Assert.Equal(GroupingSetType.Rollup, rollup.Type);
+        Assert.Single(rollup.Sets);
+        Assert.Equal("year", rollup.Sets[0][0]);
+    }
+
+    [Fact]
+    public void Select_GroupBy_WithHaving()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "SELECT department, COUNT(*) FROM employees GROUP BY department HAVING department > 5");
+
+        var selectStmt = ((SelectStmt)grammar.Root).Create(node);
+
+        Assert.NotNull(selectStmt.GroupBy);
+        Assert.Single(selectStmt.GroupBy!.Columns);
+        Assert.Equal("department", selectStmt.GroupBy.Columns[0]);
+        Assert.NotNull(selectStmt.HavingClause);
+    }
+
+    [Fact]
+    public void Select_NoGroupBy_GroupByIsNull()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "SELECT * FROM employees");
+
+        var selectStmt = ((SelectStmt)grammar.Root).Create(node);
+
+        Assert.Null(selectStmt.GroupBy);
+        Assert.Null(selectStmt.HavingClause);
+    }
+
+    [Fact]
+    public void Select_GroupBy_Cube_ThreeColumns()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "SELECT department, region, year, SUM(sales) FROM revenue " +
+            "GROUP BY CUBE(department, region, year)");
+
+        var selectStmt = ((SelectStmt)grammar.Root).Create(node);
+
+        Assert.NotNull(selectStmt.GroupBy);
+        var cube = selectStmt.GroupBy!.GroupingSets[0];
+        Assert.Equal(GroupingSetType.Cube, cube.Type);
+        Assert.Equal(3, cube.Sets.Count);
+        Assert.Equal("department", cube.Sets[0][0]);
+        Assert.Equal("region", cube.Sets[1][0]);
+        Assert.Equal("year", cube.Sets[2][0]);
+    }
+
+    [Fact]
+    public void Select_GroupBy_ColumnAndRollup()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "SELECT year, quarter, region, SUM(sales) FROM revenue " +
+            "GROUP BY year, ROLLUP(quarter, region)");
+
+        var selectStmt = ((SelectStmt)grammar.Root).Create(node);
+
+        Assert.NotNull(selectStmt.GroupBy);
+        Assert.Single(selectStmt.GroupBy!.Columns);
+        Assert.Equal("year", selectStmt.GroupBy.Columns[0]);
+        Assert.Single(selectStmt.GroupBy.GroupingSets);
+
+        var rollup = selectStmt.GroupBy.GroupingSets[0];
+        Assert.Equal(GroupingSetType.Rollup, rollup.Type);
+        Assert.Equal(2, rollup.Sets.Count);
+        Assert.Equal("quarter", rollup.Sets[0][0]);
+        Assert.Equal("region", rollup.Sets[1][0]);
+    }
+
 }
