@@ -18,10 +18,21 @@ public class SqlFunction
     /// <summary>
     /// If this instance, isn't replaced in the <see cref="SqlExpression" instances of a SQL statement before the
     /// <see cref="QueryEngine.Query"/> is called, then this property must be set in order for the <see cref="QueryEngine"/>
-    /// to be able to calculate its value.  This situation normally arises when the context of this function is 
+    /// to be able to calculate its value.  This situation normally arises when the context of this function is
     /// dependent on the columns specified in the <see cref="Arguments"/> property of this class.  For example, />
     /// <see href="https://learn.microsoft.com/en-us/sql/t-sql/functions/upper-transact-sql?view=sql-server-ver16">UPPER</see> </summary>
     public Func<object>? CalculateValue { get; set; }
+
+    /// <summary>
+    /// The optional OVER clause that makes this a window function.
+    /// e.g. ROW_NUMBER() OVER (PARTITION BY dept ORDER BY salary DESC)
+    /// </summary>
+    public SqlWindowSpecification? WindowSpecification { get; set; }
+
+    /// <summary>
+    /// Whether this function has an OVER clause, making it a window function.
+    /// </summary>
+    public bool IsWindowFunction => WindowSpecification != null;
 
     public SqlExpression? Accept(ISqlExpressionVisitor visitor) => visitor.Visit(this);
 
@@ -30,6 +41,9 @@ public class SqlFunction
     public override string ToString()
     {
         string arguments = string.Join(", ", Arguments.Select(arg => arg.ToString()));
-        return $"{FunctionName}({arguments})";
+        var result = $"{FunctionName}({arguments})";
+        if (WindowSpecification != null)
+            result += " " + WindowSpecification.ToString();
+        return result;
     }
 }

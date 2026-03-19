@@ -22,5 +22,16 @@ public class SqlAggregate : ISqlColumn, ISqlColumnWithAlias
 
     public string? ColumnAlias { get; set; }
 
+    /// <summary>
+    /// The optional OVER clause that makes this aggregate a window function.
+    /// e.g. SUM(salary) OVER (PARTITION BY department_id)
+    /// </summary>
+    public SqlWindowSpecification? WindowSpecification { get; set; }
+
+    /// <summary>
+    /// Whether this aggregate has an OVER clause, making it a window aggregate.
+    /// </summary>
+    public bool IsWindowFunction => WindowSpecification != null;
+
     public string? ColumnName => AggregateName;
 }
