@@ -20,7 +20,7 @@ public class VirtualDataTable
     public VirtualDataTable(VirtualDataTable virtualDataTable) => AdoptDataTable(virtualDataTable);
 
     public string TableName => schemaTable.TableName;
-    public DataColumnCollection? Columns => schemaTable.Columns;
+    public DataColumnCollection Columns => schemaTable.Columns;
     public IEnumerable<DataRow>? Rows { get; set; }
 
     public void AdoptDataTable(DataTable dataTable)
