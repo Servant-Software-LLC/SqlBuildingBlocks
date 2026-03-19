@@ -26,7 +26,7 @@ public class UpdateStmtTests
 
             expr.InitializeRule(selectStmt, funcCall);
 
-            UpdateStmt updateStmt = new(this, id, literalValue, parameter, funcCall, tableName, whereClauseOpt);
+            UpdateStmt updateStmt = new(this, id, literalValue, parameter, funcCall, tableName, whereClauseOpt, joinChainOpt);
 
             Root = updateStmt;
         }
@@ -122,6 +122,46 @@ public class UpdateStmtTests
         Assert.NotNull(sqlUpdateDefinition.Returning);
         Assert.NotNull(sqlUpdateDefinition.Returning.Column);
         Assert.Equal("Id", sqlUpdateDefinition.Returning.Column.ColumnName);
+    }
+
+    [Fact]
+    public void Update_WithJoinBeforeSet()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "UPDATE orders o JOIN customers c ON o.customer_id = c.id SET o.status = 'vip' WHERE c.tier = 'gold'");
+        var sqlUpdateDefinition = grammar.Create(node);
+
+        Assert.NotNull(sqlUpdateDefinition.Table);
+        Assert.Equal("orders", sqlUpdateDefinition.Table!.TableName);
+        Assert.Equal("o", sqlUpdateDefinition.Table.TableAlias);
+
+        Assert.Null(sqlUpdateDefinition.SourceTable);
+        Assert.Single(sqlUpdateDefinition.Joins);
+        Assert.Equal("customers", sqlUpdateDefinition.Joins[0].Table.TableName);
+        Assert.Equal("c", sqlUpdateDefinition.Joins[0].Table.TableAlias);
+
+        Assert.Single(sqlUpdateDefinition.Assignments);
+        Assert.Equal("status", sqlUpdateDefinition.Assignments[0].Column.ColumnName);
+        Assert.Equal("vip", sqlUpdateDefinition.Assignments[0].Value.String);
+    }
+
+    [Fact]
+    public void Update_WithFromJoinAfterSet()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "UPDATE o SET o.status = 'vip' FROM orders o JOIN customers c ON o.customer_id = c.id WHERE c.tier = 'gold'");
+        var sqlUpdateDefinition = grammar.Create(node);
+
+        Assert.NotNull(sqlUpdateDefinition.Table);
+        Assert.Equal("o", sqlUpdateDefinition.Table!.TableName);
+
+        Assert.NotNull(sqlUpdateDefinition.SourceTable);
+        Assert.Equal("orders", sqlUpdateDefinition.SourceTable!.TableName);
+        Assert.Equal("o", sqlUpdateDefinition.SourceTable.TableAlias);
+
+        Assert.Single(sqlUpdateDefinition.Joins);
+        Assert.Equal("customers", sqlUpdateDefinition.Joins[0].Table.TableName);
+        Assert.Equal("c", sqlUpdateDefinition.Joins[0].Table.TableAlias);
     }
 
 }

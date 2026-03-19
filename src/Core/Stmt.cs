@@ -28,7 +28,7 @@ public class Stmt : NonTerminal
         selectStmt.Expr.InitializeRule(selectStmt, funcCall);
 
         InsertStmt insertStmt = new(grammar, selectStmt);
-        UpdateStmt updateStmt = new(grammar, selectStmt.TableName, funcCall, whereClauseOpt);
+        UpdateStmt updateStmt = new(grammar, selectStmt.TableName, funcCall, whereClauseOpt, selectStmt.JoinChainOpt);
         DeleteStmt deleteStmt = new(grammar, selectStmt.TableName, whereClauseOpt, updateStmt.ReturningClauseOpt);
         CreateTableStmt createTableStmt = new(grammar, selectStmt.Id);
         AlterStmt alterStmt = new(grammar, selectStmt.Id, createTableStmt.ColumnDef);

@@ -8,6 +8,10 @@ public class SqlUpdateDefinition
 {
     public SqlTable? Table { get; set;  }
 
+    public SqlTable? SourceTable { get; set; }
+
+    public IList<SqlJoin> Joins { get; set; } = new List<SqlJoin>();
+
     public IList<SqlAssignment> Assignments { get; private set; } = new List<SqlAssignment>();
 
     public SqlExpression? WhereClause { get; set; }
@@ -28,6 +32,7 @@ public class SqlUpdateDefinition
         where TVisitor : ISqlValueVisitor, ISqlExpressionVisitor
     {
         AcceptAssignments(vistor);
+        AcceptJoins(vistor);
 
         AcceptWhereClause(vistor);
     }
@@ -56,6 +61,14 @@ public class SqlUpdateDefinition
         if (WhereClause != null)
         {
             WhereClause.Accept(sqlExpressionVisitor);
+        }
+    }
+
+    public void AcceptJoins(ISqlExpressionVisitor sqlExpressionVisitor)
+    {
+        foreach (SqlJoin join in Joins)
+        {
+            join.Condition.Accept(sqlExpressionVisitor);
         }
     }
 

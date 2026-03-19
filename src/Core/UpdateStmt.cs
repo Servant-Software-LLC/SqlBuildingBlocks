@@ -7,6 +7,8 @@ namespace SqlBuildingBlocks;
 
 public class UpdateStmt : NonTerminal
 {
+    private const string UpdateSourceOptTermName = "updateSourceOpt";
+
     public static string TermName => MethodBase.GetCurrentMethod().DeclaringType.Name.CamelCase();
 
     /// <summary>
@@ -15,17 +17,21 @@ public class UpdateStmt : NonTerminal
     /// <param name="grammar"></param>
     public UpdateStmt(Grammar grammar) : this(grammar, new Id(grammar)) { }
     public UpdateStmt(Grammar grammar, Id id) :
-        this(grammar, new TableName(grammar, id), new FuncCall(grammar, id), new WhereClauseOpt(grammar, id))  { }
-    public UpdateStmt(Grammar grammar, SelectStmt selectStmt) : this(grammar, selectStmt.TableName, selectStmt.FuncCall, selectStmt.WhereClauseOpt) { }
+        this(grammar, new TableName(grammar, id), new FuncCall(grammar, id), new WhereClauseOpt(grammar, id), new JoinChainOpt(grammar, new TableName(grammar, id), new Expr(grammar, id)))  { }
+    public UpdateStmt(Grammar grammar, SelectStmt selectStmt) : this(grammar, selectStmt.TableName, selectStmt.FuncCall, selectStmt.WhereClauseOpt, selectStmt.JoinChainOpt) { }
     public UpdateStmt(Grammar grammar, TableName tableName, FuncCall funcCall, WhereClauseOpt whereClauseOpt) :
-        this(grammar, whereClauseOpt.Expr.Id, whereClauseOpt.Expr.LiteralValue, whereClauseOpt.Expr.Parameter, funcCall, tableName, whereClauseOpt, new(grammar, whereClauseOpt.Expr.Id))   { }
+        this(grammar, tableName, funcCall, whereClauseOpt, new JoinChainOpt(grammar, tableName, whereClauseOpt.Expr)) { }
+    public UpdateStmt(Grammar grammar, TableName tableName, FuncCall funcCall, WhereClauseOpt whereClauseOpt, JoinChainOpt joinChainOpt) :
+        this(grammar, whereClauseOpt.Expr.Id, whereClauseOpt.Expr.LiteralValue, whereClauseOpt.Expr.Parameter, funcCall, tableName, whereClauseOpt, new(grammar, whereClauseOpt.Expr.Id), joinChainOpt)   { }
     public UpdateStmt(Grammar grammar, Id id, LiteralValue literalValue, Parameter parameter, FuncCall funcCall, TableName tableName, WhereClauseOpt whereClauseOpt) :
-        this(grammar, id, literalValue, parameter, funcCall, tableName, whereClauseOpt, new(grammar, id)) { }
+        this(grammar, id, literalValue, parameter, funcCall, tableName, whereClauseOpt, new(grammar, id), new JoinChainOpt(grammar, tableName, whereClauseOpt.Expr)) { }
+    public UpdateStmt(Grammar grammar, Id id, LiteralValue literalValue, Parameter parameter, FuncCall funcCall, TableName tableName, WhereClauseOpt whereClauseOpt, JoinChainOpt joinChainOpt) :
+        this(grammar, id, literalValue, parameter, funcCall, tableName, whereClauseOpt, new(grammar, id), joinChainOpt) { }
 
 
     public UpdateStmt(Grammar grammar, Id id, LiteralValue literalValue, Parameter parameter, 
                       FuncCall funcCall, TableName tableName, WhereClauseOpt whereClauseOpt,
-                      ReturningClauseOpt returningClauseOpt)
+                      ReturningClauseOpt returningClauseOpt, JoinChainOpt joinChainOpt)
         : base(TermName)
     {
         Id = id ?? throw new ArgumentNullException(nameof(id));
@@ -35,10 +41,12 @@ public class UpdateStmt : NonTerminal
         TableName = tableName ?? throw new ArgumentNullException(nameof(tableName));
         WhereClauseOpt = whereClauseOpt ?? throw new ArgumentNullException(nameof(whereClauseOpt));
         ReturningClauseOpt = returningClauseOpt ?? throw new ArgumentNullException(nameof(returningClauseOpt));
+        JoinChainOpt = joinChainOpt ?? throw new ArgumentNullException(nameof(joinChainOpt));
 
         var UPDATE = grammar.ToTerm("UPDATE");
         var SET = grammar.ToTerm("SET");
         var COMMA = grammar.ToTerm(",");
+        var FROM = grammar.ToTerm("FROM");
 
         // TODO: To simplify matters (for now), we only will take a literal value.
         // Context for future efforts:  The right side of a SET clause in an UPDATE statement is used to provide a new value for a field. So, it can contain any expression that results in a value of a type
@@ -59,8 +67,11 @@ public class UpdateStmt : NonTerminal
         var assignList = new NonTerminal("assignList");
         assignList.Rule = grammar.MakePlusRule(assignList, COMMA, assignment);
 
+        var updateSourceOpt = new NonTerminal(UpdateSourceOptTermName);
+        updateSourceOpt.Rule = grammar.Empty | FROM + tableName + JoinChainOpt;
 
-        Rule = UPDATE + tableName + SET + assignList + whereClauseOpt + returningClauseOpt;
+
+        Rule = UPDATE + tableName + JoinChainOpt + SET + assignList + updateSourceOpt + whereClauseOpt + returningClauseOpt;
 
         grammar.MarkTransient(assignmentValue);
     }
@@ -70,6 +81,7 @@ public class UpdateStmt : NonTerminal
     public Parameter Parameter { get; }
     public FuncCall FuncCall { get; }
     public TableName TableName { get; }
+    public JoinChainOpt JoinChainOpt { get; }
     public WhereClauseOpt WhereClauseOpt { get; }
     public ReturningClauseOpt ReturningClauseOpt { get; }
 
@@ -96,7 +108,9 @@ public class UpdateStmt : NonTerminal
 
         sqlUpdateDefinition.Table = TableName.Create(updateStmt.ChildNodes[1]);
 
-        var assignList = updateStmt.ChildNodes[3];
+        AddJoins(sqlUpdateDefinition, updateStmt.ChildNodes[2]);
+
+        var assignList = updateStmt.ChildNodes[4];
         foreach (ParseTreeNode assignment in assignList.ChildNodes)
         {
             var sqlColumn = Id.CreateColumn(assignment.ChildNodes[0]);
@@ -105,10 +119,29 @@ public class UpdateStmt : NonTerminal
             sqlUpdateDefinition.Assignments.Add(sqlAssignment);
         }
 
-        sqlUpdateDefinition.WhereClause = WhereClauseOpt.Create(updateStmt.ChildNodes[4]);
+        AddSource(sqlUpdateDefinition, updateStmt.ChildNodes[5]);
 
-        var returningClause = updateStmt.ChildNodes[5];
+        sqlUpdateDefinition.WhereClause = WhereClauseOpt.Create(updateStmt.ChildNodes[6]);
+
+        var returningClause = updateStmt.ChildNodes[7];
         sqlUpdateDefinition.Returning = ReturningClauseOpt.Create(returningClause);
+    }
+
+    protected virtual void AddJoins(SqlUpdateDefinition sqlUpdateDefinition, ParseTreeNode joinChainOptNode)
+    {
+        foreach (var join in JoinChainOpt.Create(joinChainOptNode))
+        {
+            sqlUpdateDefinition.Joins.Add(join);
+        }
+    }
+
+    protected virtual void AddSource(SqlUpdateDefinition sqlUpdateDefinition, ParseTreeNode updateSourceOptNode)
+    {
+        if (updateSourceOptNode.Term.Name != UpdateSourceOptTermName || updateSourceOptNode.ChildNodes.Count == 0)
+            return;
+
+        sqlUpdateDefinition.SourceTable = TableName.Create(updateSourceOptNode.ChildNodes[1]);
+        AddJoins(sqlUpdateDefinition, updateSourceOptNode.ChildNodes[2]);
     }
 
     protected virtual SqlAssignment CreateAssignment(SqlColumn sqlColumn, ParseTreeNode assignmentValue)
