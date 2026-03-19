@@ -944,4 +944,343 @@ public class SelectStmtTests
         Assert.Equal("descendants", selectStmt.Ctes[1].Name);
     }
 
+    // ── Window functions (OVER clause) ─────────────────────────────────────
+
+    [Fact]
+    public void Select_WindowFunction_PartitionBy()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "SELECT department_id, salary, " +
+            "ROW_NUMBER() OVER (PARTITION BY department_id) AS row_num " +
+            "FROM employees");
+
+        var selectStmt = ((SelectStmt)grammar.Root).Create(node);
+
+        Assert.Equal(3, selectStmt.Columns.Count);
+
+        // Third column: ROW_NUMBER() OVER (PARTITION BY department_id)
+        var funcColumn = Assert.IsType<SqlFunctionColumn>(selectStmt.Columns[2]);
+        Assert.Equal("ROW_NUMBER", funcColumn.Function.FunctionName);
+        Assert.Equal("row_num", funcColumn.ColumnAlias);
+        Assert.True(funcColumn.Function.IsWindowFunction);
+
+        var windowSpec = funcColumn.Function.WindowSpecification;
+        Assert.NotNull(windowSpec);
+        Assert.Single(windowSpec!.PartitionBy);
+        Assert.Empty(windowSpec.OrderBy);
+        Assert.Null(windowSpec.Frame);
+    }
+
+    [Fact]
+    public void Select_WindowFunction_OrderBy()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "SELECT name, salary, " +
+            "RANK() OVER (ORDER BY salary DESC) AS salary_rank " +
+            "FROM employees");
+
+        var selectStmt = ((SelectStmt)grammar.Root).Create(node);
+
+        var funcColumn = Assert.IsType<SqlFunctionColumn>(selectStmt.Columns[2]);
+        Assert.Equal("RANK", funcColumn.Function.FunctionName);
+        Assert.True(funcColumn.Function.IsWindowFunction);
+
+        var windowSpec = funcColumn.Function.WindowSpecification;
+        Assert.NotNull(windowSpec);
+        Assert.Empty(windowSpec!.PartitionBy);
+        Assert.Single(windowSpec.OrderBy);
+        Assert.Equal("salary", windowSpec.OrderBy[0].ColumnName);
+        Assert.True(windowSpec.OrderBy[0].Descending);
+    }
+
+    [Fact]
+    public void Select_WindowFunction_PartitionByAndOrderBy()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "SELECT department_id, name, salary, " +
+            "ROW_NUMBER() OVER (PARTITION BY department_id ORDER BY salary DESC) AS rank " +
+            "FROM employees");
+
+        var selectStmt = ((SelectStmt)grammar.Root).Create(node);
+
+        var funcColumn = Assert.IsType<SqlFunctionColumn>(selectStmt.Columns[3]);
+        Assert.Equal("ROW_NUMBER", funcColumn.Function.FunctionName);
+        Assert.True(funcColumn.Function.IsWindowFunction);
+
+        var windowSpec = funcColumn.Function.WindowSpecification;
+        Assert.NotNull(windowSpec);
+        Assert.Single(windowSpec!.PartitionBy);
+        Assert.Single(windowSpec.OrderBy);
+        Assert.Equal("salary", windowSpec.OrderBy[0].ColumnName);
+        Assert.True(windowSpec.OrderBy[0].Descending);
+    }
+
+    [Fact]
+    public void Select_WindowFunction_FrameClause_RowsBetween()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "SELECT id, value, " +
+            "COUNT(*) OVER (ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_total " +
+            "FROM transactions");
+
+        var selectStmt = ((SelectStmt)grammar.Root).Create(node);
+
+        var aggColumn = Assert.IsType<SqlAggregate>(selectStmt.Columns[2]);
+        Assert.Equal("COUNT", aggColumn.AggregateName);
+        Assert.True(aggColumn.IsWindowFunction);
+
+        var windowSpec = aggColumn.WindowSpecification;
+        Assert.NotNull(windowSpec);
+        Assert.Empty(windowSpec!.PartitionBy);
+        Assert.Single(windowSpec.OrderBy);
+        Assert.Equal("id", windowSpec.OrderBy[0].ColumnName);
+
+        // Frame clause
+        Assert.NotNull(windowSpec.Frame);
+        Assert.Equal(WindowFrameMode.Rows, windowSpec.Frame!.Mode);
+        Assert.Equal(WindowFrameBoundType.UnboundedPreceding, windowSpec.Frame.Start.Type);
+        Assert.NotNull(windowSpec.Frame.End);
+        Assert.Equal(WindowFrameBoundType.CurrentRow, windowSpec.Frame.End!.Type);
+    }
+
+    [Fact]
+    public void Select_WindowFunction_FrameClause_RangeBetween()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "SELECT id, amount, " +
+            "COUNT(*) OVER (ORDER BY id RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS overall_avg " +
+            "FROM orders");
+
+        var selectStmt = ((SelectStmt)grammar.Root).Create(node);
+
+        var aggColumn = Assert.IsType<SqlAggregate>(selectStmt.Columns[2]);
+        Assert.True(aggColumn.IsWindowFunction);
+
+        var windowSpec = aggColumn.WindowSpecification;
+        Assert.NotNull(windowSpec);
+        Assert.NotNull(windowSpec!.Frame);
+        Assert.Equal(WindowFrameMode.Range, windowSpec.Frame!.Mode);
+        Assert.Equal(WindowFrameBoundType.UnboundedPreceding, windowSpec.Frame.Start.Type);
+        Assert.NotNull(windowSpec.Frame.End);
+        Assert.Equal(WindowFrameBoundType.UnboundedFollowing, windowSpec.Frame.End!.Type);
+    }
+
+    [Fact]
+    public void Select_WindowFunction_FrameClause_NumericOffset()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "SELECT id, value, " +
+            "COUNT(*) OVER (ORDER BY id ROWS BETWEEN 3 PRECEDING AND 1 FOLLOWING) AS moving_avg " +
+            "FROM measurements");
+
+        var selectStmt = ((SelectStmt)grammar.Root).Create(node);
+
+        var aggColumn = Assert.IsType<SqlAggregate>(selectStmt.Columns[2]);
+        Assert.True(aggColumn.IsWindowFunction);
+
+        var windowSpec = aggColumn.WindowSpecification;
+        Assert.NotNull(windowSpec);
+        Assert.NotNull(windowSpec!.Frame);
+        Assert.Equal(WindowFrameMode.Rows, windowSpec.Frame!.Mode);
+        Assert.Equal(WindowFrameBoundType.Preceding, windowSpec.Frame.Start.Type);
+        Assert.Equal(3, windowSpec.Frame.Start.Offset);
+        Assert.NotNull(windowSpec.Frame.End);
+        Assert.Equal(WindowFrameBoundType.Following, windowSpec.Frame.End!.Type);
+        Assert.Equal(1, windowSpec.Frame.End.Offset);
+    }
+
+    [Fact]
+    public void Select_WindowFunction_CombinedPartitionByOrderByFrame()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "SELECT department_id, employee_id, salary, " +
+            "COUNT(*) OVER (PARTITION BY department_id ORDER BY employee_id " +
+            "ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS dept_running_total " +
+            "FROM employees");
+
+        var selectStmt = ((SelectStmt)grammar.Root).Create(node);
+
+        var aggColumn = Assert.IsType<SqlAggregate>(selectStmt.Columns[3]);
+        Assert.Equal("COUNT", aggColumn.AggregateName);
+        Assert.True(aggColumn.IsWindowFunction);
+
+        var windowSpec = aggColumn.WindowSpecification;
+        Assert.NotNull(windowSpec);
+
+        // PARTITION BY
+        Assert.Single(windowSpec!.PartitionBy);
+
+        // ORDER BY
+        Assert.Single(windowSpec.OrderBy);
+        Assert.Equal("employee_id", windowSpec.OrderBy[0].ColumnName);
+        Assert.False(windowSpec.OrderBy[0].Descending);
+
+        // Frame
+        Assert.NotNull(windowSpec.Frame);
+        Assert.Equal(WindowFrameMode.Rows, windowSpec.Frame!.Mode);
+        Assert.Equal(WindowFrameBoundType.UnboundedPreceding, windowSpec.Frame.Start.Type);
+        Assert.Equal(WindowFrameBoundType.CurrentRow, windowSpec.Frame.End!.Type);
+    }
+
+    [Fact]
+    public void Select_WindowFunction_EmptyOver()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "SELECT id, ROW_NUMBER() OVER () AS row_num FROM employees");
+
+        var selectStmt = ((SelectStmt)grammar.Root).Create(node);
+
+        var funcColumn = Assert.IsType<SqlFunctionColumn>(selectStmt.Columns[1]);
+        Assert.Equal("ROW_NUMBER", funcColumn.Function.FunctionName);
+        Assert.True(funcColumn.Function.IsWindowFunction);
+
+        var windowSpec = funcColumn.Function.WindowSpecification;
+        Assert.NotNull(windowSpec);
+        Assert.Empty(windowSpec!.PartitionBy);
+        Assert.Empty(windowSpec.OrderBy);
+        Assert.Null(windowSpec.Frame);
+    }
+
+    [Fact]
+    public void Select_WithoutOverClause_NoWindowSpecification()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "SELECT LAST_INSERT_ID() AS Id");
+
+        var selectStmt = ((SelectStmt)grammar.Root).Create(node);
+
+        var funcColumn = Assert.IsType<SqlFunctionColumn>(selectStmt.Columns[0]);
+        Assert.Equal("LAST_INSERT_ID", funcColumn.Function.FunctionName);
+        Assert.False(funcColumn.Function.IsWindowFunction);
+        Assert.Null(funcColumn.Function.WindowSpecification);
+    }
+
+    [Fact]
+    public void Select_AggregateWithoutOver_NoWindowSpecification()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "SELECT COUNT(*) FROM employees");
+
+        var selectStmt = ((SelectStmt)grammar.Root).Create(node);
+
+        var aggColumn = Assert.IsType<SqlAggregate>(selectStmt.Columns[0]);
+        Assert.Equal("COUNT", aggColumn.AggregateName);
+        Assert.False(aggColumn.IsWindowFunction);
+        Assert.Null(aggColumn.WindowSpecification);
+    }
+
+    [Fact]
+    public void Select_WindowFunction_MultiplePartitionByColumns()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "SELECT department_id, region, salary, " +
+            "DENSE_RANK() OVER (PARTITION BY department_id, region ORDER BY salary DESC) AS rank " +
+            "FROM employees");
+
+        var selectStmt = ((SelectStmt)grammar.Root).Create(node);
+
+        var funcColumn = Assert.IsType<SqlFunctionColumn>(selectStmt.Columns[3]);
+        Assert.Equal("DENSE_RANK", funcColumn.Function.FunctionName);
+        Assert.True(funcColumn.Function.IsWindowFunction);
+
+        var windowSpec = funcColumn.Function.WindowSpecification;
+        Assert.NotNull(windowSpec);
+        Assert.Equal(2, windowSpec!.PartitionBy.Count);
+        Assert.Single(windowSpec.OrderBy);
+    }
+
+    [Fact]
+    public void Select_WindowFunction_MultipleOrderByColumns()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "SELECT name, " +
+            "ROW_NUMBER() OVER (ORDER BY department_id ASC, salary DESC) AS row_num " +
+            "FROM employees");
+
+        var selectStmt = ((SelectStmt)grammar.Root).Create(node);
+
+        var funcColumn = Assert.IsType<SqlFunctionColumn>(selectStmt.Columns[1]);
+        Assert.True(funcColumn.Function.IsWindowFunction);
+
+        var windowSpec = funcColumn.Function.WindowSpecification;
+        Assert.NotNull(windowSpec);
+        Assert.Equal(2, windowSpec!.OrderBy.Count);
+        Assert.Equal("department_id", windowSpec.OrderBy[0].ColumnName);
+        Assert.False(windowSpec.OrderBy[0].Descending);
+        Assert.Equal("salary", windowSpec.OrderBy[1].ColumnName);
+        Assert.True(windowSpec.OrderBy[1].Descending);
+    }
+
+    [Fact]
+    public void Select_WindowFunction_FuncCallWithOverAndFrame()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "SELECT id, " +
+            "SUM(value) OVER (PARTITION BY category ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running " +
+            "FROM transactions");
+
+        var selectStmt = ((SelectStmt)grammar.Root).Create(node);
+
+        // SUM(value) may be parsed as FuncCall or Aggregate depending on grammar resolution
+        var column = selectStmt.Columns[1];
+        SqlWindowSpecification? windowSpec = null;
+        if (column is SqlFunctionColumn funcCol)
+        {
+            Assert.True(funcCol.Function.IsWindowFunction);
+            windowSpec = funcCol.Function.WindowSpecification;
+        }
+        else if (column is SqlAggregate aggCol)
+        {
+            Assert.True(aggCol.IsWindowFunction);
+            windowSpec = aggCol.WindowSpecification;
+        }
+        else
+        {
+            Assert.Fail("Expected SqlFunctionColumn or SqlAggregate");
+        }
+
+        Assert.NotNull(windowSpec);
+        Assert.Single(windowSpec!.PartitionBy);
+        Assert.Single(windowSpec.OrderBy);
+        Assert.NotNull(windowSpec.Frame);
+        Assert.Equal(WindowFrameMode.Rows, windowSpec.Frame!.Mode);
+        Assert.Equal(WindowFrameBoundType.UnboundedPreceding, windowSpec.Frame.Start.Type);
+        Assert.Equal(WindowFrameBoundType.CurrentRow, windowSpec.Frame.End!.Type);
+    }
+
+    [Fact]
+    public void Select_WindowFunction_FrameWithoutBetween()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "SELECT id, value, " +
+            "COUNT(*) OVER (ORDER BY id ROWS UNBOUNDED PRECEDING) AS running_total " +
+            "FROM transactions");
+
+        var selectStmt = ((SelectStmt)grammar.Root).Create(node);
+
+        var aggColumn = Assert.IsType<SqlAggregate>(selectStmt.Columns[2]);
+        Assert.True(aggColumn.IsWindowFunction);
+
+        var windowSpec = aggColumn.WindowSpecification;
+        Assert.NotNull(windowSpec);
+        Assert.NotNull(windowSpec!.Frame);
+        Assert.Equal(WindowFrameMode.Rows, windowSpec.Frame!.Mode);
+        Assert.Equal(WindowFrameBoundType.UnboundedPreceding, windowSpec.Frame.Start.Type);
+        Assert.Null(windowSpec.Frame.End);
+    }
+
 }
