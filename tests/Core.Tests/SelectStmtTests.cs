@@ -757,4 +757,92 @@ public class SelectStmtTests
         Assert.Same(derivedTable, projectedColumn.TableRef);
     }
 
+    // ── WITH clause (CTEs) ──────────────────────────────────────────────
+
+    [Fact]
+    public void Select_WithSingleCte_ParsesCteName()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "WITH active_employees AS (SELECT id, name FROM employees WHERE status = 'active') " +
+            "SELECT id, name FROM active_employees");
+
+        var selectStmt = ((SelectStmt)grammar.Root).Create(node);
+
+        Assert.Single(selectStmt.Ctes);
+        Assert.Equal("active_employees", selectStmt.Ctes[0].Name);
+
+        // CTE subquery
+        var cteSelect = selectStmt.Ctes[0].SelectDefinition;
+        Assert.Equal(2, cteSelect.Columns.Count);
+        Assert.Equal("employees", cteSelect.Table!.TableName);
+        Assert.NotNull(cteSelect.WhereClause);
+
+        // Outer query
+        Assert.Equal("active_employees", selectStmt.Table!.TableName);
+        Assert.Equal(2, selectStmt.Columns.Count);
+    }
+
+    [Fact]
+    public void Select_WithMultipleCtes_ParsesAll()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "WITH dept_totals AS (SELECT department_id, SUM(salary) AS total FROM employees GROUP BY department_id), " +
+            "high_depts AS (SELECT department_id FROM dept_totals WHERE total > 100000) " +
+            "SELECT name FROM employees WHERE department_id IN (SELECT department_id FROM high_depts)");
+
+        var selectStmt = ((SelectStmt)grammar.Root).Create(node);
+
+        Assert.Equal(2, selectStmt.Ctes.Count);
+        Assert.Equal("dept_totals", selectStmt.Ctes[0].Name);
+        Assert.Equal("high_depts", selectStmt.Ctes[1].Name);
+
+        // First CTE subquery
+        var cte1 = selectStmt.Ctes[0].SelectDefinition;
+        Assert.Equal("employees", cte1.Table!.TableName);
+
+        // Second CTE references first CTE
+        var cte2 = selectStmt.Ctes[1].SelectDefinition;
+        Assert.Equal("dept_totals", cte2.Table!.TableName);
+
+        // Outer query
+        Assert.Equal("employees", selectStmt.Table!.TableName);
+    }
+
+    [Fact]
+    public void Select_WithCteReferencingAnotherCte_Parses()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "WITH base AS (SELECT id, amount FROM orders), " +
+            "filtered AS (SELECT id FROM base WHERE amount > 50), " +
+            "final AS (SELECT id FROM filtered WHERE id > 10) " +
+            "SELECT * FROM final");
+
+        var selectStmt = ((SelectStmt)grammar.Root).Create(node);
+
+        Assert.Equal(3, selectStmt.Ctes.Count);
+        Assert.Equal("base", selectStmt.Ctes[0].Name);
+        Assert.Equal("filtered", selectStmt.Ctes[1].Name);
+        Assert.Equal("final", selectStmt.Ctes[2].Name);
+
+        // Verify chaining
+        Assert.Equal("orders", selectStmt.Ctes[0].SelectDefinition.Table!.TableName);
+        Assert.Equal("base", selectStmt.Ctes[1].SelectDefinition.Table!.TableName);
+        Assert.Equal("filtered", selectStmt.Ctes[2].SelectDefinition.Table!.TableName);
+        Assert.Equal("final", selectStmt.Table!.TableName);
+    }
+
+    [Fact]
+    public void Select_WithoutCte_HasEmptyCtesList()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "SELECT id FROM employees");
+
+        var selectStmt = ((SelectStmt)grammar.Root).Create(node);
+
+        Assert.Empty(selectStmt.Ctes);
+    }
+
 }

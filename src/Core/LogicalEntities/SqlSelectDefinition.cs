@@ -7,6 +7,8 @@ namespace SqlBuildingBlocks.LogicalEntities;
 
 public class SqlSelectDefinition
 {
+    public IList<SqlCteDefinition> Ctes { get; set; } = new List<SqlCteDefinition>();
+
     public IList<ISqlColumn> Columns { get; private set; } = new List<ISqlColumn>();
 
     public SqlTable? Table { get; set; }

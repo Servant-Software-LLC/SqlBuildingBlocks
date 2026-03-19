@@ -35,8 +35,8 @@ public class SelectStmt : SqlBuildingBlocks.SelectStmt
     {
         var sqlSelectDefinition = base.Create(selectStmt);
 
-        if (selectStmt.ChildNodes.Count > 3)
-            sqlSelectDefinition.Limit = limitOffsetClauseOpt!.Create(selectStmt.ChildNodes[3]);
+        if (selectStmt.ChildNodes.Count > 4)
+            sqlSelectDefinition.Limit = limitOffsetClauseOpt!.Create(selectStmt.ChildNodes[4]);
 
         return sqlSelectDefinition;
     }
