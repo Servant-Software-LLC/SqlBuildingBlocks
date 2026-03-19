@@ -5,6 +5,20 @@ namespace SqlBuildingBlocks.LogicalEntities;
 
 public class SqlFunction
 {
+    private static readonly Dictionary<string, WindowFunctionType> KnownWindowFunctions =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["ROW_NUMBER"] = WindowFunctionType.RowNumber,
+            ["RANK"] = WindowFunctionType.Rank,
+            ["DENSE_RANK"] = WindowFunctionType.DenseRank,
+            ["NTILE"] = WindowFunctionType.Ntile,
+            ["LAG"] = WindowFunctionType.Lag,
+            ["LEAD"] = WindowFunctionType.Lead,
+            ["FIRST_VALUE"] = WindowFunctionType.FirstValue,
+            ["LAST_VALUE"] = WindowFunctionType.LastValue,
+            ["NTH_VALUE"] = WindowFunctionType.NthValue,
+        };
+
     public SqlFunction(string functionName)
     {
         FunctionName = functionName;
@@ -33,6 +47,20 @@ public class SqlFunction
     /// Whether this function has an OVER clause, making it a window function.
     /// </summary>
     public bool IsWindowFunction => WindowSpecification != null;
+
+    /// <summary>
+    /// Identifies this function as a well-known named window function (ROW_NUMBER, RANK, etc.),
+    /// or <see cref="WindowFunctionType.None"/> if it is not a recognized window function name.
+    /// This is determined by the function name regardless of whether an OVER clause is present.
+    /// </summary>
+    public WindowFunctionType WindowFunctionType =>
+        KnownWindowFunctions.TryGetValue(FunctionName, out var type) ? type : WindowFunctionType.None;
+
+    /// <summary>
+    /// Whether this function's name is a recognized named window function
+    /// (ROW_NUMBER, RANK, DENSE_RANK, NTILE, LAG, LEAD, FIRST_VALUE, LAST_VALUE, NTH_VALUE).
+    /// </summary>
+    public bool IsNamedWindowFunction => WindowFunctionType != WindowFunctionType.None;
 
     public SqlExpression? Accept(ISqlExpressionVisitor visitor) => visitor.Visit(this);
 

@@ -116,3 +116,30 @@ public enum WindowFrameBoundType
     Following,
     UnboundedFollowing
 }
+
+/// <summary>
+/// Identifies well-known named window functions.
+/// </summary>
+public enum WindowFunctionType
+{
+    /// <summary>Not a recognized named window function.</summary>
+    None,
+    /// <summary>ROW_NUMBER() — sequential row number within the partition.</summary>
+    RowNumber,
+    /// <summary>RANK() — rank with gaps for ties.</summary>
+    Rank,
+    /// <summary>DENSE_RANK() — rank without gaps for ties.</summary>
+    DenseRank,
+    /// <summary>NTILE(n) — distributes rows into n buckets.</summary>
+    Ntile,
+    /// <summary>LAG(expr [, offset [, default]]) — access a previous row's value.</summary>
+    Lag,
+    /// <summary>LEAD(expr [, offset [, default]]) — access a following row's value.</summary>
+    Lead,
+    /// <summary>FIRST_VALUE(expr) — first value in the window frame.</summary>
+    FirstValue,
+    /// <summary>LAST_VALUE(expr) — last value in the window frame.</summary>
+    LastValue,
+    /// <summary>NTH_VALUE(expr, n) — nth value in the window frame.</summary>
+    NthValue
+}
