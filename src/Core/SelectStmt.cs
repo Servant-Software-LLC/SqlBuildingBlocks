@@ -70,7 +70,7 @@ public class SelectStmt : NonTerminal
         aggregateName.Rule = COUNT | "Avg" | "Min" | "Max" | "StDev" | "StDevP" | "Sum" | "Var" | "VarP";
 
         var aggregateArg = new NonTerminal("aggregateArg");
-        aggregateArg.Rule = expr | "*";
+        aggregateArg.Rule = expr | "*" | "DISTINCT" + expr;
 
         var aggregate = new NonTerminal(sAggregate);
         aggregate.Rule = aggregateName + "(" + aggregateArg + ")";
@@ -408,9 +408,17 @@ public class SelectStmt : NonTerminal
         if (columnType.Term.Name == sAggregate)
         {
             var aggregateName = columnType.ChildNodes[0].ChildNodes[0].Term.Name;
-            var aggregateArg = columnType.ChildNodes[1].ChildNodes[0].Token.ValueString == "*" ? null : Expr!.Create(columnType.ChildNodes[1].ChildNodes[0]);
+
+            var aggregateArgNode = columnType.ChildNodes[1];
+            bool isDistinct = aggregateArgNode.ChildNodes.Count == 2;
+
+            // When DISTINCT is present: children are [DISTINCT-token, expr]
+            // When not present: children are [expr] or [*-token]
+            var argChild = isDistinct ? aggregateArgNode.ChildNodes[1] : aggregateArgNode.ChildNodes[0];
+            var aggregateArg = argChild.Token?.ValueString == "*" ? null : Expr!.Create(argChild);
             var aggregate = new SqlAggregate(aggregateName, aggregateArg)
             {
+                IsDistinct = isDistinct,
                 ColumnAlias = alias,
                 WindowSpecification = windowSpec
             };

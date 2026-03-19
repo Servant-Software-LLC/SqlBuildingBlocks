@@ -1642,4 +1642,169 @@ public class SelectStmtTests
         Assert.True(windowSpec.OrderBy[0].Descending);
     }
 
+    // ── DISTINCT in aggregate functions (#45) ────────────────────────────
+
+    [Fact]
+    public void Select_CountDistinct()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "SELECT COUNT(DISTINCT category) FROM products");
+
+        var selectStmt = ((SelectStmt)grammar.Root).Create(node);
+
+        Assert.Single(selectStmt.Columns);
+        var aggColumn = Assert.IsType<SqlAggregate>(selectStmt.Columns[0]);
+        Assert.Equal("COUNT", aggColumn.AggregateName);
+        Assert.True(aggColumn.IsDistinct);
+        Assert.NotNull(aggColumn.Argument);
+    }
+
+    [Fact]
+    public void Select_SumDistinct()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "SELECT Sum(DISTINCT amount) FROM orders");
+
+        var selectStmt = ((SelectStmt)grammar.Root).Create(node);
+
+        Assert.Single(selectStmt.Columns);
+        var aggColumn = Assert.IsType<SqlAggregate>(selectStmt.Columns[0]);
+        Assert.Equal("Sum", aggColumn.AggregateName);
+        Assert.True(aggColumn.IsDistinct);
+        Assert.NotNull(aggColumn.Argument);
+    }
+
+    [Fact]
+    public void Select_AvgDistinct()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "SELECT Avg(DISTINCT score) FROM results");
+
+        var selectStmt = ((SelectStmt)grammar.Root).Create(node);
+
+        Assert.Single(selectStmt.Columns);
+        var aggColumn = Assert.IsType<SqlAggregate>(selectStmt.Columns[0]);
+        Assert.Equal("Avg", aggColumn.AggregateName);
+        Assert.True(aggColumn.IsDistinct);
+        Assert.NotNull(aggColumn.Argument);
+    }
+
+    [Fact]
+    public void Select_MinDistinct()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "SELECT Min(DISTINCT price) FROM products");
+
+        var selectStmt = ((SelectStmt)grammar.Root).Create(node);
+
+        Assert.Single(selectStmt.Columns);
+        var aggColumn = Assert.IsType<SqlAggregate>(selectStmt.Columns[0]);
+        Assert.Equal("Min", aggColumn.AggregateName);
+        Assert.True(aggColumn.IsDistinct);
+        Assert.NotNull(aggColumn.Argument);
+    }
+
+    [Fact]
+    public void Select_MaxDistinct()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "SELECT Max(DISTINCT salary) FROM employees");
+
+        var selectStmt = ((SelectStmt)grammar.Root).Create(node);
+
+        Assert.Single(selectStmt.Columns);
+        var aggColumn = Assert.IsType<SqlAggregate>(selectStmt.Columns[0]);
+        Assert.Equal("Max", aggColumn.AggregateName);
+        Assert.True(aggColumn.IsDistinct);
+        Assert.NotNull(aggColumn.Argument);
+    }
+
+    [Fact]
+    public void Select_CountWithoutDistinct_IsDistinctFalse()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "SELECT COUNT(category) FROM products");
+
+        var selectStmt = ((SelectStmt)grammar.Root).Create(node);
+
+        var aggColumn = Assert.IsType<SqlAggregate>(selectStmt.Columns[0]);
+        Assert.Equal("COUNT", aggColumn.AggregateName);
+        Assert.False(aggColumn.IsDistinct);
+        Assert.NotNull(aggColumn.Argument);
+    }
+
+    [Fact]
+    public void Select_CountStarWithoutDistinct_IsDistinctFalse()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "SELECT COUNT(*) FROM products");
+
+        var selectStmt = ((SelectStmt)grammar.Root).Create(node);
+
+        var aggColumn = Assert.IsType<SqlAggregate>(selectStmt.Columns[0]);
+        Assert.Equal("COUNT", aggColumn.AggregateName);
+        Assert.False(aggColumn.IsDistinct);
+        Assert.Null(aggColumn.Argument);
+    }
+
+    [Fact]
+    public void Select_CountDistinct_WithAlias()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "SELECT COUNT(DISTINCT category) AS unique_categories FROM products");
+
+        var selectStmt = ((SelectStmt)grammar.Root).Create(node);
+
+        var aggColumn = Assert.IsType<SqlAggregate>(selectStmt.Columns[0]);
+        Assert.Equal("COUNT", aggColumn.AggregateName);
+        Assert.True(aggColumn.IsDistinct);
+        Assert.NotNull(aggColumn.Argument);
+        Assert.Equal("unique_categories", aggColumn.ColumnAlias);
+    }
+
+    [Fact]
+    public void Select_CountDistinct_WithWindowFunction()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "SELECT COUNT(DISTINCT category) OVER (PARTITION BY region) AS dist_count FROM products");
+
+        var selectStmt = ((SelectStmt)grammar.Root).Create(node);
+
+        var aggColumn = Assert.IsType<SqlAggregate>(selectStmt.Columns[0]);
+        Assert.Equal("COUNT", aggColumn.AggregateName);
+        Assert.True(aggColumn.IsDistinct);
+        Assert.True(aggColumn.IsWindowFunction);
+        Assert.NotNull(aggColumn.WindowSpecification);
+        Assert.Single(aggColumn.WindowSpecification!.PartitionBy);
+    }
+
+    [Fact]
+    public void Select_MultipleDistinctAggregates()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "SELECT COUNT(DISTINCT category) AS cat_count, Sum(DISTINCT amount) AS total FROM orders");
+
+        var selectStmt = ((SelectStmt)grammar.Root).Create(node);
+
+        Assert.Equal(2, selectStmt.Columns.Count);
+
+        var countCol = Assert.IsType<SqlAggregate>(selectStmt.Columns[0]);
+        Assert.Equal("COUNT", countCol.AggregateName);
+        Assert.True(countCol.IsDistinct);
+
+        var sumCol = Assert.IsType<SqlAggregate>(selectStmt.Columns[1]);
+        Assert.Equal("Sum", sumCol.AggregateName);
+        Assert.True(sumCol.IsDistinct);
+    }
+
 }
