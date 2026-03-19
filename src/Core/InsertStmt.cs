@@ -45,8 +45,14 @@ public class InsertStmt : NonTerminal
 
         exprList = new(grammar, expr);
 
+        var valueTuple = new NonTerminal("valueTuple");
+        valueTuple.Rule = "(" + exprList + ")";
+
+        var valueTupleList = new NonTerminal("valueTupleList");
+        valueTupleList.Rule = grammar.MakePlusRule(valueTupleList, grammar.ToTerm(","), valueTuple);
+
         var insertData = new NonTerminal("insertData");
-        insertData.Rule = selectStmt | VALUES + "(" + exprList + ")";
+        insertData.Rule = selectStmt | VALUES + valueTupleList;
 
         Rule = INSERT + intoOpt + id + idlistPar + insertData;
 
@@ -104,7 +110,13 @@ public class InsertStmt : NonTerminal
 
         if (isValues)
         {
-            sqlInsertDefinition.Values = exprList.Create(insertData.ChildNodes[1]);
+            var valueTupleList = insertData.ChildNodes[1];
+            var rows = new List<IList<SqlExpression>>();
+            foreach (var tupleNode in valueTupleList.ChildNodes)
+            {
+                rows.Add(exprList.Create(tupleNode.ChildNodes[0]));
+            }
+            sqlInsertDefinition.Values = rows;
         }
         else
         {

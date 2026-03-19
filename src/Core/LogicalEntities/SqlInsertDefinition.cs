@@ -13,7 +13,11 @@ public class SqlInsertDefinition
 
     //Either Values or SelectDefinition will be set, but not both properties.
 
-    public IList<SqlExpression>? Values { get; set; }
+    /// <summary>
+    /// Each element is one row of VALUES expressions.
+    /// For example, VALUES (1,2),(3,4) produces two inner lists of two expressions each.
+    /// </summary>
+    public IList<IList<SqlExpression>>? Values { get; set; }
 
     public SqlSelectDefinition? SelectDefinition { get; set; }
 
@@ -39,9 +43,12 @@ public class SqlInsertDefinition
 
     public void AcceptColumns(ISqlExpressionVisitor visitor)
     {
-        foreach (var value in Values!)
+        foreach (var row in Values!)
         {
-            value.Accept(visitor);
+            foreach (var value in row)
+            {
+                value.Accept(visitor);
+            }
         }
     }
 
