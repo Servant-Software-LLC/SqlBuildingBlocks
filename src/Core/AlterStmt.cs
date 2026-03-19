@@ -32,7 +32,9 @@ public class AlterStmt : NonTerminal
         var TABLE = grammar.ToTerm("TABLE");
         var ADD = grammar.ToTerm("ADD");
         var DROP = grammar.ToTerm("DROP");
+        var RENAME = grammar.ToTerm("RENAME");
         var COLUMN = grammar.ToTerm("COLUMN");
+        var TO = grammar.ToTerm("TO");
         var COLUMN_Optional = new NonTerminal("ColumnOptional", grammar.Empty | COLUMN);
         var alterCmd = new NonTerminal("alterCmd");
 
@@ -40,20 +42,22 @@ public class AlterStmt : NonTerminal
         {
             alterCmd.Rule = ADD + COLUMN_Optional + columnDef
                           | DROP + COLUMN_Optional + id
-                          | ADD + constraintDef;
+                          | ADD + constraintDef
+                          | RENAME + COLUMN_Optional + id + TO + id;
         }
         else
         {
             alterCmd.Rule = ADD + COLUMN_Optional + columnDef
-                          | DROP + COLUMN_Optional + id;
+                          | DROP + COLUMN_Optional + id
+                          | RENAME + COLUMN_Optional + id + TO + id;
         }
 
         Rule = ALTER + TABLE + id + alterCmd;
 
         grammar.MarkPunctuation("(", ")");
 
-        // Mark ALTER, TABLE, and COLUMN as punctuation
-        grammar.MarkPunctuation("ALTER", "TABLE", "COLUMN");
+        // Mark ALTER, TABLE, COLUMN, and TO as punctuation
+        grammar.MarkPunctuation("ALTER", "TABLE", "COLUMN", "TO");
     }
 
     public Id Id { get; }
@@ -105,6 +109,12 @@ public class AlterStmt : NonTerminal
         {
             var columnName = alterCmd.ChildNodes[2].ChildNodes[0].ChildNodes[0].Token.ValueString;
             sqlAlterTableDefinition.ColumnsToDrop.Add(columnName);
+        }
+        else if (alterType == "RENAME")
+        {
+            var oldName = alterCmd.ChildNodes[2].ChildNodes[0].ChildNodes[0].Token.ValueString;
+            var newName = alterCmd.ChildNodes[3].ChildNodes[0].ChildNodes[0].Token.ValueString;
+            sqlAlterTableDefinition.ColumnsToRename.Add((oldName, newName));
         }
     }
 }

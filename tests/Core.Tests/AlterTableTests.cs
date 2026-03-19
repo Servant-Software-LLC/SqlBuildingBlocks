@@ -227,4 +227,48 @@ public class AlterTableTests
         Assert.NotNull(constraint.CheckConstraint);
     }
 
+    [Fact]
+    public void RenameColumn_Simple()
+    {
+        //Setup
+        const string sql = @"ALTER TABLE Customers RENAME Age TO BirthYear";
+
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, sql);
+
+        //Act
+        var sqlAlterTableDefinition = grammar.Create(node);
+
+        //Assert
+        Assert.Equal("Customers", sqlAlterTableDefinition.Table!.TableName);
+        Assert.Empty(sqlAlterTableDefinition.ColumnsToAdd);
+        Assert.Empty(sqlAlterTableDefinition.ColumnsToDrop);
+        Assert.Single(sqlAlterTableDefinition.ColumnsToRename);
+        var (oldName, newName) = sqlAlterTableDefinition.ColumnsToRename[0];
+        Assert.Equal("Age", oldName);
+        Assert.Equal("BirthYear", newName);
+    }
+
+    [Fact]
+    public void RenameColumn_WithColumnKeyword()
+    {
+        //Setup
+        const string sql = @"ALTER TABLE Customers RENAME COLUMN Age TO BirthYear";
+
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, sql);
+
+        //Act
+        var sqlAlterTableDefinition = grammar.Create(node);
+
+        //Assert
+        Assert.Equal("Customers", sqlAlterTableDefinition.Table!.TableName);
+        Assert.Empty(sqlAlterTableDefinition.ColumnsToAdd);
+        Assert.Empty(sqlAlterTableDefinition.ColumnsToDrop);
+        Assert.Single(sqlAlterTableDefinition.ColumnsToRename);
+        var (oldName, newName) = sqlAlterTableDefinition.ColumnsToRename[0];
+        Assert.Equal("Age", oldName);
+        Assert.Equal("BirthYear", newName);
+    }
+
 }
