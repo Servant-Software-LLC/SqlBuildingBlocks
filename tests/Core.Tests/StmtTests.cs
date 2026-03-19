@@ -22,8 +22,9 @@ public class StmtTests
             DeleteStmt deleteStmt = new(this, selectStmt.TableName, selectStmt.WhereClauseOpt, updateStmt.ReturningClauseOpt);
             CreateTableStmt createTableStmt = new(this, selectStmt.Id);
             AlterStmt alterStmt = new(this, selectStmt.Id, createTableStmt.ColumnDef);
+            RenameTableStmt renameTableStmt = new(this, selectStmt.Id);
 
-            Stmt stmt = new(this, selectStmt, insertStmt, updateStmt, deleteStmt, createTableStmt, alterStmt);
+            Stmt stmt = new(this, selectStmt, insertStmt, updateStmt, deleteStmt, createTableStmt, alterStmt, renameTableStmt);
             Root = stmt;
         }
 
@@ -48,6 +49,7 @@ public class StmtTests
         Assert.Null(sqlDefinition.Delete);
         Assert.Null(sqlDefinition.Create);
         Assert.Null(sqlDefinition.Alter);
+        Assert.Null(sqlDefinition.Rename);
     }
 
     [Fact]
@@ -67,6 +69,7 @@ public class StmtTests
         Assert.Null(sqlDefinition.Delete);
         Assert.Null(sqlDefinition.Create);
         Assert.Null(sqlDefinition.Alter);
+        Assert.Null(sqlDefinition.Rename);
     }
 
     [Fact]
@@ -86,6 +89,7 @@ public class StmtTests
         Assert.Null(sqlDefinition.Delete);
         Assert.Null(sqlDefinition.Create);
         Assert.Null(sqlDefinition.Alter);
+        Assert.Null(sqlDefinition.Rename);
     }
 
     [Fact]
@@ -105,6 +109,7 @@ public class StmtTests
         Assert.NotNull(sqlDefinition.Delete);
         Assert.Null(sqlDefinition.Create);
         Assert.Null(sqlDefinition.Alter);
+        Assert.Null(sqlDefinition.Rename);
     }
 
     [Fact]
@@ -124,6 +129,7 @@ public class StmtTests
         Assert.Null(sqlDefinition.Delete);
         Assert.NotNull(sqlDefinition.Create);
         Assert.Null(sqlDefinition.Alter);
+        Assert.Null(sqlDefinition.Rename);
     }
 
     [Fact]
@@ -143,5 +149,25 @@ public class StmtTests
         Assert.Null(sqlDefinition.Delete);
         Assert.Null(sqlDefinition.Create);
         Assert.NotNull(sqlDefinition.Alter);
+        Assert.Null(sqlDefinition.Rename);
+    }
+
+    [Fact]
+    public void Stmt_RenameTable()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "RENAME TABLE Customers TO Clients");
+
+        DatabaseConnectionProvider databaseConnectionProvider = new();
+        TableSchemaProvider tableSchemaProvider = new();
+        var sqlDefinition = grammar.Create(node, databaseConnectionProvider, tableSchemaProvider);
+
+        Assert.Null(sqlDefinition.Select);
+        Assert.Null(sqlDefinition.Insert);
+        Assert.Null(sqlDefinition.Update);
+        Assert.Null(sqlDefinition.Delete);
+        Assert.Null(sqlDefinition.Create);
+        Assert.Null(sqlDefinition.Alter);
+        Assert.NotNull(sqlDefinition.Rename);
     }
 }

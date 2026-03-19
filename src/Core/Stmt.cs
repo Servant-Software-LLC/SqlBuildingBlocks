@@ -33,8 +33,9 @@ public class Stmt : NonTerminal
         CreateTableStmt createTableStmt = new(grammar, selectStmt.Id);
         AlterStmt alterStmt = new(grammar, selectStmt.Id, createTableStmt.ColumnDef);
         DropTableStmt dropTableStmt = new(grammar, selectStmt.Id);
+        RenameTableStmt renameTableStmt = new(grammar, selectStmt.Id);
 
-        var internalState = DetermineInternalState(selectStmt, insertStmt, updateStmt, deleteStmt, createTableStmt, alterStmt, dropTableStmt);
+        var internalState = DetermineInternalState(selectStmt, insertStmt, updateStmt, deleteStmt, createTableStmt, alterStmt, dropTableStmt, renameTableStmt);
         stmts = internalState.Stmts;
         Rule = internalState.Rule;
         grammar.MarkTransient(this);
@@ -65,6 +66,7 @@ public class Stmt : NonTerminal
         CreateTableStmt? createTableStmt = null;
         AlterStmt? alterStmt = null;
         DropTableStmt? dropTableStmt = null;
+        RenameTableStmt? renameTableStmt = null;
 
         //Compose the rule for this instance from all of the provided statments.
         for (int i = 0; i < stmts.Length; i++)
@@ -97,6 +99,9 @@ public class Stmt : NonTerminal
                 case DropTableStmt dropTableStmt1:
                     dropTableStmt = dropTableStmt1;
                     break;
+                case RenameTableStmt renameTableStmt1:
+                    renameTableStmt = renameTableStmt1;
+                    break;
                 default:
                     throw new ArgumentOutOfRangeException($"The statement of type {stmt.GetType()} was not expected.");
             }
@@ -107,7 +112,7 @@ public class Stmt : NonTerminal
                 rule |= stmts[i];
         }
 
-        return new(rule!, new(selectStmt, insertStmt, updateStmt, deleteStmt, createTableStmt, alterStmt, dropTableStmt));
+        return new(rule!, new(selectStmt, insertStmt, updateStmt, deleteStmt, createTableStmt, alterStmt, dropTableStmt, renameTableStmt));
     }
 
     public virtual SqlDefinition Create(ParseTreeNode stmt)
@@ -175,8 +180,17 @@ public class Stmt : NonTerminal
             return new(stmts.DropTableStmt.Create(stmt));
         }
 
+        //RENAME TABLE
+        if (stmt.Term.Name == RenameTableStmt.TermName)
+        {
+            if (stmts.RenameTableStmt == null)
+                throw new ArgumentNullException(nameof(stmts.RenameTableStmt), $"Unable to create a {nameof(SqlDefinition)} instance for Irony term, {stmt.Term.Name}, because a {typeof(RenameTableStmt)} was not provided to the ctor of {nameof(Stmt)}");
+
+            return new(stmts.RenameTableStmt.Create(stmt));
+        }
+
         var thisMethod = MethodBase.GetCurrentMethod() as MethodInfo;
-        throw new ArgumentException($"Cannot create building block of type {thisMethod!.ReturnType}.  The TermName for node is {stmt.Term.Name} which does not match any of the SQL statement types ({SelectStmt.TermName}, {InsertStmt.TermName}, {UpdateStmt.TermName}, {DeleteStmt.TermName}) or {CreateTableStmt.TermName}", nameof(stmt));
+        throw new ArgumentException($"Cannot create building block of type {thisMethod!.ReturnType}.  The TermName for node is {stmt.Term.Name} which does not match any supported SQL statement type", nameof(stmt));
     }
 
     public virtual SqlDefinition Create(ParseTreeNode stmt, IDatabaseConnectionProvider databaseConnectionProvider, ITableSchemaProvider tableSchemaProvider,
