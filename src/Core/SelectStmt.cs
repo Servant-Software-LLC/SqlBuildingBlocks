@@ -718,7 +718,7 @@ public class SelectStmt : NonTerminal
         }
 
         // Numeric offset: frameOffset + PRECEDING/FOLLOWING
-        var offset = Convert.ToInt32(firstChild.Token.Value);
+        var offset = Convert.ToInt32(firstChild.Token!.Value);
         var direction = secondChild?.Token?.Text?.ToUpperInvariant() ?? secondChild?.Term.Name.ToUpperInvariant();
         return direction == "PRECEDING"
             ? new SqlWindowFrameBound(WindowFrameBoundType.Preceding, offset)

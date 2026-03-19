@@ -1,4 +1,5 @@
-﻿using Irony.Parsing;
+﻿#nullable enable
+using Irony.Parsing;
 using SqlBuildingBlocks.Core.Tests.Utils;
 using SqlBuildingBlocks.LogicalEntities;
 using Xunit;

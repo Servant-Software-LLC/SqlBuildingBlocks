@@ -1236,7 +1236,9 @@ public class SelectStmtTests
 
         // SUM(value) may be parsed as FuncCall or Aggregate depending on grammar resolution
         var column = selectStmt.Columns[1];
+#nullable enable
         SqlWindowSpecification? windowSpec = null;
+#nullable restore
         if (column is SqlFunctionColumn funcCol)
         {
             Assert.True(funcCol.Function.IsWindowFunction);
