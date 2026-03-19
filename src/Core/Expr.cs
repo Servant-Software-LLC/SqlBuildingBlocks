@@ -436,6 +436,11 @@ public class Expr : NonTerminal
     internal static SqlBinaryOperator CreateOperator(string sBinaryOperator) =>
         sBinaryOperator.ToUpper() switch
         {
+            "+" => SqlBinaryOperator.Plus,
+            "-" => SqlBinaryOperator.Minus,
+            "*" => SqlBinaryOperator.Multiply,
+            "/" => SqlBinaryOperator.Divide,
+            "%" => SqlBinaryOperator.Modulo,
             "=" => SqlBinaryOperator.Equal,
             "<" => SqlBinaryOperator.LessThan,
             "<=" => SqlBinaryOperator.LessThanEqual,
@@ -457,6 +462,11 @@ public class Expr : NonTerminal
     internal static string CreateOperator(SqlBinaryOperator binaryOperator) =>
         binaryOperator switch
         {
+            SqlBinaryOperator.Plus => "+",
+            SqlBinaryOperator.Minus => "-",
+            SqlBinaryOperator.Multiply => "*",
+            SqlBinaryOperator.Divide => "/",
+            SqlBinaryOperator.Modulo => "%",
             SqlBinaryOperator.Equal => "=",
             SqlBinaryOperator.LessThan => "<",
             SqlBinaryOperator.LessThanEqual => "<=",

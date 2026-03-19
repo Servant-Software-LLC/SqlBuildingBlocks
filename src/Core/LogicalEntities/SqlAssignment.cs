@@ -1,30 +1,29 @@
-﻿namespace SqlBuildingBlocks.LogicalEntities;
+namespace SqlBuildingBlocks.LogicalEntities;
 
 public class SqlAssignment
 {
-    public SqlAssignment(SqlColumn column, SqlLiteralValue literalValue)
+    public SqlAssignment(SqlColumn column, SqlExpression expression)
     {
         Column = column ?? throw new ArgumentNullException(nameof(column));
-        Value = literalValue ?? throw new ArgumentNullException(nameof(literalValue));
+        Expression = expression ?? throw new ArgumentNullException(nameof(expression));
     }
+
+    public SqlAssignment(SqlColumn column, SqlLiteralValue literalValue)
+        : this(column, new SqlExpression(literalValue)) { }
 
     public SqlAssignment(SqlColumn column, SqlParameter parameter)
-    {
-        Column = column ?? throw new ArgumentNullException(nameof(column));
-        Parameter = parameter ?? throw new ArgumentNullException(nameof(parameter));
-    }
+        : this(column, new SqlExpression(parameter)) { }
 
     public SqlAssignment(SqlColumn column, SqlFunction function)
-    {
-        Column = column ?? throw new ArgumentNullException(nameof(column));
-        Function = function ?? throw new ArgumentNullException(nameof(function));
-    }
+        : this(column, new SqlExpression(function)) { }
 
 
     public SqlColumn Column { get; set; }
 
-    //Only one of the following properties will ever be set.  Restricted by the ctors.
-    public SqlLiteralValue? Value { get; }
-    public SqlParameter? Parameter { get; }
-    public SqlFunction? Function { get; }
+    public SqlExpression Expression { get; }
+
+    //Backward-compatible convenience properties derived from Expression.
+    public SqlLiteralValue? Value => Expression.Value;
+    public SqlParameter? Parameter => Expression.Parameter;
+    public SqlFunction? Function => Expression.Function;
 }

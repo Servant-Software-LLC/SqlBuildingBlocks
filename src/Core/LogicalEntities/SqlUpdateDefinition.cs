@@ -37,23 +37,13 @@ public class SqlUpdateDefinition
         AcceptWhereClause(vistor);
     }
 
-    private void AcceptAssignments(ISqlValueVisitor sqlValueVisitor)
+    private void AcceptAssignments<TVisitor>(TVisitor visitor)
+        where TVisitor : ISqlValueVisitor, ISqlExpressionVisitor
     {
-        List<SqlAssignment> resolvedAssignments = new();
         foreach (SqlAssignment assignment in Assignments)
         {
-            SqlLiteralValue? sqlLiteralValue = assignment.Parameter != null ? sqlValueVisitor.Visit(assignment.Parameter!) :
-                assignment.Function != null ? sqlValueVisitor.Visit(assignment.Function!) :
-                sqlValueVisitor.Visit(assignment.Value!);
-
-            var resolvedAssignment = sqlLiteralValue != null ?
-                new SqlAssignment(assignment.Column, sqlLiteralValue) :
-                assignment;
-
-            resolvedAssignments.Add(resolvedAssignment);
+            assignment.Expression.Accept(visitor);
         }
-
-        Assignments = resolvedAssignments;
     }
 
     public void AcceptWhereClause(ISqlExpressionVisitor sqlExpressionVisitor)
