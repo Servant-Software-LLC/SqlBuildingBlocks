@@ -1,4 +1,4 @@
-﻿using Irony.Parsing;
+using Irony.Parsing;
 using SqlBuildingBlocks.Extensions;
 using SqlBuildingBlocks.LogicalEntities;
 using System.Reflection;
@@ -12,7 +12,7 @@ public class UpdateStmt : NonTerminal
     public static string TermName => MethodBase.GetCurrentMethod().DeclaringType.Name.CamelCase();
 
     /// <summary>
-    /// Helper ctor that assumes default <see cref="NonTerminal"/> types.  If you need different building blocks internally, use other ctor. 
+    /// Helper ctor that assumes default <see cref="NonTerminal"/> types.  If you need different building blocks internally, use other ctor.
     /// </summary>
     /// <param name="grammar"></param>
     public UpdateStmt(Grammar grammar) : this(grammar, new Id(grammar)) { }
@@ -22,21 +22,27 @@ public class UpdateStmt : NonTerminal
     public UpdateStmt(Grammar grammar, TableName tableName, FuncCall funcCall, WhereClauseOpt whereClauseOpt) :
         this(grammar, tableName, funcCall, whereClauseOpt, new JoinChainOpt(grammar, tableName, whereClauseOpt.Expr)) { }
     public UpdateStmt(Grammar grammar, TableName tableName, FuncCall funcCall, WhereClauseOpt whereClauseOpt, JoinChainOpt joinChainOpt) :
-        this(grammar, whereClauseOpt.Expr.Id, whereClauseOpt.Expr.LiteralValue, whereClauseOpt.Expr.Parameter, funcCall, tableName, whereClauseOpt, new(grammar, whereClauseOpt.Expr.Id), joinChainOpt)   { }
+        this(grammar, whereClauseOpt.Expr, funcCall, tableName, whereClauseOpt, new(grammar, whereClauseOpt.Expr.Id), joinChainOpt) { }
+
+    /// <summary>
+    /// Backward-compatible constructors that accept individual Id, LiteralValue, Parameter components.
+    /// These delegate to the Expr-based constructor using the Expr from WhereClauseOpt.
+    /// </summary>
     public UpdateStmt(Grammar grammar, Id id, LiteralValue literalValue, Parameter parameter, FuncCall funcCall, TableName tableName, WhereClauseOpt whereClauseOpt) :
-        this(grammar, id, literalValue, parameter, funcCall, tableName, whereClauseOpt, new(grammar, id), new JoinChainOpt(grammar, tableName, whereClauseOpt.Expr)) { }
+        this(grammar, whereClauseOpt.Expr, funcCall, tableName, whereClauseOpt, new(grammar, id), new JoinChainOpt(grammar, tableName, whereClauseOpt.Expr)) { }
     public UpdateStmt(Grammar grammar, Id id, LiteralValue literalValue, Parameter parameter, FuncCall funcCall, TableName tableName, WhereClauseOpt whereClauseOpt, JoinChainOpt joinChainOpt) :
-        this(grammar, id, literalValue, parameter, funcCall, tableName, whereClauseOpt, new(grammar, id), joinChainOpt) { }
-
-
-    public UpdateStmt(Grammar grammar, Id id, LiteralValue literalValue, Parameter parameter, 
+        this(grammar, whereClauseOpt.Expr, funcCall, tableName, whereClauseOpt, new(grammar, id), joinChainOpt) { }
+    public UpdateStmt(Grammar grammar, Id id, LiteralValue literalValue, Parameter parameter,
                       FuncCall funcCall, TableName tableName, WhereClauseOpt whereClauseOpt,
                       ReturningClauseOpt returningClauseOpt, JoinChainOpt joinChainOpt)
+        : this(grammar, whereClauseOpt.Expr, funcCall, tableName, whereClauseOpt, returningClauseOpt, joinChainOpt) { }
+
+    public UpdateStmt(Grammar grammar, Expr expr, FuncCall funcCall, TableName tableName,
+                      WhereClauseOpt whereClauseOpt, ReturningClauseOpt returningClauseOpt,
+                      JoinChainOpt joinChainOpt)
         : base(TermName)
     {
-        Id = id ?? throw new ArgumentNullException(nameof(id));
-        LiteralValue = literalValue ?? throw new ArgumentNullException(nameof(literalValue));
-        Parameter = parameter ?? throw new ArgumentNullException(nameof(parameter));
+        Expr = expr ?? throw new ArgumentNullException(nameof(expr));
         FuncCall = funcCall ?? throw new ArgumentNullException(nameof(funcCall));
         TableName = tableName ?? throw new ArgumentNullException(nameof(tableName));
         WhereClauseOpt = whereClauseOpt ?? throw new ArgumentNullException(nameof(whereClauseOpt));
@@ -48,21 +54,8 @@ public class UpdateStmt : NonTerminal
         var COMMA = grammar.ToTerm(",");
         var FROM = grammar.ToTerm("FROM");
 
-        // TODO: To simplify matters (for now), we only will take a literal value.
-        // Context for future efforts:  The right side of a SET clause in an UPDATE statement is used to provide a new value for a field. So, it can contain any expression that results in a value of a type
-        // compatible with the column being updated. This includes literal values, column references, function calls, arithmetic expressions, subqueries that return a single value, etc.
-        //
-        // Examples to later consider:
-        //   UPDATE my_table SET column1 = column2 + column3
-        //   UPDATE my_table SET column1 = column1 + 10
-        //   UPDATE my_table SET column1 = (SELECT column2 FROM other_table WHERE id = 1) WHERE id = 1;
-        //   UPDATE my_table SET column1 = CASE WHEN column2 > 10 THEN 'High' ELSE 'Low' END;
-        //
-        var assignmentValue = new NonTerminal("assignmentValue");
-        assignmentValue.Rule = literalValue | parameter | funcCall;
-
         var assignment = new NonTerminal("assignment");
-        assignment.Rule = id + "=" + assignmentValue;
+        assignment.Rule = expr.Id + "=" + expr;
 
         var assignList = new NonTerminal("assignList");
         assignList.Rule = grammar.MakePlusRule(assignList, COMMA, assignment);
@@ -72,18 +65,21 @@ public class UpdateStmt : NonTerminal
 
 
         Rule = UPDATE + tableName + JoinChainOpt + SET + assignList + updateSourceOpt + whereClauseOpt + returningClauseOpt;
-
-        grammar.MarkTransient(assignmentValue);
     }
 
-    public Id Id { get; }
-    public LiteralValue LiteralValue { get; }
-    public Parameter Parameter { get; }
+    public Expr Expr { get; }
     public FuncCall FuncCall { get; }
     public TableName TableName { get; }
     public JoinChainOpt JoinChainOpt { get; }
     public WhereClauseOpt WhereClauseOpt { get; }
     public ReturningClauseOpt ReturningClauseOpt { get; }
+
+    /// <summary>
+    /// Backward-compatible properties derived from Expr.
+    /// </summary>
+    public Id Id => Expr.Id;
+    public LiteralValue LiteralValue => Expr.LiteralValue;
+    public Parameter Parameter => Expr.Parameter;
 
     public virtual SqlUpdateDefinition Create(ParseTreeNode updateStmt)
     {
@@ -146,15 +142,7 @@ public class UpdateStmt : NonTerminal
 
     protected virtual SqlAssignment CreateAssignment(SqlColumn sqlColumn, ParseTreeNode assignmentValue)
     {
-        if (assignmentValue.Term.Name == LiteralValue.TermName)
-            return new(sqlColumn, LiteralValue.Create(assignmentValue));
-
-        if (assignmentValue.Term.Name == Parameter.TermName)
-            return new(sqlColumn, Parameter.Create(assignmentValue));
-
-        if (assignmentValue.Term.Name == FuncCall.TermName)
-            return new(sqlColumn, FuncCall.Create(assignmentValue));
-
-        throw new ArgumentException($"Unable to {nameof(CreateAssignment)} because {nameof(assignmentValue)} does not have a recognized Term.Name.  Term.Name = {assignmentValue.Term.Name}");
+        var sqlExpression = Expr.Create(assignmentValue);
+        return new(sqlColumn, sqlExpression);
     }
 }

@@ -164,4 +164,105 @@ public class UpdateStmtTests
         Assert.Equal("c", sqlUpdateDefinition.Joins[0].Table.TableAlias);
     }
 
+    [Fact]
+    public void Update_SetWithArithmeticExpression()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "UPDATE products SET price = price + 10 WHERE category = 'Electronics'");
+        var sqlUpdateDefinition = grammar.Create(node);
+
+        Assert.NotNull(sqlUpdateDefinition.Table);
+        Assert.Equal("products", sqlUpdateDefinition.Table.TableName);
+
+        var assignments = sqlUpdateDefinition.Assignments;
+        Assert.Single(assignments);
+        Assert.Equal("price", assignments[0].Column.ColumnName);
+
+        //The value is a binary expression: price + 10
+        var binExpr = assignments[0].Expression.BinExpr;
+        Assert.NotNull(binExpr);
+        Assert.Equal("price", binExpr!.Left.Column.ColumnName);
+        Assert.Equal(SqlBinaryOperator.Plus, binExpr.Operator);
+        Assert.Equal(10, binExpr.Right!.Value.Int);
+    }
+
+    [Fact]
+    public void Update_SetWithColumnReference()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "UPDATE my_table SET column1 = column2");
+        var sqlUpdateDefinition = grammar.Create(node);
+
+        var assignments = sqlUpdateDefinition.Assignments;
+        Assert.Single(assignments);
+        Assert.Equal("column1", assignments[0].Column.ColumnName);
+        Assert.NotNull(assignments[0].Expression.Column);
+        Assert.Equal("column2", assignments[0].Expression.Column!.ColumnName);
+    }
+
+    [Fact]
+    public void Update_SetWithMultiColumnArithmetic()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "UPDATE my_table SET column1 = column2 + column3");
+        var sqlUpdateDefinition = grammar.Create(node);
+
+        var assignments = sqlUpdateDefinition.Assignments;
+        Assert.Single(assignments);
+        Assert.Equal("column1", assignments[0].Column.ColumnName);
+
+        var binExpr = assignments[0].Expression.BinExpr;
+        Assert.NotNull(binExpr);
+        Assert.Equal("column2", binExpr!.Left.Column.ColumnName);
+        Assert.Equal(SqlBinaryOperator.Plus, binExpr.Operator);
+        Assert.Equal("column3", binExpr.Right!.Column.ColumnName);
+    }
+
+    [Fact]
+    public void Update_SetWithCaseExpression()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "UPDATE my_table SET column1 = CASE WHEN column2 > 10 THEN 'High' ELSE 'Low' END");
+        var sqlUpdateDefinition = grammar.Create(node);
+
+        var assignments = sqlUpdateDefinition.Assignments;
+        Assert.Single(assignments);
+        Assert.Equal("column1", assignments[0].Column.ColumnName);
+
+        var caseExpr = assignments[0].Expression.CaseExpr;
+        Assert.NotNull(caseExpr);
+        Assert.Single(caseExpr!.WhenClauses);
+
+        //WHEN column2 > 10
+        var whenCondition = caseExpr.WhenClauses[0].Condition.BinExpr;
+        Assert.NotNull(whenCondition);
+        Assert.Equal("column2", whenCondition!.Left.Column.ColumnName);
+        Assert.Equal(SqlBinaryOperator.GreaterThan, whenCondition.Operator);
+        Assert.Equal(10, whenCondition.Right!.Value.Int);
+
+        //THEN 'High'
+        Assert.Equal("High", caseExpr.WhenClauses[0].Result.Value.String);
+
+        //ELSE 'Low'
+        Assert.NotNull(caseExpr.ElseResult);
+        Assert.Equal("Low", caseExpr.ElseResult!.Value.String);
+    }
+
+    [Fact]
+    public void Update_SetWithScalarSubquery()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "UPDATE my_table SET column1 = (SELECT column2 FROM other_table WHERE id = 1) WHERE id = 1");
+        var sqlUpdateDefinition = grammar.Create(node);
+
+        var assignments = sqlUpdateDefinition.Assignments;
+        Assert.Single(assignments);
+        Assert.Equal("column1", assignments[0].Column.ColumnName);
+
+        var scalarSubquery = assignments[0].Expression.ScalarSubqueryExpr;
+        Assert.NotNull(scalarSubquery);
+        Assert.NotNull(scalarSubquery!.SelectDefinition);
+        Assert.Equal("other_table", scalarSubquery.SelectDefinition.Table.TableName);
+    }
+
 }
