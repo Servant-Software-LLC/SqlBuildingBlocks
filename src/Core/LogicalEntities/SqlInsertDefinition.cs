@@ -21,6 +21,13 @@ public class SqlInsertDefinition
 
     public SqlSelectDefinition? SelectDefinition { get; set; }
 
+    /// <summary>
+    /// Optional upsert clause for conflict handling.
+    /// PostgreSQL: ON CONFLICT (columns) DO UPDATE SET ... / DO NOTHING
+    /// MySQL: ON DUPLICATE KEY UPDATE ...
+    /// </summary>
+    public SqlUpsertClause? UpsertClause { get; set; }
+
     public void ResolveParameters(DbParameterCollection parameters) =>
         Accept(new ResolveParametersVisitor(parameters));
 
@@ -39,6 +46,8 @@ public class SqlInsertDefinition
             AcceptColumns(vistor);
         else
             SelectDefinition!.Accept(vistor);
+
+        AcceptUpsertClause(vistor);
     }
 
     public void AcceptColumns(ISqlExpressionVisitor visitor)
@@ -49,6 +58,17 @@ public class SqlInsertDefinition
             {
                 value.Accept(visitor);
             }
+        }
+    }
+
+    private void AcceptUpsertClause(ISqlExpressionVisitor visitor)
+    {
+        if (UpsertClause == null)
+            return;
+
+        foreach (var assignment in UpsertClause.Assignments)
+        {
+            assignment.Expression.Accept(visitor);
         }
     }
 
