@@ -12,6 +12,9 @@ public class SelectStmt : NonTerminal
     private const string sSelectCore = "selectCore";
     private const string sSetOperationListOpt = "setOperationListOpt";
     private const string sScalarSubqueryColumnSource = "scalarSubqueryColumnSource";
+    private const string sWithClauseOpt = "withClauseOpt";
+    private const string sCteDefinition = "cteDefinition";
+    private const string sCteDefinitionList = "cteDefinitionList";
     private const bool ignoreCase = true;  //Exposure of this field may come later.
 
     protected readonly Grammar grammar;
@@ -112,7 +115,21 @@ public class SelectStmt : NonTerminal
         var setOperationListOpt = new NonTerminal(sSetOperationListOpt);
         setOperationListOpt.Rule = grammar.MakeStarRule(setOperationListOpt, setOperation);
 
-        Rule = selectCore + setOperationListOpt + orderClauseOpt;
+        var WITH = grammar.ToTerm("WITH");
+        var AS = grammar.ToTerm("AS");
+
+        var cteDefinition = new NonTerminal(sCteDefinition);
+        cteDefinition.Rule = Id + AS + "(" + selectCore + setOperationListOpt + orderClauseOpt + ")";
+
+        var cteDefinitionList = new NonTerminal(sCteDefinitionList);
+        cteDefinitionList.Rule = grammar.MakePlusRule(cteDefinitionList, COMMA, cteDefinition);
+
+        var withClauseOpt = new NonTerminal(sWithClauseOpt);
+        withClauseOpt.Rule = grammar.Empty | WITH + cteDefinitionList;
+
+        grammar.MarkPunctuation(WITH);
+
+        Rule = withClauseOpt + selectCore + setOperationListOpt + orderClauseOpt;
 
         grammar.MarkPunctuation("(", ")");
 
@@ -153,13 +170,16 @@ public class SelectStmt : NonTerminal
             throw new ArgumentException($"Cannot create building block of type {thisMethod!.ReturnType}.  The TermName for node is {selectStmt.Term.Name} which does not match {TermName}", nameof(selectStmt));
         }
 
-        UpdateSelectCore(selectStmt.ChildNodes[0], sqlSelectDefinition);
+        //WITH clause (CTEs)
+        AddCtes(sqlSelectDefinition, selectStmt.ChildNodes[0]);
 
-        AddSetOperations(sqlSelectDefinition, selectStmt.ChildNodes[1]);
+        UpdateSelectCore(selectStmt.ChildNodes[1], sqlSelectDefinition);
+
+        AddSetOperations(sqlSelectDefinition, selectStmt.ChildNodes[2]);
 
         //ORDER BY clause
         if (OrderByList != null)
-            sqlSelectDefinition.OrderBy = OrderByList.Create(selectStmt.ChildNodes[2]);
+            sqlSelectDefinition.OrderBy = OrderByList.Create(selectStmt.ChildNodes[3]);
     }
 
     protected virtual void UpdateSelectCore(ParseTreeNode selectCore, SqlSelectDefinition sqlSelectDefinition)
@@ -190,6 +210,31 @@ public class SelectStmt : NonTerminal
             var rightSelect = new SqlSelectDefinition();
             UpdateSelectCore(setOperationNode.ChildNodes[1], rightSelect);
             sqlSelectDefinition.SetOperations.Add(new SqlSetOperation(CreateSetOperator(setOperationNode.ChildNodes[0]), rightSelect));
+        }
+    }
+
+    protected virtual void AddCtes(SqlSelectDefinition sqlSelectDefinition, ParseTreeNode withClauseOpt)
+    {
+        if (withClauseOpt.Term.Name != sWithClauseOpt)
+            throw new ArgumentException($"Expected a '{sWithClauseOpt}' node but received '{withClauseOpt.Term.Name}'.", nameof(withClauseOpt));
+
+        // Empty WITH clause (no CTEs)
+        if (withClauseOpt.ChildNodes.Count == 0)
+            return;
+
+        var cteDefinitionList = withClauseOpt.ChildNodes[0];
+        foreach (var cteNode in cteDefinitionList.ChildNodes)
+        {
+            var cteName = Id.GetColumnBaseValues(cteNode.ChildNodes[0]).ColumnName;
+
+            // Build the CTE's select definition from its selectCore + setOperationListOpt + orderClauseOpt
+            var cteSelectDefinition = new SqlSelectDefinition();
+            UpdateSelectCore(cteNode.ChildNodes[1], cteSelectDefinition);
+            AddSetOperations(cteSelectDefinition, cteNode.ChildNodes[2]);
+            if (OrderByList != null)
+                cteSelectDefinition.OrderBy = OrderByList.Create(cteNode.ChildNodes[3]);
+
+            sqlSelectDefinition.Ctes.Add(new SqlCteDefinition(cteName, cteSelectDefinition));
         }
     }
 
