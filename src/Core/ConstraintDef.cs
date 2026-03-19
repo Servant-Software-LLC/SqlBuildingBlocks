@@ -122,7 +122,7 @@ public class ConstraintDef : NonTerminal
                 var uniqueColumns = simpleIdList.Create(constraintTypeOpt.ChildNodes[1].ChildNodes[0]);
                 foreach (var column in uniqueColumns)
                 {
-                    if (!ContainsColumn(column, columns))
+                    if (columns.Count > 0 && !ContainsColumn(column, columns))
                         throw new Exception($"CREATE TABLE statement does not contain a column definition for {column}, but there is a UNIQUE constraint specifying this column.");
 
                     sqlUniqueConstraint.Columns.Add(column);
@@ -139,11 +139,12 @@ public class ConstraintDef : NonTerminal
                     foreach (var column in primaryKeyColumns)
                     {
                         var columnFound = columns.FirstOrDefault(col => col.ColumnName == column);
-                        if (columnFound == null)
+                        if (columns.Count > 0 && columnFound == null)
                             throw new Exception($"CREATE TABLE statement does not contain a column definition for {column}, but there is a PRIMARY KEY constraint specifying this column.");
 
                         //PRIMARY KEY constraints implicitly make a column NOT NULL
-                        columnFound.AllowNulls = false;
+                        if (columnFound != null)
+                            columnFound.AllowNulls = false;
 
                         sqlPrimaryKeyConstraint.Columns.Add(column);
                     }

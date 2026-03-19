@@ -16,4 +16,6 @@ public class SqlAlterTableDefinition
     public IList<SqlAlterColumnAction> ColumnsToAlter { get; private set; } = new List<SqlAlterColumnAction>();
 
     public IList<SqlConstraintDefinition> ConstraintsToAdd { get; private set; } = new List<SqlConstraintDefinition>();
+
+    public IList<string> ConstraintsToDrop { get; private set; } = new List<string>();
 }

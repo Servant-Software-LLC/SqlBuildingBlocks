@@ -34,6 +34,7 @@ public class AlterStmt : NonTerminal
         var TABLE = grammar.ToTerm("TABLE");
         var ADD = grammar.ToTerm("ADD");
         var DROP = grammar.ToTerm("DROP");
+        var CONSTRAINT = grammar.ToTerm("CONSTRAINT");
         var RENAME = grammar.ToTerm("RENAME");
         var MODIFY = grammar.ToTerm("MODIFY");
         var CHANGE = grammar.ToTerm("CHANGE");
@@ -55,6 +56,7 @@ public class AlterStmt : NonTerminal
         {
             alterCmd.Rule = ADD + COLUMN_Optional + columnDef
                           | DROP + COLUMN_Optional + id
+                          | DROP + CONSTRAINT + id
                           | ADD + constraintDef
                           | RENAME + COLUMN_Optional + id + TO + id
                           | MODIFY + COLUMN_Optional + columnDef
@@ -65,6 +67,7 @@ public class AlterStmt : NonTerminal
         {
             alterCmd.Rule = ADD + COLUMN_Optional + columnDef
                           | DROP + COLUMN_Optional + id
+                          | DROP + CONSTRAINT + id
                           | RENAME + COLUMN_Optional + id + TO + id
                           | MODIFY + COLUMN_Optional + columnDef
                           | CHANGE + COLUMN_Optional + id + columnDef
@@ -142,7 +145,10 @@ public class AlterStmt : NonTerminal
         else if (alterType == "DROP")
         {
             var columnName = GetSimpleId(idNodes.Single());
-            sqlAlterTableDefinition.ColumnsToDrop.Add(columnName);
+            if (alterCmd.ChildNodes.Any(node => node.Term.Name == "CONSTRAINT"))
+                sqlAlterTableDefinition.ConstraintsToDrop.Add(columnName);
+            else
+                sqlAlterTableDefinition.ColumnsToDrop.Add(columnName);
         }
         else if (alterType == "RENAME")
         {

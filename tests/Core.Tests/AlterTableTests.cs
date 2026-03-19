@@ -199,6 +199,7 @@ public class AlterTableTests
         Assert.Equal("employees", result.Table!.TableName);
         Assert.Empty(result.ColumnsToAdd);
         Assert.Empty(result.ColumnsToDrop);
+        Assert.Empty(result.ConstraintsToDrop);
         Assert.Single(result.ConstraintsToAdd);
 
         var constraint = result.ConstraintsToAdd[0];
@@ -220,11 +221,99 @@ public class AlterTableTests
         Assert.Equal("employees", result.Table!.TableName);
         Assert.Empty(result.ColumnsToAdd);
         Assert.Empty(result.ColumnsToDrop);
+        Assert.Empty(result.ConstraintsToDrop);
         Assert.Single(result.ConstraintsToAdd);
 
         var constraint = result.ConstraintsToAdd[0];
         Assert.Equal("", constraint.Name);
         Assert.NotNull(constraint.CheckConstraint);
+    }
+
+    [Fact]
+    public void AddConstraint_PrimaryKey_Named()
+    {
+        const string sql = "ALTER TABLE employees ADD CONSTRAINT pk_employees PRIMARY KEY (employee_id)";
+
+        var grammar = new CheckTestGrammar();
+        var node = GrammarParser.Parse(grammar, sql);
+
+        var result = grammar.Create(node);
+
+        Assert.Equal("employees", result.Table!.TableName);
+        Assert.Empty(result.ColumnsToAdd);
+        Assert.Empty(result.ColumnsToDrop);
+        Assert.Empty(result.ConstraintsToDrop);
+        Assert.Single(result.ConstraintsToAdd);
+
+        var constraint = result.ConstraintsToAdd[0];
+        Assert.Equal("pk_employees", constraint.Name);
+        Assert.NotNull(constraint.PrimaryKeyConstraint);
+        Assert.Equal(new[] { "employee_id" }, constraint.PrimaryKeyConstraint!.Columns);
+    }
+
+    [Fact]
+    public void AddConstraint_Unique_Named()
+    {
+        const string sql = "ALTER TABLE employees ADD CONSTRAINT uq_employees_email UNIQUE (email)";
+
+        var grammar = new CheckTestGrammar();
+        var node = GrammarParser.Parse(grammar, sql);
+
+        var result = grammar.Create(node);
+
+        Assert.Equal("employees", result.Table!.TableName);
+        Assert.Empty(result.ColumnsToAdd);
+        Assert.Empty(result.ColumnsToDrop);
+        Assert.Empty(result.ConstraintsToDrop);
+        Assert.Single(result.ConstraintsToAdd);
+
+        var constraint = result.ConstraintsToAdd[0];
+        Assert.Equal("uq_employees_email", constraint.Name);
+        Assert.NotNull(constraint.UniqueConstraint);
+        Assert.Equal(new[] { "email" }, constraint.UniqueConstraint!.Columns);
+    }
+
+    [Fact]
+    public void AddConstraint_ForeignKey_Named()
+    {
+        const string sql = "ALTER TABLE orders ADD CONSTRAINT fk_orders_customer FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE";
+
+        var grammar = new CheckTestGrammar();
+        var node = GrammarParser.Parse(grammar, sql);
+
+        var result = grammar.Create(node);
+
+        Assert.Equal("orders", result.Table!.TableName);
+        Assert.Empty(result.ColumnsToAdd);
+        Assert.Empty(result.ColumnsToDrop);
+        Assert.Empty(result.ConstraintsToDrop);
+        Assert.Single(result.ConstraintsToAdd);
+
+        var constraint = result.ConstraintsToAdd[0];
+        Assert.Equal("fk_orders_customer", constraint.Name);
+        Assert.NotNull(constraint.ForeignKeyConstraint);
+        Assert.Equal("customers", constraint.ForeignKeyConstraint!.ParentTable.TableName);
+        Assert.Equal(ForeignKeyReferentialAction.Cascade, constraint.ForeignKeyConstraint.OnDeleteAction);
+        Assert.Single(constraint.ForeignKeyConstraint.ColumnReferences);
+        Assert.Equal(("customer_id", "id"), constraint.ForeignKeyConstraint.ColumnReferences[0]);
+    }
+
+    [Fact]
+    public void DropConstraint_Named()
+    {
+        const string sql = "ALTER TABLE employees DROP CONSTRAINT chk_age";
+
+        var grammar = new CheckTestGrammar();
+        var node = GrammarParser.Parse(grammar, sql);
+
+        var result = grammar.Create(node);
+
+        Assert.Equal("employees", result.Table!.TableName);
+        Assert.Empty(result.ColumnsToAdd);
+        Assert.Empty(result.ColumnsToDrop);
+        Assert.Empty(result.ConstraintsToAdd);
+        Assert.Single(result.ConstraintsToDrop);
+        Assert.Equal("chk_age", result.ConstraintsToDrop[0]);
     }
 
     [Fact]
