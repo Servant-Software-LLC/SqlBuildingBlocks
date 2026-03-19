@@ -29,7 +29,7 @@ public class Stmt : NonTerminal
 
         InsertStmt insertStmt = new(grammar, selectStmt);
         UpdateStmt updateStmt = new(grammar, selectStmt.TableName, funcCall, whereClauseOpt, selectStmt.JoinChainOpt);
-        DeleteStmt deleteStmt = new(grammar, selectStmt.TableName, whereClauseOpt, updateStmt.ReturningClauseOpt);
+        DeleteStmt deleteStmt = new(grammar, selectStmt.TableName, whereClauseOpt, updateStmt.ReturningClauseOpt, selectStmt.JoinChainOpt);
         CreateTableStmt createTableStmt = new(grammar, selectStmt.Id);
         AlterStmt alterStmt = new(grammar, selectStmt.Id, createTableStmt.ColumnDef);
         DropTableStmt dropTableStmt = new(grammar, selectStmt.Id);

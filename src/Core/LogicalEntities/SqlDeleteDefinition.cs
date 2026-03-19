@@ -8,6 +8,10 @@ public class SqlDeleteDefinition
 {
     public SqlTable? Table { get; set; }
 
+    public SqlTable? SourceTable { get; set; }
+
+    public IList<SqlJoin> Joins { get; set; } = new List<SqlJoin>();
+
     public SqlExpression? WhereClause { get; set; }
     public SqlReturning? Returning { get; set; }
 
@@ -24,7 +28,16 @@ public class SqlDeleteDefinition
     public void Accept<TVisitor>(TVisitor vistor)
         where TVisitor : ISqlExpressionVisitor
     {
+        AcceptJoins(vistor);
         AcceptWhereClause(vistor);
+    }
+
+    public void AcceptJoins(ISqlExpressionVisitor sqlExpressionVisitor)
+    {
+        foreach (SqlJoin join in Joins)
+        {
+            join.Condition.Accept(sqlExpressionVisitor);
+        }
     }
 
     public void AcceptWhereClause(ISqlExpressionVisitor sqlExpressionVisitor)

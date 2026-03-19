@@ -22,7 +22,7 @@ public class DeleteStmtTests
             JoinChainOpt joinChainOpt = new(this, tableName, expr);
             WhereClauseOpt whereClauseOpt = new(this, expr);
             ReturningClauseOpt returningClauseOpt = new(this, id);
-            DeleteStmt deleteStmt = new(this, tableName, whereClauseOpt, returningClauseOpt);
+            DeleteStmt deleteStmt = new(this, tableName, whereClauseOpt, returningClauseOpt, joinChainOpt);
 
             OrderByList orderByList = new(this, id);
             SelectStmt selectStmt = new(this, id, expr, aliasOpt, tableName, joinChainOpt, orderByList, whereClauseOpt, funcCall);
@@ -77,6 +77,29 @@ public class DeleteStmtTests
         Assert.NotNull(returning);
         Assert.Equal(1, returning.Int);
         Assert.Null(returning.Column);
+    }
+
+    [Fact]
+    public void DeleteStmt_WithFromJoinAfterDeleteTarget()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "DELETE o FROM orders o JOIN customers c ON o.customer_id = c.id WHERE c.tier = 'gold'");
+        var deleteStmt = grammar.Create(node);
+
+        Assert.NotNull(deleteStmt.Table);
+        Assert.Equal("o", deleteStmt.Table!.TableName);
+
+        Assert.NotNull(deleteStmt.SourceTable);
+        Assert.Equal("orders", deleteStmt.SourceTable!.TableName);
+        Assert.Equal("o", deleteStmt.SourceTable.TableAlias);
+
+        Assert.Single(deleteStmt.Joins);
+        Assert.Equal("customers", deleteStmt.Joins[0].Table.TableName);
+        Assert.Equal("c", deleteStmt.Joins[0].Table.TableAlias);
+
+        Assert.NotNull(deleteStmt.WhereClause);
+        Assert.Equal("tier", deleteStmt.WhereClause!.BinExpr!.Left.Column!.ColumnName);
+        Assert.Equal("gold", deleteStmt.WhereClause.BinExpr.Right!.Value!.String);
     }
 
 }

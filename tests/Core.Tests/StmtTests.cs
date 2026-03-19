@@ -19,7 +19,7 @@ public class StmtTests
 
             InsertStmt insertStmt = new(this, selectStmt);
             UpdateStmt updateStmt = new(this, selectStmt.TableName, selectStmt.FuncCall, selectStmt.WhereClauseOpt);
-            DeleteStmt deleteStmt = new(this, selectStmt.TableName, selectStmt.WhereClauseOpt, updateStmt.ReturningClauseOpt);
+            DeleteStmt deleteStmt = new(this, selectStmt.TableName, selectStmt.WhereClauseOpt, updateStmt.ReturningClauseOpt, selectStmt.JoinChainOpt);
             CreateTableStmt createTableStmt = new(this, selectStmt.Id);
             AlterStmt alterStmt = new(this, selectStmt.Id, createTableStmt.ColumnDef);
             RenameTableStmt renameTableStmt = new(this, selectStmt.Id);
