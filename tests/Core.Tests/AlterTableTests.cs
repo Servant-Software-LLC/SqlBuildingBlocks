@@ -288,6 +288,7 @@ public class AlterTableTests
         Assert.Single(result.ColumnsToAlter);
 
         var action = result.ColumnsToAlter[0];
+        Assert.Equal(SqlAlterColumnOperation.Alter, action.Operation);
         Assert.Equal("price", action.SourceColumnName);
         Assert.Equal("price", action.Column.ColumnName);
         Assert.Equal("DECIMAL", action.Column.DataType.Name);
@@ -309,6 +310,7 @@ public class AlterTableTests
         Assert.Single(result.ColumnsToAlter);
 
         var action = result.ColumnsToAlter[0];
+        Assert.Equal(SqlAlterColumnOperation.Modify, action.Operation);
         Assert.Equal("price", action.SourceColumnName);
         Assert.Equal("price", action.Column.ColumnName);
         Assert.Equal("DECIMAL", action.Column.DataType.Name);
@@ -331,6 +333,7 @@ public class AlterTableTests
         Assert.Single(result.ColumnsToAlter);
 
         var action = result.ColumnsToAlter[0];
+        Assert.Equal(SqlAlterColumnOperation.Change, action.Operation);
         Assert.Equal("old_name", action.SourceColumnName);
         Assert.Equal("new_name", action.Column.ColumnName);
         Assert.Equal("VARCHAR", action.Column.DataType.Name);
@@ -351,6 +354,7 @@ public class AlterTableTests
         Assert.Single(result.ColumnsToAlter);
 
         var action = result.ColumnsToAlter[0];
+        Assert.Equal(SqlAlterColumnOperation.Alter, action.Operation);
         Assert.Equal("price", action.SourceColumnName);
         Assert.Equal("price", action.Column.ColumnName);
         Assert.Equal("DECIMAL", action.Column.DataType.Name);
