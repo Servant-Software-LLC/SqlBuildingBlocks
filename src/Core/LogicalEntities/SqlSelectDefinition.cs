@@ -19,6 +19,10 @@ public class SqlSelectDefinition
 
     public SqlExpression? WhereClause { get; set; }
 
+    public SqlGroupByClause? GroupBy { get; set; }
+
+    public SqlExpression? HavingClause { get; set; }
+
     public IList<SqlOrderByColumn> OrderBy { get; set; } = new List<SqlOrderByColumn>();
 
     public SqlLimitOffset? Limit { get; set; }
