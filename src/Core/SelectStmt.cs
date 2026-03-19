@@ -116,7 +116,11 @@ public class SelectStmt : NonTerminal
         setOperationListOpt.Rule = grammar.MakeStarRule(setOperationListOpt, setOperation);
 
         var WITH = grammar.ToTerm("WITH");
+        var RECURSIVE = grammar.ToTerm("RECURSIVE");
         var AS = grammar.ToTerm("AS");
+
+        var recursiveOpt = new NonTerminal("recursiveOpt");
+        recursiveOpt.Rule = grammar.Empty | RECURSIVE;
 
         var cteDefinition = new NonTerminal(sCteDefinition);
         cteDefinition.Rule = Id + AS + "(" + selectCore + setOperationListOpt + orderClauseOpt + ")";
@@ -125,7 +129,7 @@ public class SelectStmt : NonTerminal
         cteDefinitionList.Rule = grammar.MakePlusRule(cteDefinitionList, COMMA, cteDefinition);
 
         var withClauseOpt = new NonTerminal(sWithClauseOpt);
-        withClauseOpt.Rule = grammar.Empty | WITH + cteDefinitionList;
+        withClauseOpt.Rule = grammar.Empty | WITH + recursiveOpt + cteDefinitionList;
 
         grammar.MarkPunctuation(WITH);
 
@@ -222,7 +226,11 @@ public class SelectStmt : NonTerminal
         if (withClauseOpt.ChildNodes.Count == 0)
             return;
 
-        var cteDefinitionList = withClauseOpt.ChildNodes[0];
+        // Child 0 is recursiveOpt, Child 1 is cteDefinitionList
+        var recursiveOptNode = withClauseOpt.ChildNodes[0];
+        bool isRecursive = recursiveOptNode.ChildNodes.Count > 0;
+
+        var cteDefinitionList = withClauseOpt.ChildNodes[1];
         foreach (var cteNode in cteDefinitionList.ChildNodes)
         {
             var cteName = Id.GetColumnBaseValues(cteNode.ChildNodes[0]).ColumnName;
@@ -234,7 +242,7 @@ public class SelectStmt : NonTerminal
             if (OrderByList != null)
                 cteSelectDefinition.OrderBy = OrderByList.Create(cteNode.ChildNodes[3]);
 
-            sqlSelectDefinition.Ctes.Add(new SqlCteDefinition(cteName, cteSelectDefinition));
+            sqlSelectDefinition.Ctes.Add(new SqlCteDefinition(cteName, cteSelectDefinition, isRecursive));
         }
     }
 

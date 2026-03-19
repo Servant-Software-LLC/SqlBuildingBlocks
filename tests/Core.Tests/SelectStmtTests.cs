@@ -845,4 +845,103 @@ public class SelectStmtTests
         Assert.Empty(selectStmt.Ctes);
     }
 
+    // ── WITH RECURSIVE clause ─────────────────────────────────────────────
+
+    [Fact]
+    public void Select_WithRecursiveCte_SetsIsRecursiveFlag()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "WITH RECURSIVE org_chart AS (" +
+            "SELECT id, name, manager_id FROM employees WHERE manager_id IS NULL " +
+            "UNION ALL " +
+            "SELECT e.id, e.name, e.manager_id FROM employees e " +
+            "JOIN org_chart o ON e.manager_id = o.id) " +
+            "SELECT * FROM org_chart");
+
+        var selectStmt = ((SelectStmt)grammar.Root).Create(node);
+
+        Assert.Single(selectStmt.Ctes);
+        Assert.True(selectStmt.Ctes[0].IsRecursive);
+        Assert.Equal("org_chart", selectStmt.Ctes[0].Name);
+
+        // Anchor query
+        var cteSelect = selectStmt.Ctes[0].SelectDefinition;
+        Assert.Equal("employees", cteSelect.Table!.TableName);
+        Assert.Equal(3, cteSelect.Columns.Count);
+
+        // UNION ALL with recursive term
+        Assert.Single(cteSelect.SetOperations);
+        Assert.Equal(SqlSetOperator.UnionAll, cteSelect.SetOperations[0].Operator);
+
+        // Outer query
+        Assert.Equal("org_chart", selectStmt.Table!.TableName);
+    }
+
+    [Fact]
+    public void Select_WithRecursiveCte_HierarchyTraversal()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "WITH RECURSIVE category_tree AS (" +
+            "SELECT id, name, parent_id FROM categories WHERE parent_id IS NULL " +
+            "UNION ALL " +
+            "SELECT c.id, c.name, c.parent_id FROM categories c " +
+            "JOIN category_tree ct ON c.parent_id = ct.id) " +
+            "SELECT id, name FROM category_tree");
+
+        var selectStmt = ((SelectStmt)grammar.Root).Create(node);
+
+        Assert.Single(selectStmt.Ctes);
+        Assert.True(selectStmt.Ctes[0].IsRecursive);
+        Assert.Equal("category_tree", selectStmt.Ctes[0].Name);
+
+        // The CTE should have a UNION ALL set operation
+        var cteSelect = selectStmt.Ctes[0].SelectDefinition;
+        Assert.Single(cteSelect.SetOperations);
+        Assert.Equal(SqlSetOperator.UnionAll, cteSelect.SetOperations[0].Operator);
+
+        // Outer query
+        Assert.Equal("category_tree", selectStmt.Table!.TableName);
+        Assert.Equal(2, selectStmt.Columns.Count);
+    }
+
+    [Fact]
+    public void Select_NonRecursiveCte_IsRecursiveIsFalse()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "WITH active_employees AS (SELECT id, name FROM employees WHERE status = 'active') " +
+            "SELECT id, name FROM active_employees");
+
+        var selectStmt = ((SelectStmt)grammar.Root).Create(node);
+
+        Assert.Single(selectStmt.Ctes);
+        Assert.False(selectStmt.Ctes[0].IsRecursive);
+    }
+
+    [Fact]
+    public void Select_WithRecursiveMultipleCtes_AllMarkedRecursive()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "WITH RECURSIVE ancestors AS (" +
+            "SELECT id, parent_id FROM nodes WHERE id = 1 " +
+            "UNION ALL " +
+            "SELECT n.id, n.parent_id FROM nodes n JOIN ancestors a ON n.id = a.parent_id), " +
+            "descendants AS (" +
+            "SELECT id, parent_id FROM nodes WHERE id = 1 " +
+            "UNION ALL " +
+            "SELECT n.id, n.parent_id FROM nodes n JOIN descendants d ON n.parent_id = d.id) " +
+            "SELECT * FROM ancestors");
+
+        var selectStmt = ((SelectStmt)grammar.Root).Create(node);
+
+        Assert.Equal(2, selectStmt.Ctes.Count);
+        Assert.True(selectStmt.Ctes[0].IsRecursive);
+        Assert.True(selectStmt.Ctes[1].IsRecursive);
+        Assert.Equal("ancestors", selectStmt.Ctes[0].Name);
+        Assert.Equal("descendants", selectStmt.Ctes[1].Name);
+    }
+
 }
