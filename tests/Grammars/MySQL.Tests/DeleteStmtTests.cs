@@ -37,6 +37,36 @@ public class DeleteStmtTests
     }
 
     [Fact]
+    public void Delete_BacktickQuoted_TableName()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "DELETE FROM `Customers` WHERE `ID` = 1");
+
+        var deleteStmt = grammar.Create(node);
+
+        Assert.NotNull(deleteStmt.Table);
+        Assert.Equal("Customers", deleteStmt.Table!.TableName);
+        Assert.NotNull(deleteStmt.WhereClause);
+    }
+
+    [Fact]
+    public void Delete_BacktickQuoted_WithJoin()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "DELETE `o` FROM `orders` `o` JOIN `Customers` `c` ON `o`.`customer_id` = `c`.`ID` WHERE `c`.`CustomerName` = 'test'");
+
+        var deleteStmt = grammar.Create(node);
+
+        Assert.NotNull(deleteStmt.Table);
+        Assert.Equal("o", deleteStmt.Table!.TableName);
+        Assert.NotNull(deleteStmt.SourceTable);
+        Assert.Equal("orders", deleteStmt.SourceTable!.TableName);
+        Assert.Single(deleteStmt.Joins);
+        Assert.Equal("Customers", deleteStmt.Joins[0].Table.TableName);
+    }
+
+    [Fact]
     public void Delete_WithJoin()
     {
         TestGrammar grammar = new();
