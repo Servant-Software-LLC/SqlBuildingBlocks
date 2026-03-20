@@ -71,10 +71,14 @@ public class SqlInsertDefinition
         if (UpsertClause == null)
             return;
 
+        UpsertClause.ConflictTargetWhereCondition?.Accept(visitor);
+
         foreach (var assignment in UpsertClause.Assignments)
         {
             assignment.Expression.Accept(visitor);
         }
+
+        UpsertClause.WhereCondition?.Accept(visitor);
     }
 
 }

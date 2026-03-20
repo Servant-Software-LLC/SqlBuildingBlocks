@@ -161,4 +161,160 @@ public class InsertStmtTests
         Assert.Equal("count", assignment.Column.ColumnName);
         Assert.NotNull(assignment.Expression);
     }
+
+    [Fact]
+    public void Insert_OnConflictDoUpdateSet_WithExcluded()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "INSERT INTO users (id, name, email) VALUES (1, 'Alice', 'alice@example.com') ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, email = EXCLUDED.email");
+
+        var sqlInsertDefinition = grammar.Create(node);
+
+        Assert.NotNull(sqlInsertDefinition.UpsertClause);
+        Assert.Equal(SqlUpsertAction.Update, sqlInsertDefinition.UpsertClause.Action);
+
+        Assert.Single(sqlInsertDefinition.UpsertClause.ConflictColumns);
+        Assert.Equal("id", sqlInsertDefinition.UpsertClause.ConflictColumns[0].ColumnName);
+
+        // Assert on assignments referencing EXCLUDED
+        Assert.Equal(2, sqlInsertDefinition.UpsertClause.Assignments.Count);
+
+        var assignment1 = sqlInsertDefinition.UpsertClause.Assignments[0];
+        Assert.Equal("name", assignment1.Column.ColumnName);
+        // EXCLUDED.name is parsed as a column reference with table "EXCLUDED"
+        Assert.NotNull(assignment1.Expression.Column);
+        Assert.Equal("EXCLUDED", assignment1.Expression.Column.TableName);
+        Assert.Equal("name", assignment1.Expression.Column.ColumnName);
+
+        var assignment2 = sqlInsertDefinition.UpsertClause.Assignments[1];
+        Assert.Equal("email", assignment2.Column.ColumnName);
+        Assert.NotNull(assignment2.Expression.Column);
+        Assert.Equal("EXCLUDED", assignment2.Expression.Column.TableName);
+        Assert.Equal("email", assignment2.Expression.Column.ColumnName);
+    }
+
+    [Fact]
+    public void Insert_OnConflictDoNothing_WithoutTarget()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "INSERT INTO users (id, name) VALUES (1, 'Alice') ON CONFLICT DO NOTHING");
+
+        var sqlInsertDefinition = grammar.Create(node);
+
+        Assert.NotNull(sqlInsertDefinition.UpsertClause);
+        Assert.Equal(SqlUpsertAction.DoNothing, sqlInsertDefinition.UpsertClause.Action);
+
+        // No conflict columns when no target specified
+        Assert.Empty(sqlInsertDefinition.UpsertClause.ConflictColumns);
+        Assert.Null(sqlInsertDefinition.UpsertClause.ConstraintName);
+        Assert.Empty(sqlInsertDefinition.UpsertClause.Assignments);
+    }
+
+    [Fact]
+    public void Insert_OnConflictOnConstraint_DoNothing()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "INSERT INTO users (id, name) VALUES (1, 'Alice') ON CONFLICT ON CONSTRAINT users_pkey DO NOTHING");
+
+        var sqlInsertDefinition = grammar.Create(node);
+
+        Assert.NotNull(sqlInsertDefinition.UpsertClause);
+        Assert.Equal(SqlUpsertAction.DoNothing, sqlInsertDefinition.UpsertClause.Action);
+
+        // Constraint name should be set
+        Assert.Equal("users_pkey", sqlInsertDefinition.UpsertClause.ConstraintName);
+
+        // No conflict columns when using constraint
+        Assert.Empty(sqlInsertDefinition.UpsertClause.ConflictColumns);
+        Assert.Empty(sqlInsertDefinition.UpsertClause.Assignments);
+    }
+
+    [Fact]
+    public void Insert_OnConflictOnConstraint_DoUpdateSet()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "INSERT INTO users (id, name, email) VALUES (1, 'Alice', 'alice@example.com') ON CONFLICT ON CONSTRAINT users_pkey DO UPDATE SET name = EXCLUDED.name");
+
+        var sqlInsertDefinition = grammar.Create(node);
+
+        Assert.NotNull(sqlInsertDefinition.UpsertClause);
+        Assert.Equal(SqlUpsertAction.Update, sqlInsertDefinition.UpsertClause.Action);
+
+        Assert.Equal("users_pkey", sqlInsertDefinition.UpsertClause.ConstraintName);
+        Assert.Empty(sqlInsertDefinition.UpsertClause.ConflictColumns);
+
+        Assert.Single(sqlInsertDefinition.UpsertClause.Assignments);
+        var assignment = sqlInsertDefinition.UpsertClause.Assignments[0];
+        Assert.Equal("name", assignment.Column.ColumnName);
+        Assert.NotNull(assignment.Expression.Column);
+        Assert.Equal("EXCLUDED", assignment.Expression.Column.TableName);
+        Assert.Equal("name", assignment.Expression.Column.ColumnName);
+    }
+
+    [Fact]
+    public void Insert_OnConflictDoUpdateSet_WithWhereClause()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "INSERT INTO users (id, name, email) VALUES (1, 'Alice', 'alice@example.com') ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name WHERE users.id > 0");
+
+        var sqlInsertDefinition = grammar.Create(node);
+
+        Assert.NotNull(sqlInsertDefinition.UpsertClause);
+        Assert.Equal(SqlUpsertAction.Update, sqlInsertDefinition.UpsertClause.Action);
+
+        Assert.Single(sqlInsertDefinition.UpsertClause.ConflictColumns);
+        Assert.Equal("id", sqlInsertDefinition.UpsertClause.ConflictColumns[0].ColumnName);
+
+        Assert.Single(sqlInsertDefinition.UpsertClause.Assignments);
+
+        // WHERE clause on DO UPDATE
+        Assert.NotNull(sqlInsertDefinition.UpsertClause.WhereCondition);
+        Assert.Null(sqlInsertDefinition.UpsertClause.ConflictTargetWhereCondition);
+    }
+
+    [Fact]
+    public void Insert_OnConflictWithTargetWhere_DoNothing()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "INSERT INTO users (id, name, status) VALUES (1, 'Alice', 'active') ON CONFLICT (id) WHERE status = 'active' DO NOTHING");
+
+        var sqlInsertDefinition = grammar.Create(node);
+
+        Assert.NotNull(sqlInsertDefinition.UpsertClause);
+        Assert.Equal(SqlUpsertAction.DoNothing, sqlInsertDefinition.UpsertClause.Action);
+
+        Assert.Single(sqlInsertDefinition.UpsertClause.ConflictColumns);
+        Assert.Equal("id", sqlInsertDefinition.UpsertClause.ConflictColumns[0].ColumnName);
+
+        // WHERE on conflict target (partial index filter)
+        Assert.NotNull(sqlInsertDefinition.UpsertClause.ConflictTargetWhereCondition);
+        Assert.Null(sqlInsertDefinition.UpsertClause.WhereCondition);
+    }
+
+    [Fact]
+    public void Insert_OnConflictWithTargetWhere_DoUpdateSet_WithUpdateWhere()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "INSERT INTO users (id, name, status) VALUES (1, 'Alice', 'active') ON CONFLICT (id) WHERE status = 'active' DO UPDATE SET name = EXCLUDED.name WHERE users.id > 0");
+
+        var sqlInsertDefinition = grammar.Create(node);
+
+        Assert.NotNull(sqlInsertDefinition.UpsertClause);
+        Assert.Equal(SqlUpsertAction.Update, sqlInsertDefinition.UpsertClause.Action);
+
+        Assert.Single(sqlInsertDefinition.UpsertClause.ConflictColumns);
+
+        // Both WHERE clauses should be present
+        Assert.NotNull(sqlInsertDefinition.UpsertClause.ConflictTargetWhereCondition);
+        Assert.NotNull(sqlInsertDefinition.UpsertClause.WhereCondition);
+
+        Assert.Single(sqlInsertDefinition.UpsertClause.Assignments);
+    }
 }
