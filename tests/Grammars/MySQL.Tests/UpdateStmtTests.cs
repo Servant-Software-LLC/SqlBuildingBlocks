@@ -37,6 +37,36 @@ public class UpdateStmtTests
     }
 
     [Fact]
+    public void Update_BacktickQuoted_TableAndColumns()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "UPDATE `Customers` SET `CustomerName` = 'Bob' WHERE `ID` = 1");
+
+        var updateStmt = grammar.Create(node);
+
+        Assert.NotNull(updateStmt.Table);
+        Assert.Equal("Customers", updateStmt.Table!.TableName);
+        Assert.NotNull(updateStmt.WhereClause);
+    }
+
+    [Fact]
+    public void Update_BacktickQuoted_WithJoin()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "UPDATE `Customers` `c` INNER JOIN `Orders` `o` ON `c`.`ID` = `o`.`CustomerID` SET `c`.`CustomerName` = 'Active' WHERE `o`.`OrderDate` = '2024-01-01'");
+
+        var updateStmt = grammar.Create(node);
+
+        Assert.NotNull(updateStmt.Table);
+        Assert.Equal("Customers", updateStmt.Table!.TableName);
+        Assert.Equal("c", updateStmt.Table.TableAlias);
+        Assert.Single(updateStmt.Joins);
+        Assert.Equal("Orders", updateStmt.Joins[0].Table.TableName);
+    }
+
+    [Fact]
     public void Update_WithJoinBeforeSet()
     {
         TestGrammar grammar = new();

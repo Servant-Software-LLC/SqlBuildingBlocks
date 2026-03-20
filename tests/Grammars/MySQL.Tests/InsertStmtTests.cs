@@ -92,6 +92,27 @@ public class InsertStmtTests
     }
 
     [Fact]
+    public void Insert_BacktickQuoted_TableAndColumns()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "INSERT INTO `users` (`id`, `name`, `email`) VALUES (1, 'Alice', 'alice@example.com')");
+
+        var sqlInsertDefinition = grammar.Create(node);
+
+        Assert.NotNull(sqlInsertDefinition.Table);
+        Assert.Equal("users", sqlInsertDefinition.Table.TableName);
+
+        Assert.Equal(3, sqlInsertDefinition.Columns.Count);
+        Assert.Equal("id", sqlInsertDefinition.Columns[0].ColumnName);
+        Assert.Equal("name", sqlInsertDefinition.Columns[1].ColumnName);
+        Assert.Equal("email", sqlInsertDefinition.Columns[2].ColumnName);
+
+        Assert.NotNull(sqlInsertDefinition.Values);
+        Assert.Single(sqlInsertDefinition.Values);
+    }
+
+    [Fact]
     public void Insert_OnDuplicateKeyUpdate_WithExpression()
     {
         TestGrammar grammar = new();
