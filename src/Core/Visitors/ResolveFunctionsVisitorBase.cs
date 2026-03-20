@@ -37,6 +37,10 @@ public abstract class ResolveFunctionsVisitorBase : ISqlExpressionVisitor, ISqlV
 
     public virtual void Visit(SqlCastExpression castExpr) { }
 
+    public virtual void Visit(SqlArrayConstructor arrayConstructor) { }
+
+    public virtual void Visit(SqlArraySubscript arraySubscript) { }
+
     protected abstract SqlExpression? VisitReturnExpression(SqlFunction sqlFunction);
 
     protected abstract SqlLiteralValue? VisitReturnValue(SqlFunction sqlFunction);

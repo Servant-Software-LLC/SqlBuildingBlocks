@@ -19,6 +19,8 @@ public class SqlExpression
     public SqlExpression(SqlScalarSubqueryExpression scalarSubqueryExpr) => ScalarSubqueryExpr = scalarSubqueryExpr;
     public SqlExpression(SqlInList inList) => InList = inList;
     public SqlExpression(SqlCastExpression castExpr) => CastExpr = castExpr;
+    public SqlExpression(SqlArrayConstructor arrayConstructor) => ArrayConstructor = arrayConstructor;
+    public SqlExpression(SqlArraySubscript arraySubscript) => ArraySubscript = arraySubscript;
 
     //Logic within this class should enforce that only one of these properties is ever set.
     public SqlColumnRef? Column { get; private set; }
@@ -32,6 +34,8 @@ public class SqlExpression
     public SqlScalarSubqueryExpression? ScalarSubqueryExpr { get; private set; }
     public SqlInList? InList { get; private set; }
     public SqlCastExpression? CastExpr { get; private set; }
+    public SqlArrayConstructor? ArrayConstructor { get; private set; }
+    public SqlArraySubscript? ArraySubscript { get; private set; }
 
     public Type Type 
     { 
@@ -108,6 +112,18 @@ public class SqlExpression
         if (CastExpr != null)
         {
             CastExpr.Accept(visitor);
+            return;
+        }
+
+        if (ArrayConstructor != null)
+        {
+            ArrayConstructor.Accept(visitor);
+            return;
+        }
+
+        if (ArraySubscript != null)
+        {
+            ArraySubscript.Accept(visitor);
             return;
         }
 
@@ -254,6 +270,8 @@ public class SqlExpression
         ScalarSubqueryExpr = null;
         InList = null;
         CastExpr = null;
+        ArrayConstructor = null;
+        ArraySubscript = null;
 
         if (expression.Column != null)
             Column = expression.Column;
@@ -277,6 +295,10 @@ public class SqlExpression
             InList = expression.InList;
         else if (expression.CastExpr != null)
             CastExpr = expression.CastExpr;
+        else if (expression.ArrayConstructor != null)
+            ArrayConstructor = expression.ArrayConstructor;
+        else if (expression.ArraySubscript != null)
+            ArraySubscript = expression.ArraySubscript;
     }
 
     public string ToExpressionString()
@@ -288,6 +310,8 @@ public class SqlExpression
         if (ScalarSubqueryExpr != null) return ScalarSubqueryExpr.ToExpressionString();
         if (InList != null) return InList.ToExpressionString();
         if (CastExpr != null) return CastExpr.ToExpressionString();
+        if (ArrayConstructor != null) return ArrayConstructor.ToExpressionString();
+        if (ArraySubscript != null) return ArraySubscript.ToExpressionString();
         if (Column != null) return Column.ToExpressionString();
         if (Parameter != null) return Parameter.ToExpressionString();
         if (Function != null) return Function.ToExpressionString();
@@ -305,6 +329,8 @@ public class SqlExpression
         if (ScalarSubqueryExpr != null) return ScalarSubqueryExpr.ToString();
         if (InList != null) return InList.ToString();
         if (CastExpr != null) return CastExpr.ToString();
+        if (ArrayConstructor != null) return ArrayConstructor.ToString();
+        if (ArraySubscript != null) return ArraySubscript.ToString();
         if (Column != null) return Column.ToString();
         if (Parameter != null) return Parameter.ToString();
         if (Function != null) return Function.ToString();
