@@ -14,6 +14,7 @@ public class SqlDefinition
     public SqlDefinition(SqlAlterTableDefinition alter) => Alter = alter ?? throw new ArgumentNullException(nameof(alter));
     public SqlDefinition(SqlDropTableDefinition drop) => Drop = drop ?? throw new ArgumentNullException(nameof(drop));
     public SqlDefinition(SqlRenameTableDefinition rename) => Rename = rename ?? throw new ArgumentNullException(nameof(rename));
+    public SqlDefinition(SqlMergeDefinition merge) => Merge = merge ?? throw new ArgumentNullException(nameof(merge));
 
     //Only one of the following properties will ever be set.  Bounded by the ctors.
     public SqlSelectDefinition? Select { get; }
@@ -24,6 +25,7 @@ public class SqlDefinition
     public SqlAlterTableDefinition? Alter { get; }
     public SqlDropTableDefinition? Drop { get; }
     public SqlRenameTableDefinition? Rename { get; }
+    public SqlMergeDefinition? Merge { get; }
 
     public void ResolveParameters(DbParameterCollection parameters)
     {
@@ -63,6 +65,7 @@ public class SqlDefinition
         if (Alter != null) return Alter.ToString();
         if (Drop != null) return Drop.ToString();
         if (Rename != null) return Rename.ToString();
+        if (Merge != null) return Merge.ToString();
 
         return "SQL definition type not set";
     }
