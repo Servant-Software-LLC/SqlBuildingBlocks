@@ -108,6 +108,35 @@ public class SelectStmtTests
     }
 
     [Fact]
+    public void Select_WithLimitAndOffsetKeyword()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, @"SELECT ID, CustomerName FROM Customers LIMIT 10 OFFSET 5");
+
+        DatabaseConnectionProvider databaseConnectionProvider = new();
+        TableSchemaProvider tableSchemaProvider = new();
+        var selectStmt = grammar.Create(node, databaseConnectionProvider, tableSchemaProvider);
+
+        //LIMIT
+        Assert.NotNull(selectStmt.Limit);
+        Assert.Equal(5, selectStmt.Limit.RowOffset.Value);
+        Assert.Equal(10, selectStmt.Limit.RowCount.Value);
+    }
+
+    [Fact]
+    public void Select_WithLimitZero()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, @"SELECT * FROM Customers LIMIT 0");
+
+        var selectStmt = grammar.Create(node);
+
+        Assert.NotNull(selectStmt.Limit);
+        Assert.Equal(0, selectStmt.Limit.RowCount.Value);
+        Assert.Equal(0, selectStmt.Limit.RowOffset.Value);
+    }
+
+    [Fact]
     public void Select_ColumnAlias_With_Backticks()
     {
         TestGrammar grammar = new();
