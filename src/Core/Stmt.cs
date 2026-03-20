@@ -34,8 +34,15 @@ public class Stmt : NonTerminal
         AlterStmt alterStmt = new(grammar, selectStmt.Id, createTableStmt.ColumnDef);
         DropTableStmt dropTableStmt = new(grammar, selectStmt.Id);
         RenameTableStmt renameTableStmt = new(grammar, selectStmt.Id);
+        CreateViewStmt createViewStmt = new(grammar, selectStmt.Id, selectStmt);
+        DropViewStmt dropViewStmt = new(grammar, selectStmt.Id);
+        AlterViewStmt alterViewStmt = new(grammar, selectStmt.Id, selectStmt);
+        CreateIndexStmt createIndexStmt = new(grammar, selectStmt.Id, whereClauseOpt);
+        DropIndexStmt dropIndexStmt = new(grammar, selectStmt.Id);
+        TransactionStmt transactionStmt = new(grammar);
+        SavepointStmt savepointStmt = new(grammar, selectStmt.Id);
 
-        var internalState = DetermineInternalState(selectStmt, insertStmt, updateStmt, deleteStmt, createTableStmt, alterStmt, dropTableStmt, renameTableStmt);
+        var internalState = DetermineInternalState(selectStmt, insertStmt, updateStmt, deleteStmt, createTableStmt, alterStmt, dropTableStmt, renameTableStmt, createViewStmt, dropViewStmt, alterViewStmt, createIndexStmt, dropIndexStmt, transactionStmt, savepointStmt);
         stmts = internalState.Stmts;
         Rule = internalState.Rule;
         grammar.MarkTransient(this);
@@ -68,6 +75,13 @@ public class Stmt : NonTerminal
         DropTableStmt? dropTableStmt = null;
         RenameTableStmt? renameTableStmt = null;
         MergeStmt? mergeStmt = null;
+        CreateViewStmt? createViewStmt = null;
+        DropViewStmt? dropViewStmt = null;
+        AlterViewStmt? alterViewStmt = null;
+        CreateIndexStmt? createIndexStmt = null;
+        DropIndexStmt? dropIndexStmt = null;
+        TransactionStmt? transactionStmt = null;
+        SavepointStmt? savepointStmt = null;
 
         //Compose the rule for this instance from all of the provided statments.
         for (int i = 0; i < stmts.Length; i++)
@@ -106,6 +120,27 @@ public class Stmt : NonTerminal
                 case MergeStmt mergeStmt1:
                     mergeStmt = mergeStmt1;
                     break;
+                case CreateViewStmt createViewStmt1:
+                    createViewStmt = createViewStmt1;
+                    break;
+                case DropViewStmt dropViewStmt1:
+                    dropViewStmt = dropViewStmt1;
+                    break;
+                case AlterViewStmt alterViewStmt1:
+                    alterViewStmt = alterViewStmt1;
+                    break;
+                case CreateIndexStmt createIndexStmt1:
+                    createIndexStmt = createIndexStmt1;
+                    break;
+                case DropIndexStmt dropIndexStmt1:
+                    dropIndexStmt = dropIndexStmt1;
+                    break;
+                case TransactionStmt transactionStmt1:
+                    transactionStmt = transactionStmt1;
+                    break;
+                case SavepointStmt savepointStmt1:
+                    savepointStmt = savepointStmt1;
+                    break;
                 default:
                     throw new ArgumentOutOfRangeException($"The statement of type {stmt.GetType()} was not expected.");
             }
@@ -116,7 +151,7 @@ public class Stmt : NonTerminal
                 rule |= stmts[i];
         }
 
-        return new(rule!, new(selectStmt, insertStmt, updateStmt, deleteStmt, createTableStmt, alterStmt, dropTableStmt, renameTableStmt, mergeStmt));
+        return new(rule!, new(selectStmt, insertStmt, updateStmt, deleteStmt, createTableStmt, alterStmt, dropTableStmt, renameTableStmt, mergeStmt, createViewStmt, dropViewStmt, alterViewStmt, createIndexStmt, dropIndexStmt, transactionStmt, savepointStmt));
     }
 
     public virtual SqlDefinition Create(ParseTreeNode stmt)
@@ -200,6 +235,69 @@ public class Stmt : NonTerminal
                 throw new ArgumentNullException(nameof(stmts.MergeStmt), $"Unable to create a {nameof(SqlDefinition)} instance for Irony term, {stmt.Term.Name}, because a {typeof(MergeStmt)} was not provided to the ctor of {nameof(Stmt)}");
 
             return new(stmts.MergeStmt.Create(stmt));
+        }
+
+        //CREATE VIEW
+        if (stmt.Term.Name == CreateViewStmt.TermName)
+        {
+            if (stmts.CreateViewStmt == null)
+                throw new ArgumentNullException(nameof(stmts.CreateViewStmt), $"Unable to create a {nameof(SqlDefinition)} instance for Irony term, {stmt.Term.Name}, because a {typeof(CreateViewStmt)} was not provided to the ctor of {nameof(Stmt)}");
+
+            return new(stmts.CreateViewStmt.Create(stmt));
+        }
+
+        //DROP VIEW
+        if (stmt.Term.Name == DropViewStmt.TermName)
+        {
+            if (stmts.DropViewStmt == null)
+                throw new ArgumentNullException(nameof(stmts.DropViewStmt), $"Unable to create a {nameof(SqlDefinition)} instance for Irony term, {stmt.Term.Name}, because a {typeof(DropViewStmt)} was not provided to the ctor of {nameof(Stmt)}");
+
+            return new(stmts.DropViewStmt.Create(stmt));
+        }
+
+        //ALTER VIEW
+        if (stmt.Term.Name == AlterViewStmt.TermName)
+        {
+            if (stmts.AlterViewStmt == null)
+                throw new ArgumentNullException(nameof(stmts.AlterViewStmt), $"Unable to create a {nameof(SqlDefinition)} instance for Irony term, {stmt.Term.Name}, because a {typeof(AlterViewStmt)} was not provided to the ctor of {nameof(Stmt)}");
+
+            return new(stmts.AlterViewStmt.Create(stmt));
+        }
+
+        //CREATE INDEX
+        if (stmt.Term.Name == CreateIndexStmt.TermName)
+        {
+            if (stmts.CreateIndexStmt == null)
+                throw new ArgumentNullException(nameof(stmts.CreateIndexStmt), $"Unable to create a {nameof(SqlDefinition)} instance for Irony term, {stmt.Term.Name}, because a {typeof(CreateIndexStmt)} was not provided to the ctor of {nameof(Stmt)}");
+
+            return new(stmts.CreateIndexStmt.Create(stmt));
+        }
+
+        //DROP INDEX
+        if (stmt.Term.Name == DropIndexStmt.TermName)
+        {
+            if (stmts.DropIndexStmt == null)
+                throw new ArgumentNullException(nameof(stmts.DropIndexStmt), $"Unable to create a {nameof(SqlDefinition)} instance for Irony term, {stmt.Term.Name}, because a {typeof(DropIndexStmt)} was not provided to the ctor of {nameof(Stmt)}");
+
+            return new(stmts.DropIndexStmt.Create(stmt));
+        }
+
+        //TRANSACTION (BEGIN/COMMIT/ROLLBACK)
+        if (stmt.Term.Name == TransactionStmt.TermName)
+        {
+            if (stmts.TransactionStmt == null)
+                throw new ArgumentNullException(nameof(stmts.TransactionStmt), $"Unable to create a {nameof(SqlDefinition)} instance for Irony term, {stmt.Term.Name}, because a {typeof(TransactionStmt)} was not provided to the ctor of {nameof(Stmt)}");
+
+            return new(stmts.TransactionStmt.Create(stmt));
+        }
+
+        //SAVEPOINT
+        if (stmt.Term.Name == SavepointStmt.TermName)
+        {
+            if (stmts.SavepointStmt == null)
+                throw new ArgumentNullException(nameof(stmts.SavepointStmt), $"Unable to create a {nameof(SqlDefinition)} instance for Irony term, {stmt.Term.Name}, because a {typeof(SavepointStmt)} was not provided to the ctor of {nameof(Stmt)}");
+
+            return new(stmts.SavepointStmt.Create(stmt));
         }
 
         var thisMethod = MethodBase.GetCurrentMethod() as MethodInfo;

@@ -6,7 +6,7 @@
 /// </summary>
 internal class Stmts
 {
-    public Stmts(SelectStmt? selectStmt, InsertStmt? insertStmt, UpdateStmt? updateStmt, DeleteStmt? deleteStmt, CreateTableStmt? createTableStmt, AlterStmt? alterStmt, DropTableStmt? dropTableStmt = null, RenameTableStmt? renameTableStmt = null, MergeStmt? mergeStmt = null)
+    public Stmts(SelectStmt? selectStmt, InsertStmt? insertStmt, UpdateStmt? updateStmt, DeleteStmt? deleteStmt, CreateTableStmt? createTableStmt, AlterStmt? alterStmt, DropTableStmt? dropTableStmt = null, RenameTableStmt? renameTableStmt = null, MergeStmt? mergeStmt = null, CreateViewStmt? createViewStmt = null, DropViewStmt? dropViewStmt = null, AlterViewStmt? alterViewStmt = null, CreateIndexStmt? createIndexStmt = null, DropIndexStmt? dropIndexStmt = null, TransactionStmt? transactionStmt = null, SavepointStmt? savepointStmt = null)
     {
         SelectStmt = selectStmt;
         InsertStmt = insertStmt;
@@ -17,6 +17,13 @@ internal class Stmts
         DropTableStmt = dropTableStmt;
         RenameTableStmt = renameTableStmt;
         MergeStmt = mergeStmt;
+        CreateViewStmt = createViewStmt;
+        DropViewStmt = dropViewStmt;
+        AlterViewStmt = alterViewStmt;
+        CreateIndexStmt = createIndexStmt;
+        DropIndexStmt = dropIndexStmt;
+        TransactionStmt = transactionStmt;
+        SavepointStmt = savepointStmt;
     }
 
     public SelectStmt? SelectStmt { get; }
@@ -28,4 +35,11 @@ internal class Stmts
     public DropTableStmt? DropTableStmt { get; }
     public RenameTableStmt? RenameTableStmt { get; }
     public MergeStmt? MergeStmt { get; }
+    public CreateViewStmt? CreateViewStmt { get; }
+    public DropViewStmt? DropViewStmt { get; }
+    public AlterViewStmt? AlterViewStmt { get; }
+    public CreateIndexStmt? CreateIndexStmt { get; }
+    public DropIndexStmt? DropIndexStmt { get; }
+    public TransactionStmt? TransactionStmt { get; }
+    public SavepointStmt? SavepointStmt { get; }
 }
