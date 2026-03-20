@@ -20,6 +20,11 @@ public class SqlDeleteDefinition
     /// </summary>
     public SqlOutputClause? OutputClause { get; set; }
 
+    /// <summary>
+    /// PostgreSQL RETURNING clause for capturing deleted rows.
+    /// </summary>
+    public SqlReturningClause? ReturningClause { get; set; }
+
     public void ResolveParameters(DbParameterCollection parameters) =>
         Accept(new ResolveParametersVisitor(parameters));
 
