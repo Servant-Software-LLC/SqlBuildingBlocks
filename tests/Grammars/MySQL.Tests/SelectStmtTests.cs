@@ -21,7 +21,7 @@ public class SelectStmtTests
             LiteralValue literalValue = new(this);
             TableName tableName = new(this, aliasOpt, id);
             Parameter parameter = new(this);
-            Expr expr = new(this, id, literalValue, parameter);
+            MySQL.Expr expr = new(this, id, literalValue, parameter);
             FuncCall funcCall = new(this, id, expr);
             JoinChainOpt joinChainOpt = new(this, tableName, expr);
             WhereClauseOpt whereClauseOpt = new(this, expr);
@@ -29,6 +29,7 @@ public class SelectStmtTests
             MySQL.SelectStmt selectStmt = new(this, id, expr, aliasOpt, tableName, joinChainOpt, orderByList, whereClauseOpt, funcCall);
 
             expr.InitializeRule(selectStmt, funcCall);
+            expr.AddIntervalSupport(this);
 
             Root = selectStmt;
         }
@@ -388,6 +389,415 @@ public class SelectStmtTests
         Assert.NotNull(selectStmt.Limit.RowCount.Parameter);
         Assert.Equal("__p_0", selectStmt.Limit.RowCount.Parameter.Name);
         Assert.Null(selectStmt.Limit.RowOffset.Parameter);
+    }
+
+    // ── MySQL-specific function tests ──────────────────────────────────────
+
+    [Fact]
+    public void Select_NowFunction()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "SELECT NOW()");
+
+        var selectStmt = grammar.Create(node);
+
+        Assert.Single(selectStmt.Columns);
+        var funcColumn = Assert.IsType<SqlFunctionColumn>(selectStmt.Columns[0]);
+        Assert.Equal("NOW", funcColumn.Function.FunctionName);
+        Assert.Empty(funcColumn.Function.Arguments);
+    }
+
+    [Fact]
+    public void Select_CurdateFunction()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "SELECT CURDATE()");
+
+        var selectStmt = grammar.Create(node);
+
+        Assert.Single(selectStmt.Columns);
+        var funcColumn = Assert.IsType<SqlFunctionColumn>(selectStmt.Columns[0]);
+        Assert.Equal("CURDATE", funcColumn.Function.FunctionName);
+        Assert.Empty(funcColumn.Function.Arguments);
+    }
+
+    [Fact]
+    public void Select_CoalesceFunction()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "SELECT COALESCE(name, email, 'unknown') FROM users");
+
+        var selectStmt = grammar.Create(node);
+
+        Assert.Single(selectStmt.Columns);
+        var funcColumn = Assert.IsType<SqlFunctionColumn>(selectStmt.Columns[0]);
+        Assert.Equal("COALESCE", funcColumn.Function.FunctionName);
+        Assert.Equal(3, funcColumn.Function.Arguments.Count);
+    }
+
+    [Fact]
+    public void Select_IfnullFunction()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "SELECT IFNULL(nickname, 'N/A') FROM users");
+
+        var selectStmt = grammar.Create(node);
+
+        Assert.Single(selectStmt.Columns);
+        var funcColumn = Assert.IsType<SqlFunctionColumn>(selectStmt.Columns[0]);
+        Assert.Equal("IFNULL", funcColumn.Function.FunctionName);
+        Assert.Equal(2, funcColumn.Function.Arguments.Count);
+    }
+
+    [Fact]
+    public void Select_IfFunction()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "SELECT IF(status = 'active', 1, 0) FROM users");
+
+        var selectStmt = grammar.Create(node);
+
+        Assert.Single(selectStmt.Columns);
+        var funcColumn = Assert.IsType<SqlFunctionColumn>(selectStmt.Columns[0]);
+        Assert.Equal("IF", funcColumn.Function.FunctionName);
+        Assert.Equal(3, funcColumn.Function.Arguments.Count);
+    }
+
+    [Fact]
+    public void Select_ConcatWsFunction()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "SELECT CONCAT_WS(', ', city, state, country) FROM addresses");
+
+        var selectStmt = grammar.Create(node);
+
+        Assert.Single(selectStmt.Columns);
+        var funcColumn = Assert.IsType<SqlFunctionColumn>(selectStmt.Columns[0]);
+        Assert.Equal("CONCAT_WS", funcColumn.Function.FunctionName);
+        Assert.Equal(4, funcColumn.Function.Arguments.Count);
+    }
+
+    [Fact]
+    public void Select_DateFormatFunction()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "SELECT DATE_FORMAT(created_at, '%Y-%m-%d') FROM orders");
+
+        var selectStmt = grammar.Create(node);
+
+        Assert.Single(selectStmt.Columns);
+        var funcColumn = Assert.IsType<SqlFunctionColumn>(selectStmt.Columns[0]);
+        Assert.Equal("DATE_FORMAT", funcColumn.Function.FunctionName);
+        Assert.Equal(2, funcColumn.Function.Arguments.Count);
+    }
+
+    [Fact]
+    public void Select_StrToDateFunction()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "SELECT STR_TO_DATE('21/03/2025', '%d/%m/%Y')");
+
+        var selectStmt = grammar.Create(node);
+
+        Assert.Single(selectStmt.Columns);
+        var funcColumn = Assert.IsType<SqlFunctionColumn>(selectStmt.Columns[0]);
+        Assert.Equal("STR_TO_DATE", funcColumn.Function.FunctionName);
+        Assert.Equal(2, funcColumn.Function.Arguments.Count);
+    }
+
+    [Fact]
+    public void Select_DatediffFunction()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "SELECT DATEDIFF(end_date, start_date) FROM projects");
+
+        var selectStmt = grammar.Create(node);
+
+        Assert.Single(selectStmt.Columns);
+        var funcColumn = Assert.IsType<SqlFunctionColumn>(selectStmt.Columns[0]);
+        Assert.Equal("DATEDIFF", funcColumn.Function.FunctionName);
+        Assert.Equal(2, funcColumn.Function.Arguments.Count);
+    }
+
+    [Fact]
+    public void Select_DateAddFunction_WithInterval()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "SELECT DATE_ADD(created_at, INTERVAL 30 DAY) FROM orders");
+
+        var selectStmt = grammar.Create(node);
+
+        Assert.Single(selectStmt.Columns);
+        var funcColumn = Assert.IsType<SqlFunctionColumn>(selectStmt.Columns[0]);
+        Assert.Equal("DATE_ADD", funcColumn.Function.FunctionName);
+        Assert.Equal(2, funcColumn.Function.Arguments.Count);
+
+        // Second argument is an INTERVAL function node
+        var intervalArg = funcColumn.Function.Arguments[1];
+        Assert.NotNull(intervalArg.Function);
+        Assert.Equal("INTERVAL", intervalArg.Function.FunctionName);
+        Assert.Equal(2, intervalArg.Function.Arguments.Count);
+        // Unit is stored as a string literal
+        Assert.Equal("DAY", intervalArg.Function.Arguments[1].Value?.Value?.ToString());
+    }
+
+    [Fact]
+    public void Select_DateSubFunction_WithInterval()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "SELECT DATE_SUB(NOW(), INTERVAL 7 DAY) FROM dual");
+
+        var selectStmt = grammar.Create(node);
+
+        Assert.Single(selectStmt.Columns);
+        var funcColumn = Assert.IsType<SqlFunctionColumn>(selectStmt.Columns[0]);
+        Assert.Equal("DATE_SUB", funcColumn.Function.FunctionName);
+        Assert.Equal(2, funcColumn.Function.Arguments.Count);
+
+        var intervalArg = funcColumn.Function.Arguments[1];
+        Assert.NotNull(intervalArg.Function);
+        Assert.Equal("INTERVAL", intervalArg.Function.FunctionName);
+    }
+
+    [Fact]
+    public void Select_DateAddFunction_WithMonthInterval()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "SELECT DATE_ADD('2025-01-15', INTERVAL 3 MONTH)");
+
+        var selectStmt = grammar.Create(node);
+
+        Assert.Single(selectStmt.Columns);
+        var funcColumn = Assert.IsType<SqlFunctionColumn>(selectStmt.Columns[0]);
+        Assert.Equal("DATE_ADD", funcColumn.Function.FunctionName);
+
+        var intervalArg = funcColumn.Function.Arguments[1];
+        Assert.NotNull(intervalArg.Function);
+        Assert.Equal("MONTH", intervalArg.Function.Arguments[1].Value?.Value?.ToString());
+    }
+
+    [Fact]
+    public void Select_DateSubFunction_WithYearInterval()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "SELECT DATE_SUB(hire_date, INTERVAL 1 YEAR) FROM employees");
+
+        var selectStmt = grammar.Create(node);
+
+        Assert.Single(selectStmt.Columns);
+        var funcColumn = Assert.IsType<SqlFunctionColumn>(selectStmt.Columns[0]);
+        Assert.Equal("DATE_SUB", funcColumn.Function.FunctionName);
+
+        var intervalArg = funcColumn.Function.Arguments[1];
+        Assert.NotNull(intervalArg.Function);
+        Assert.Equal("YEAR", intervalArg.Function.Arguments[1].Value?.Value?.ToString());
+    }
+
+    [Fact]
+    public void Select_DateAddFunction_WithHourInterval()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "SELECT DATE_ADD(timestamp_col, INTERVAL 2 HOUR) FROM events");
+
+        var selectStmt = grammar.Create(node);
+
+        var funcColumn = Assert.IsType<SqlFunctionColumn>(selectStmt.Columns[0]);
+        Assert.Equal("DATE_ADD", funcColumn.Function.FunctionName);
+
+        var intervalArg = funcColumn.Function.Arguments[1];
+        Assert.Equal("HOUR", intervalArg.Function.Arguments[1].Value?.Value?.ToString());
+    }
+
+    [Fact]
+    public void Select_IfFunction_WithAlias()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "SELECT IF(score >= 60, 'pass', 'fail') AS result FROM exams");
+
+        var selectStmt = grammar.Create(node);
+
+        Assert.Single(selectStmt.Columns);
+        var funcColumn = Assert.IsType<SqlFunctionColumn>(selectStmt.Columns[0]);
+        Assert.Equal("IF", funcColumn.Function.FunctionName);
+        Assert.Equal("result", funcColumn.ColumnAlias);
+    }
+
+    [Fact]
+    public void Select_NowFunction_InWhere()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "SELECT id FROM events WHERE event_date > NOW()");
+
+        var selectStmt = grammar.Create(node);
+
+        Assert.NotNull(selectStmt.WhereClause);
+        // The WHERE clause contains a binary expression with NOW() on the right
+        Assert.NotNull(selectStmt.WhereClause.BinExpr);
+    }
+
+    [Fact]
+    public void Select_CoalesceFunction_WithBackticks()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "SELECT COALESCE(`nickname`, `name`, 'Anonymous') FROM `users`");
+
+        var selectStmt = grammar.Create(node);
+
+        Assert.Single(selectStmt.Columns);
+        var funcColumn = Assert.IsType<SqlFunctionColumn>(selectStmt.Columns[0]);
+        Assert.Equal("COALESCE", funcColumn.Function.FunctionName);
+        Assert.Equal(3, funcColumn.Function.Arguments.Count);
+    }
+
+    [Fact]
+    public void Select_NestedFunctions()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "SELECT DATE_FORMAT(NOW(), '%Y-%m-%d') AS today");
+
+        var selectStmt = grammar.Create(node);
+
+        Assert.Single(selectStmt.Columns);
+        var funcColumn = Assert.IsType<SqlFunctionColumn>(selectStmt.Columns[0]);
+        Assert.Equal("DATE_FORMAT", funcColumn.Function.FunctionName);
+        Assert.Equal(2, funcColumn.Function.Arguments.Count);
+
+        // First argument is NOW() function
+        var nowArg = funcColumn.Function.Arguments[0];
+        Assert.NotNull(nowArg.Function);
+        Assert.Equal("NOW", nowArg.Function.FunctionName);
+    }
+
+    [Fact]
+    public void Select_MultipleMySqlFunctions()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "SELECT IFNULL(name, 'Unknown'), COALESCE(email, phone, 'none'), NOW() FROM users");
+
+        var selectStmt = grammar.Create(node);
+
+        Assert.Equal(3, selectStmt.Columns.Count);
+
+        var col1 = Assert.IsType<SqlFunctionColumn>(selectStmt.Columns[0]);
+        Assert.Equal("IFNULL", col1.Function.FunctionName);
+
+        var col2 = Assert.IsType<SqlFunctionColumn>(selectStmt.Columns[1]);
+        Assert.Equal("COALESCE", col2.Function.FunctionName);
+
+        var col3 = Assert.IsType<SqlFunctionColumn>(selectStmt.Columns[2]);
+        Assert.Equal("NOW", col3.Function.FunctionName);
+    }
+
+    [Fact]
+    public void Select_DateAddFunction_WithMinuteInterval()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "SELECT DATE_ADD(login_time, INTERVAL 30 MINUTE) FROM sessions");
+
+        var selectStmt = grammar.Create(node);
+
+        var funcColumn = Assert.IsType<SqlFunctionColumn>(selectStmt.Columns[0]);
+        Assert.Equal("DATE_ADD", funcColumn.Function.FunctionName);
+
+        var intervalArg = funcColumn.Function.Arguments[1];
+        Assert.Equal("MINUTE", intervalArg.Function.Arguments[1].Value?.Value?.ToString());
+    }
+
+    [Fact]
+    public void Select_DateSubFunction_WithWeekInterval()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "SELECT DATE_SUB(CURDATE(), INTERVAL 2 WEEK)");
+
+        var selectStmt = grammar.Create(node);
+
+        var funcColumn = Assert.IsType<SqlFunctionColumn>(selectStmt.Columns[0]);
+        Assert.Equal("DATE_SUB", funcColumn.Function.FunctionName);
+
+        // First arg is CURDATE() function
+        Assert.NotNull(funcColumn.Function.Arguments[0].Function);
+        Assert.Equal("CURDATE", funcColumn.Function.Arguments[0].Function.FunctionName);
+
+        var intervalArg = funcColumn.Function.Arguments[1];
+        Assert.Equal("WEEK", intervalArg.Function.Arguments[1].Value?.Value?.ToString());
+    }
+
+    [Fact]
+    public void Select_IfFunction_WithNullComparison()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "SELECT IF(deleted_at IS NULL, 'active', 'deleted') FROM accounts");
+
+        var selectStmt = grammar.Create(node);
+
+        var funcColumn = Assert.IsType<SqlFunctionColumn>(selectStmt.Columns[0]);
+        Assert.Equal("IF", funcColumn.Function.FunctionName);
+        Assert.Equal(3, funcColumn.Function.Arguments.Count);
+    }
+
+    [Fact]
+    public void Select_ConcatWsFunction_WithBacktickColumns()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "SELECT CONCAT_WS(' ', `first_name`, `last_name`) AS full_name FROM `employees`");
+
+        var selectStmt = grammar.Create(node);
+
+        var funcColumn = Assert.IsType<SqlFunctionColumn>(selectStmt.Columns[0]);
+        Assert.Equal("CONCAT_WS", funcColumn.Function.FunctionName);
+        Assert.Equal(3, funcColumn.Function.Arguments.Count);
+        Assert.Equal("full_name", funcColumn.ColumnAlias);
+    }
+
+    [Fact]
+    public void Select_DateFormatFunction_WithAlias()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "SELECT DATE_FORMAT(order_date, '%M %d, %Y') AS formatted_date FROM orders");
+
+        var selectStmt = grammar.Create(node);
+
+        var funcColumn = Assert.IsType<SqlFunctionColumn>(selectStmt.Columns[0]);
+        Assert.Equal("DATE_FORMAT", funcColumn.Function.FunctionName);
+        Assert.Equal("formatted_date", funcColumn.ColumnAlias);
+    }
+
+    [Fact]
+    public void Select_DatediffFunction_InWhere()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "SELECT id FROM subscriptions WHERE DATEDIFF(end_date, start_date) > 30");
+
+        var selectStmt = grammar.Create(node);
+
+        Assert.NotNull(selectStmt.WhereClause);
+        Assert.NotNull(selectStmt.WhereClause.BinExpr);
+    }
+
+    [Fact]
+    public void Select_DateAddFunction_WithSecondInterval()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "SELECT DATE_ADD(ts, INTERVAL 90 SECOND) FROM logs");
+
+        var selectStmt = grammar.Create(node);
+
+        var funcColumn = Assert.IsType<SqlFunctionColumn>(selectStmt.Columns[0]);
+        var intervalArg = funcColumn.Function.Arguments[1];
+        Assert.Equal("SECOND", intervalArg.Function.Arguments[1].Value?.Value?.ToString());
+    }
+
+    [Fact]
+    public void Select_DateAddFunction_WithQuarterInterval()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "SELECT DATE_ADD(report_date, INTERVAL 1 QUARTER) FROM reports");
+
+        var selectStmt = grammar.Create(node);
+
+        var funcColumn = Assert.IsType<SqlFunctionColumn>(selectStmt.Columns[0]);
+        var intervalArg = funcColumn.Function.Arguments[1];
+        Assert.Equal("QUARTER", intervalArg.Function.Arguments[1].Value?.Value?.ToString());
     }
 
 }

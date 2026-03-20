@@ -1,4 +1,4 @@
-﻿using Irony.Parsing;
+using Irony.Parsing;
 using SqlBuildingBlocks.Interfaces;
 using SqlBuildingBlocks.LogicalEntities;
 
@@ -12,10 +12,13 @@ public class SqlGrammarMySQL : Grammar
         //REF: https://dev.mysql.com/doc/refman/8.0/en/identifiers.html
         SqlBuildingBlocks.Grammars.MySQL.SimpleId simpleId = new(this);
         Id id = new(this, simpleId);
+        SqlBuildingBlocks.Grammars.MySQL.Expr expr = new(this, id);
+        TableName tableName = new(this, id);
 
-        SqlBuildingBlocks.Grammars.MySQL.SelectStmt selectStmt = new(this, id);
+        SqlBuildingBlocks.Grammars.MySQL.SelectStmt selectStmt = new(this, id, expr, tableName);
 
         selectStmt.Expr.InitializeRule(selectStmt, selectStmt.FuncCall);
+        expr.AddIntervalSupport(this);
         Root = selectStmt;
     }
 

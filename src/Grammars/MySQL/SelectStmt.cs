@@ -27,6 +27,14 @@ public class SelectStmt : SqlBuildingBlocks.SelectStmt
         Rule += limitOffsetClauseOpt;
     }
 
+    public SelectStmt(Grammar grammar, Id id, SqlBuildingBlocks.Expr expr, TableName tableName)
+        : base(grammar, id, expr, tableName)
+    {
+        AddWithRollupSupport(grammar);
+        limitOffsetClauseOpt = new(grammar);
+        Rule += limitOffsetClauseOpt;
+    }
+
     public SelectStmt(Grammar grammar, Id id, Expr expr, AliasOpt aliasOpt, TableName tableName,
                       JoinChainOpt joinChainOpt, OrderByList orderByList, WhereClauseOpt whereClauseOpt, FuncCall funcCall)
         : base(grammar, id, expr, aliasOpt, tableName, joinChainOpt, orderByList, whereClauseOpt, funcCall)
