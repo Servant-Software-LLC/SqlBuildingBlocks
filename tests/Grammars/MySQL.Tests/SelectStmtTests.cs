@@ -263,6 +263,109 @@ public class SelectStmtTests
     }
 
     [Fact]
+    public void Select_GroupBy_WithRollup_SingleColumn()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "SELECT department, SUM(salary) FROM employees GROUP BY department WITH ROLLUP");
+
+        var selectStmt = grammar.Create(node);
+
+        // WITH ROLLUP converts all columns into a single ROLLUP grouping set
+        Assert.NotNull(selectStmt.GroupBy);
+        Assert.Empty(selectStmt.GroupBy.Columns);
+        Assert.Single(selectStmt.GroupBy.GroupingSets);
+
+        var rollupSet = selectStmt.GroupBy.GroupingSets[0];
+        Assert.Equal(GroupingSetType.Rollup, rollupSet.Type);
+        Assert.Single(rollupSet.Sets);
+        Assert.Equal("department", rollupSet.Sets[0][0]);
+    }
+
+    [Fact]
+    public void Select_GroupBy_WithRollup_MultipleColumns()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "SELECT year, quarter, SUM(sales) FROM revenue GROUP BY year, quarter WITH ROLLUP");
+
+        var selectStmt = grammar.Create(node);
+
+        Assert.NotNull(selectStmt.GroupBy);
+        Assert.Empty(selectStmt.GroupBy.Columns);
+        Assert.Single(selectStmt.GroupBy.GroupingSets);
+
+        var rollupSet = selectStmt.GroupBy.GroupingSets[0];
+        Assert.Equal(GroupingSetType.Rollup, rollupSet.Type);
+        Assert.Equal(2, rollupSet.Sets.Count);
+        Assert.Equal("year", rollupSet.Sets[0][0]);
+        Assert.Equal("quarter", rollupSet.Sets[1][0]);
+    }
+
+    [Fact]
+    public void Select_GroupBy_WithRollup_AndLimit()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "SELECT department, COUNT(*) FROM employees GROUP BY department WITH ROLLUP LIMIT 10");
+
+        var selectStmt = grammar.Create(node);
+
+        Assert.NotNull(selectStmt.GroupBy);
+        Assert.Single(selectStmt.GroupBy.GroupingSets);
+        Assert.Equal(GroupingSetType.Rollup, selectStmt.GroupBy.GroupingSets[0].Type);
+
+        Assert.NotNull(selectStmt.Limit);
+        Assert.Equal(10, selectStmt.Limit.RowCount.Value);
+    }
+
+    [Fact]
+    public void Select_GroupBy_WithoutRollup_StillWorks()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "SELECT department, COUNT(*) FROM employees GROUP BY department");
+
+        var selectStmt = grammar.Create(node);
+
+        Assert.NotNull(selectStmt.GroupBy);
+        Assert.Single(selectStmt.GroupBy.Columns);
+        Assert.Equal("department", selectStmt.GroupBy.Columns[0]);
+        Assert.Empty(selectStmt.GroupBy.GroupingSets);
+    }
+
+    [Fact]
+    public void Select_GroupBy_WithRollup_BacktickQuoted()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "SELECT `dept`, SUM(`salary`) FROM `employees` GROUP BY `dept` WITH ROLLUP");
+
+        var selectStmt = grammar.Create(node);
+
+        Assert.NotNull(selectStmt.GroupBy);
+        Assert.Single(selectStmt.GroupBy.GroupingSets);
+
+        var rollupSet = selectStmt.GroupBy.GroupingSets[0];
+        Assert.Equal(GroupingSetType.Rollup, rollupSet.Type);
+        Assert.Single(rollupSet.Sets);
+        Assert.Equal("dept", rollupSet.Sets[0][0]);
+    }
+
+    [Fact]
+    public void Select_GroupBy_StandardRollup_StillWorks()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "SELECT year, SUM(sales) FROM revenue GROUP BY ROLLUP(year)");
+
+        var selectStmt = grammar.Create(node);
+
+        Assert.NotNull(selectStmt.GroupBy);
+        Assert.Empty(selectStmt.GroupBy.Columns);
+        Assert.Single(selectStmt.GroupBy.GroupingSets);
+
+        var rollupSet = selectStmt.GroupBy.GroupingSets[0];
+        Assert.Equal(GroupingSetType.Rollup, rollupSet.Type);
+        Assert.Single(rollupSet.Sets);
+        Assert.Equal("year", rollupSet.Sets[0][0]);
+    }
+
+    [Fact]
     public void Select_WithSimpleLimit_Parameter()
     {
         TestGrammar grammar = new();
