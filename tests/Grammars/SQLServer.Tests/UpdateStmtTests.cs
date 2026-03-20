@@ -62,4 +62,34 @@ public class UpdateStmtTests
         Assert.Equal("o", join.Condition.Right!.Column!.TableName);
         Assert.Equal("CustomerID", join.Condition.Right.Column.ColumnName);
     }
+
+    [Fact]
+    public void Update_BracketQuoted_TableAndColumns()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "UPDATE [Customers] SET [CustomerName] = 'Bob' WHERE [ID] = 1");
+
+        var updateStmt = grammar.Create(node);
+
+        Assert.NotNull(updateStmt.Table);
+        Assert.Equal("Customers", updateStmt.Table!.TableName);
+        Assert.NotNull(updateStmt.WhereClause);
+    }
+
+    [Fact]
+    public void Update_BracketQuoted_WithJoin()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "UPDATE [Customers] [c] INNER JOIN [Orders] [o] ON [c].[ID] = [o].[CustomerID] SET [c].[CustomerName] = 'Active' WHERE [o].[OrderDate] = '2024-01-01'");
+
+        var updateStmt = grammar.Create(node);
+
+        Assert.NotNull(updateStmt.Table);
+        Assert.Equal("Customers", updateStmt.Table!.TableName);
+        Assert.Equal("c", updateStmt.Table.TableAlias);
+        Assert.Single(updateStmt.Joins);
+        Assert.Equal("Orders", updateStmt.Joins[0].Table.TableName);
+    }
 }
