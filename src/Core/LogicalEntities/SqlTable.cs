@@ -12,6 +12,7 @@ public class SqlTable : IEquatable<SqlTable>
     public string? DatabaseName { get; set; }
     public string TableName { get; }
     public string? TableAlias { get; set; }
+    public IList<string> TableHints { get; set; } = new List<string>();
 
     public override bool Equals(object? obj) => Equals(obj as SqlTable);
 

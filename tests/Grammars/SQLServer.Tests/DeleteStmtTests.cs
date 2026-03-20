@@ -16,7 +16,8 @@ public class DeleteStmtTests
             AliasOpt aliasOpt = new(this, simpleId);
             Id id = new(this, simpleId);
             LiteralValue literalValue = new(this);
-            TableName tableName = new(this, aliasOpt, id);
+            TableHintOpt tableHintOpt = new(this);
+            TableName tableName = new(this, aliasOpt, id, tableHintOpt);
             Parameter parameter = new(this);
             Expr expr = new(this, id, literalValue, parameter);
             JoinChainOpt joinChainOpt = new(this, tableName, expr);

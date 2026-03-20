@@ -29,6 +29,8 @@ public class SqlSelectDefinition
 
     public SqlTopClause? Top { get; set; }
 
+    public IList<string> QueryHints { get; set; } = new List<string>();
+
     public string? InvalidReferenceReason { get; set; }
     public bool InvalidReferences => !string.IsNullOrEmpty(InvalidReferenceReason);
 
