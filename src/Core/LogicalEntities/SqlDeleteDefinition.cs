@@ -15,6 +15,11 @@ public class SqlDeleteDefinition
     public SqlExpression? WhereClause { get; set; }
     public SqlReturning? Returning { get; set; }
 
+    /// <summary>
+    /// SQL Server OUTPUT clause for capturing deleted row values.
+    /// </summary>
+    public SqlOutputClause? OutputClause { get; set; }
+
     public void ResolveParameters(DbParameterCollection parameters) =>
         Accept(new ResolveParametersVisitor(parameters));
 

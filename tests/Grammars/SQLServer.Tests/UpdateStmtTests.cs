@@ -24,7 +24,8 @@ public class UpdateStmtTests
             JoinChainOpt joinChainOpt = new(this, tableName, expr);
             WhereClauseOpt whereClauseOpt = new(this, expr);
             ReturningClauseOpt returningClauseOpt = new(this, id);
-            UpdateStmt updateStmt = new(this, id, literalValue, parameter, funcCall, tableName, whereClauseOpt, returningClauseOpt, joinChainOpt);
+            OutputClauseOpt outputClauseOpt = new(this, id);
+            UpdateStmt updateStmt = new(this, expr, funcCall, tableName, whereClauseOpt, returningClauseOpt, joinChainOpt, outputClauseOpt);
 
             OrderByList orderByList = new(this, id);
             SelectStmt selectStmt = new(this, id, expr, aliasOpt, tableName, joinChainOpt, orderByList, whereClauseOpt, funcCall);

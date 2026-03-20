@@ -23,7 +23,8 @@ public class DeleteStmtTests
             JoinChainOpt joinChainOpt = new(this, tableName, expr);
             WhereClauseOpt whereClauseOpt = new(this, expr);
             ReturningClauseOpt returningClauseOpt = new(this, id);
-            DeleteStmt deleteStmt = new(this, tableName, whereClauseOpt, returningClauseOpt, joinChainOpt);
+            OutputClauseOpt outputClauseOpt = new(this, id);
+            DeleteStmt deleteStmt = new(this, tableName, whereClauseOpt, returningClauseOpt, joinChainOpt, outputClauseOpt);
 
             FuncCall funcCall = new(this, id, expr);
             OrderByList orderByList = new(this, id);

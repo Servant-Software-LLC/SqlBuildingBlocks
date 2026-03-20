@@ -18,6 +18,11 @@ public class SqlUpdateDefinition
 
     public SqlReturning? Returning { get; set; }
 
+    /// <summary>
+    /// SQL Server OUTPUT clause for capturing old/new row values.
+    /// </summary>
+    public SqlOutputClause? OutputClause { get; set; }
+
     public void ResolveParameters(DbParameterCollection parameters) =>
         Accept(new ResolveParametersVisitor(parameters));
 
