@@ -67,6 +67,7 @@ public class Stmt : NonTerminal
         AlterStmt? alterStmt = null;
         DropTableStmt? dropTableStmt = null;
         RenameTableStmt? renameTableStmt = null;
+        MergeStmt? mergeStmt = null;
 
         //Compose the rule for this instance from all of the provided statments.
         for (int i = 0; i < stmts.Length; i++)
@@ -102,6 +103,9 @@ public class Stmt : NonTerminal
                 case RenameTableStmt renameTableStmt1:
                     renameTableStmt = renameTableStmt1;
                     break;
+                case MergeStmt mergeStmt1:
+                    mergeStmt = mergeStmt1;
+                    break;
                 default:
                     throw new ArgumentOutOfRangeException($"The statement of type {stmt.GetType()} was not expected.");
             }
@@ -112,7 +116,7 @@ public class Stmt : NonTerminal
                 rule |= stmts[i];
         }
 
-        return new(rule!, new(selectStmt, insertStmt, updateStmt, deleteStmt, createTableStmt, alterStmt, dropTableStmt, renameTableStmt));
+        return new(rule!, new(selectStmt, insertStmt, updateStmt, deleteStmt, createTableStmt, alterStmt, dropTableStmt, renameTableStmt, mergeStmt));
     }
 
     public virtual SqlDefinition Create(ParseTreeNode stmt)
@@ -187,6 +191,15 @@ public class Stmt : NonTerminal
                 throw new ArgumentNullException(nameof(stmts.RenameTableStmt), $"Unable to create a {nameof(SqlDefinition)} instance for Irony term, {stmt.Term.Name}, because a {typeof(RenameTableStmt)} was not provided to the ctor of {nameof(Stmt)}");
 
             return new(stmts.RenameTableStmt.Create(stmt));
+        }
+
+        //MERGE
+        if (stmt.Term.Name == MergeStmt.TermName)
+        {
+            if (stmts.MergeStmt == null)
+                throw new ArgumentNullException(nameof(stmts.MergeStmt), $"Unable to create a {nameof(SqlDefinition)} instance for Irony term, {stmt.Term.Name}, because a {typeof(MergeStmt)} was not provided to the ctor of {nameof(Stmt)}");
+
+            return new(stmts.MergeStmt.Create(stmt));
         }
 
         var thisMethod = MethodBase.GetCurrentMethod() as MethodInfo;
