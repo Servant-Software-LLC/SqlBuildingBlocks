@@ -10,12 +10,14 @@ namespace SqlBuildingBlocks.Grammars.PostgreSQL;
 /// - ARRAY constructor syntax (e.g. ARRAY[1, 2, 3])
 /// - Array subscript syntax (e.g. col[1], col[1:3])
 /// - ANY(ARRAY[...]) and ALL(ARRAY[...])
+/// - JSON operators (->, ->>, #>, #>>, @>, <@, ?, ?|, ?&)
 /// </summary>
 public class Expr : SqlBuildingBlocks.Expr
 {
     private const string pgCastExprTermName = "pgCastExpr";
     private const string pgArrayConstructorTermName = "pgArrayConstructor";
     private const string pgArraySubscriptTermName = "pgArraySubscript";
+    private const string pgJsonExprTermName = "pgJsonExpr";
 
     private SqlBuildingBlocks.DataType? pgDataType;
 
@@ -94,6 +96,44 @@ public class Expr : SqlBuildingBlocks.Expr
         Rule |= pgArraySubscript;
     }
 
+    /// <summary>
+    /// Adds PostgreSQL JSON operator support (->, ->>, #>, #>>, @>, &lt;@, ?, ?|, ?&amp;).
+    /// Must be called AFTER <see cref="SqlBuildingBlocks.Expr.InitializeRule"/>.
+    /// </summary>
+    public void AddJsonOperatorSupport(Grammar grammar)
+    {
+        // Order matters: longer operators must be registered first so the scanner
+        // doesn't greedily match a shorter prefix (e.g. -> before ->>).
+        var DOUBLE_ARROW = grammar.ToTerm("->>");
+        var ARROW = grammar.ToTerm("->");
+        var HASH_DOUBLE_ARROW = grammar.ToTerm("#>>");
+        var HASH_ARROW = grammar.ToTerm("#>");
+        var CONTAINS = grammar.ToTerm("@>");
+        var CONTAINED_BY = grammar.ToTerm("<@");
+        var KEY_EXISTS = grammar.ToTerm("?");
+        var ANY_KEY_EXISTS = grammar.ToTerm("?|");
+        var ALL_KEYS_EXIST = grammar.ToTerm("?&");
+
+        var pgJsonOp = new NonTerminal("pgJsonOp");
+        pgJsonOp.Rule = ARROW | DOUBLE_ARROW | HASH_ARROW | HASH_DOUBLE_ARROW
+                      | CONTAINS | CONTAINED_BY
+                      | KEY_EXISTS | ANY_KEY_EXISTS | ALL_KEYS_EXIST;
+
+        var pgJsonExpr = new NonTerminal(pgJsonExprTermName);
+        pgJsonExpr.Rule = this + pgJsonOp + this;
+
+        // Register at precedence 8 (same level as comparison operators)
+        // so JSON access binds tighter than AND/OR but at the same level as = / < / >.
+        grammar.RegisterOperators(8, Associativity.Left,
+            ARROW, DOUBLE_ARROW, HASH_ARROW, HASH_DOUBLE_ARROW,
+            CONTAINS, CONTAINED_BY,
+            KEY_EXISTS, ANY_KEY_EXISTS, ALL_KEYS_EXIST);
+
+        pgJsonOp.SetFlag(TermFlags.InheritPrecedence);
+
+        Rule |= pgJsonExpr;
+    }
+
     public override SqlExpression Create(ParseTreeNode expression)
     {
         if (expression.Term.Name == pgCastExprTermName)
@@ -109,6 +149,11 @@ public class Expr : SqlBuildingBlocks.Expr
         if (expression.Term.Name == pgArraySubscriptTermName)
         {
             return CreateArraySubscriptExpression(expression);
+        }
+
+        if (expression.Term.Name == pgJsonExprTermName)
+        {
+            return CreateJsonExpression(expression);
         }
 
         return base.Create(expression);
@@ -132,6 +177,35 @@ public class Expr : SqlBuildingBlocks.Expr
         var exprListNode = arrayNode.ChildNodes[0];
         var items = exprListNode.ChildNodes.Select(Create).ToList();
         return new SqlExpression(new SqlArrayConstructor(items));
+    }
+
+    private SqlExpression CreateJsonExpression(ParseTreeNode jsonExprNode)
+    {
+        // Children: [left, pgJsonOp, right]
+        // pgJsonOp has one child token identifying the operator.
+        var leftNode = jsonExprNode.ChildNodes[0];
+        var opNode = jsonExprNode.ChildNodes[1];
+        var rightNode = jsonExprNode.ChildNodes[2];
+
+        var left = Create(leftNode);
+        var right = Create(rightNode);
+
+        var opText = opNode.ChildNodes[0].Token.Text;
+        var jsonOp = opText switch
+        {
+            "->" => SqlJsonOperator.Arrow,
+            "->>" => SqlJsonOperator.DoubleArrow,
+            "#>" => SqlJsonOperator.HashArrow,
+            "#>>" => SqlJsonOperator.HashDoubleArrow,
+            "@>" => SqlJsonOperator.Contains,
+            "<@" => SqlJsonOperator.ContainedBy,
+            "?" => SqlJsonOperator.KeyExists,
+            "?|" => SqlJsonOperator.AnyKeyExists,
+            "?&" => SqlJsonOperator.AllKeysExist,
+            _ => throw new ArgumentException($"Unknown PostgreSQL JSON operator: {opText}")
+        };
+
+        return new SqlExpression(new SqlJsonExpression(left, jsonOp, right));
     }
 
     private SqlExpression CreateArraySubscriptExpression(ParseTreeNode subscriptNode)
