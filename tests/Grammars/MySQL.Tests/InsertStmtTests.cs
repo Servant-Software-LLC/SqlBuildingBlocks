@@ -130,4 +130,95 @@ public class InsertStmtTests
         // The expression is a binary expression (count + 1)
         Assert.NotNull(assignment.Expression);
     }
+
+    [Fact]
+    public void Insert_OnDuplicateKeyUpdate_ValuesReference()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "INSERT INTO users (id, name, email) VALUES (1, 'Alice', 'alice@example.com') ON DUPLICATE KEY UPDATE name = VALUES(name), email = VALUES(email)");
+
+        var sqlInsertDefinition = grammar.Create(node);
+
+        // Assert on the Table
+        Assert.NotNull(sqlInsertDefinition.Table);
+        Assert.Equal("users", sqlInsertDefinition.Table.TableName);
+
+        // Assert on VALUES
+        Assert.NotNull(sqlInsertDefinition.Values);
+        Assert.Single(sqlInsertDefinition.Values);
+
+        // Assert on UpsertClause
+        Assert.NotNull(sqlInsertDefinition.UpsertClause);
+        Assert.Equal(SqlUpsertAction.Update, sqlInsertDefinition.UpsertClause.Action);
+        Assert.Empty(sqlInsertDefinition.UpsertClause.ConflictColumns);
+        Assert.Equal(2, sqlInsertDefinition.UpsertClause.Assignments.Count);
+
+        // First assignment: name = VALUES(name)
+        var assignment1 = sqlInsertDefinition.UpsertClause.Assignments[0];
+        Assert.Equal("name", assignment1.Column.ColumnName);
+        Assert.NotNull(assignment1.Function);
+        Assert.Equal("VALUES", assignment1.Function.FunctionName);
+        Assert.Single(assignment1.Function.Arguments);
+        Assert.NotNull(assignment1.Function.Arguments[0].Column);
+        Assert.Equal("name", assignment1.Function.Arguments[0].Column.ColumnName);
+
+        // Second assignment: email = VALUES(email)
+        var assignment2 = sqlInsertDefinition.UpsertClause.Assignments[1];
+        Assert.Equal("email", assignment2.Column.ColumnName);
+        Assert.NotNull(assignment2.Function);
+        Assert.Equal("VALUES", assignment2.Function.FunctionName);
+        Assert.Single(assignment2.Function.Arguments);
+        Assert.NotNull(assignment2.Function.Arguments[0].Column);
+        Assert.Equal("email", assignment2.Function.Arguments[0].Column.ColumnName);
+    }
+
+    [Fact]
+    public void Insert_OnDuplicateKeyUpdate_ValuesReference_BacktickQuoted()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "INSERT INTO `users` (`id`, `name`) VALUES (1, 'Alice') ON DUPLICATE KEY UPDATE `name` = VALUES(`name`)");
+
+        var sqlInsertDefinition = grammar.Create(node);
+
+        Assert.NotNull(sqlInsertDefinition.Table);
+        Assert.Equal("users", sqlInsertDefinition.Table.TableName);
+
+        Assert.NotNull(sqlInsertDefinition.UpsertClause);
+        Assert.Single(sqlInsertDefinition.UpsertClause.Assignments);
+
+        var assignment = sqlInsertDefinition.UpsertClause.Assignments[0];
+        Assert.Equal("name", assignment.Column.ColumnName);
+        Assert.NotNull(assignment.Function);
+        Assert.Equal("VALUES", assignment.Function.FunctionName);
+        Assert.Single(assignment.Function.Arguments);
+        Assert.NotNull(assignment.Function.Arguments[0].Column);
+        Assert.Equal("name", assignment.Function.Arguments[0].Column.ColumnName);
+    }
+
+    [Fact]
+    public void Insert_OnDuplicateKeyUpdate_MixedValuesAndLiterals()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "INSERT INTO users (id, name, status) VALUES (1, 'Alice', 'new') ON DUPLICATE KEY UPDATE name = VALUES(name), status = 'updated'");
+
+        var sqlInsertDefinition = grammar.Create(node);
+
+        Assert.NotNull(sqlInsertDefinition.UpsertClause);
+        Assert.Equal(2, sqlInsertDefinition.UpsertClause.Assignments.Count);
+
+        // First assignment uses VALUES() reference
+        var assignment1 = sqlInsertDefinition.UpsertClause.Assignments[0];
+        Assert.Equal("name", assignment1.Column.ColumnName);
+        Assert.NotNull(assignment1.Function);
+        Assert.Equal("VALUES", assignment1.Function.FunctionName);
+
+        // Second assignment uses a literal
+        var assignment2 = sqlInsertDefinition.UpsertClause.Assignments[1];
+        Assert.Equal("status", assignment2.Column.ColumnName);
+        Assert.NotNull(assignment2.Value);
+        Assert.Equal("updated", assignment2.Value.String);
+    }
 }
