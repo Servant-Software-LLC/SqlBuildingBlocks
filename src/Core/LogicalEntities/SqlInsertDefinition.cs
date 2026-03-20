@@ -28,6 +28,11 @@ public class SqlInsertDefinition
     /// </summary>
     public SqlUpsertClause? UpsertClause { get; set; }
 
+    /// <summary>
+    /// SQL Server OUTPUT clause for capturing inserted rows.
+    /// </summary>
+    public SqlOutputClause? OutputClause { get; set; }
+
     public void ResolveParameters(DbParameterCollection parameters) =>
         Accept(new ResolveParametersVisitor(parameters));
 
