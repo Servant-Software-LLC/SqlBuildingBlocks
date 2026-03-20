@@ -41,6 +41,8 @@ public abstract class ResolveFunctionsVisitorBase : ISqlExpressionVisitor, ISqlV
 
     public virtual void Visit(SqlArraySubscript arraySubscript) { }
 
+    public virtual void Visit(SqlJsonExpression jsonExpr) { }
+
     protected abstract SqlExpression? VisitReturnExpression(SqlFunction sqlFunction);
 
     protected abstract SqlLiteralValue? VisitReturnValue(SqlFunction sqlFunction);

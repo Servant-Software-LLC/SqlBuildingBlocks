@@ -64,4 +64,6 @@ public class FunctionsEncounteredVisitor : ISqlExpressionVisitor
     public void Visit(SqlArrayConstructor arrayConstructor) { }
 
     public void Visit(SqlArraySubscript arraySubscript) { }
+
+    public void Visit(SqlJsonExpression jsonExpr) { }
 }

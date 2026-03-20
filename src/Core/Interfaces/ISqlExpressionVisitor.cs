@@ -78,4 +78,9 @@ public interface ISqlExpressionVisitor
     /// Visits the <see cref="SqlArraySubscript"/> in the <see cref="SqlExpression"/> tree.
     /// </summary>
     void Visit(SqlArraySubscript arraySubscript);
+
+    /// <summary>
+    /// Visits the <see cref="SqlJsonExpression"/> in the <see cref="SqlExpression"/> tree.
+    /// </summary>
+    void Visit(SqlJsonExpression jsonExpr);
 }

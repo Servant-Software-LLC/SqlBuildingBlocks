@@ -21,6 +21,7 @@ public class SqlExpression
     public SqlExpression(SqlCastExpression castExpr) => CastExpr = castExpr;
     public SqlExpression(SqlArrayConstructor arrayConstructor) => ArrayConstructor = arrayConstructor;
     public SqlExpression(SqlArraySubscript arraySubscript) => ArraySubscript = arraySubscript;
+    public SqlExpression(SqlJsonExpression jsonExpr) => JsonExpr = jsonExpr;
 
     //Logic within this class should enforce that only one of these properties is ever set.
     public SqlColumnRef? Column { get; private set; }
@@ -36,6 +37,7 @@ public class SqlExpression
     public SqlCastExpression? CastExpr { get; private set; }
     public SqlArrayConstructor? ArrayConstructor { get; private set; }
     public SqlArraySubscript? ArraySubscript { get; private set; }
+    public SqlJsonExpression? JsonExpr { get; private set; }
 
     public Type Type 
     { 
@@ -124,6 +126,12 @@ public class SqlExpression
         if (ArraySubscript != null)
         {
             ArraySubscript.Accept(visitor);
+            return;
+        }
+
+        if (JsonExpr != null)
+        {
+            JsonExpr.Accept(visitor);
             return;
         }
 
@@ -272,6 +280,7 @@ public class SqlExpression
         CastExpr = null;
         ArrayConstructor = null;
         ArraySubscript = null;
+        JsonExpr = null;
 
         if (expression.Column != null)
             Column = expression.Column;
@@ -299,6 +308,8 @@ public class SqlExpression
             ArrayConstructor = expression.ArrayConstructor;
         else if (expression.ArraySubscript != null)
             ArraySubscript = expression.ArraySubscript;
+        else if (expression.JsonExpr != null)
+            JsonExpr = expression.JsonExpr;
     }
 
     public string ToExpressionString()
@@ -312,6 +323,7 @@ public class SqlExpression
         if (CastExpr != null) return CastExpr.ToExpressionString();
         if (ArrayConstructor != null) return ArrayConstructor.ToExpressionString();
         if (ArraySubscript != null) return ArraySubscript.ToExpressionString();
+        if (JsonExpr != null) return JsonExpr.ToExpressionString();
         if (Column != null) return Column.ToExpressionString();
         if (Parameter != null) return Parameter.ToExpressionString();
         if (Function != null) return Function.ToExpressionString();
@@ -331,6 +343,7 @@ public class SqlExpression
         if (CastExpr != null) return CastExpr.ToString();
         if (ArrayConstructor != null) return ArrayConstructor.ToString();
         if (ArraySubscript != null) return ArraySubscript.ToString();
+        if (JsonExpr != null) return JsonExpr.ToString();
         if (Column != null) return Column.ToString();
         if (Parameter != null) return Parameter.ToString();
         if (Function != null) return Function.ToString();
