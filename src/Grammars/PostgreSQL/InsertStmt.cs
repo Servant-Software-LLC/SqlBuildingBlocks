@@ -4,7 +4,8 @@ using SqlBuildingBlocks.LogicalEntities;
 namespace SqlBuildingBlocks.Grammars.PostgreSQL;
 
 /// <summary>
-/// PostgreSQL-specific INSERT statement that supports ON CONFLICT DO UPDATE SET ... / DO NOTHING.
+/// PostgreSQL-specific INSERT statement that supports ON CONFLICT DO UPDATE SET ... / DO NOTHING
+/// and the RETURNING clause.
 /// Supports conflict targets: column list, ON CONSTRAINT, or no target.
 /// Supports optional WHERE clauses on both the conflict target and DO UPDATE action.
 /// </summary>
@@ -17,9 +18,19 @@ public class InsertStmt : SqlBuildingBlocks.InsertStmt
     private const string ConflictTargetWhereOptTermName = "conflictTargetWhereOpt";
     private const string ConflictUpdateWhereOptTermName = "conflictUpdateWhereOpt";
 
-    public InsertStmt(Grammar grammar, Id id, Expr expr, SelectStmt selectStmt)
+    private readonly ReturningClauseOpt? pgReturningClauseOpt;
+
+    public InsertStmt(Grammar grammar, Id id, SqlBuildingBlocks.Expr expr, SqlBuildingBlocks.SelectStmt selectStmt)
+        : this(grammar, id, expr, selectStmt, null)
+    {
+    }
+
+    public InsertStmt(Grammar grammar, Id id, SqlBuildingBlocks.Expr expr, SqlBuildingBlocks.SelectStmt selectStmt,
+                      ReturningClauseOpt? returningClauseOpt)
         : base(grammar, id, expr, selectStmt)
     {
+        pgReturningClauseOpt = returningClauseOpt;
+
         var ON = grammar.ToTerm("ON");
         var CONFLICT = grammar.ToTerm("CONFLICT");
         var CONSTRAINT = grammar.ToTerm("CONSTRAINT");
@@ -64,7 +75,10 @@ public class InsertStmt : SqlBuildingBlocks.InsertStmt
         var onConflictOpt = new NonTerminal(OnConflictOptTermName);
         onConflictOpt.Rule = grammar.Empty | ON + CONFLICT + conflictTarget + conflictAction;
 
-        Rule = Rule + onConflictOpt;
+        if (returningClauseOpt != null)
+            Rule = Rule + onConflictOpt + returningClauseOpt;
+        else
+            Rule = Rule + onConflictOpt;
 
         grammar.MarkPunctuation("(", ")");
     }
@@ -73,21 +87,46 @@ public class InsertStmt : SqlBuildingBlocks.InsertStmt
     {
         base.Update(insertStmt, sqlInsertDefinition);
 
-        // The ON CONFLICT clause is the last child node
-        var onConflictOpt = insertStmt.ChildNodes[insertStmt.ChildNodes.Count - 1];
-        if (onConflictOpt.Term.Name == OnConflictOptTermName && onConflictOpt.ChildNodes.Count > 0)
+        // Find the ON CONFLICT and RETURNING clauses at the end
+        // The last children are: ... + onConflictOpt [+ returningClauseOpt]
+        int lastIndex = insertStmt.ChildNodes.Count - 1;
+
+        if (pgReturningClauseOpt != null)
         {
-            var upsertClause = new SqlUpsertClause();
+            // returningClauseOpt is last, onConflictOpt is second to last
+            var returningNode = insertStmt.ChildNodes[lastIndex];
+            var onConflictOpt = insertStmt.ChildNodes[lastIndex - 1];
 
-            // Child layout: ON CONFLICT conflictTarget conflictAction
-            var conflictTarget = onConflictOpt.ChildNodes[2];
-            ParseConflictTarget(conflictTarget, upsertClause);
+            sqlInsertDefinition.ReturningClause = pgReturningClauseOpt.Create(returningNode);
 
-            var conflictAction = onConflictOpt.ChildNodes[3];
-            ParseConflictAction(conflictAction, upsertClause);
-
-            sqlInsertDefinition.UpsertClause = upsertClause;
+            if (onConflictOpt.Term.Name == OnConflictOptTermName && onConflictOpt.ChildNodes.Count > 0)
+            {
+                ParseOnConflict(onConflictOpt, sqlInsertDefinition);
+            }
         }
+        else
+        {
+            // No RETURNING, onConflictOpt is last
+            var onConflictOpt = insertStmt.ChildNodes[lastIndex];
+            if (onConflictOpt.Term.Name == OnConflictOptTermName && onConflictOpt.ChildNodes.Count > 0)
+            {
+                ParseOnConflict(onConflictOpt, sqlInsertDefinition);
+            }
+        }
+    }
+
+    private void ParseOnConflict(ParseTreeNode onConflictOpt, SqlInsertDefinition sqlInsertDefinition)
+    {
+        var upsertClause = new SqlUpsertClause();
+
+        // Child layout: ON CONFLICT conflictTarget conflictAction
+        var conflictTarget = onConflictOpt.ChildNodes[2];
+        ParseConflictTarget(conflictTarget, upsertClause);
+
+        var conflictAction = onConflictOpt.ChildNodes[3];
+        ParseConflictAction(conflictAction, upsertClause);
+
+        sqlInsertDefinition.UpsertClause = upsertClause;
     }
 
     private void ParseConflictTarget(ParseTreeNode conflictTarget, SqlUpsertClause upsertClause)

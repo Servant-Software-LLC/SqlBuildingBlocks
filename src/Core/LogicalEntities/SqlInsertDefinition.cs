@@ -33,6 +33,11 @@ public class SqlInsertDefinition
     /// </summary>
     public SqlOutputClause? OutputClause { get; set; }
 
+    /// <summary>
+    /// PostgreSQL RETURNING clause for capturing inserted rows.
+    /// </summary>
+    public SqlReturningClause? ReturningClause { get; set; }
+
     public void ResolveParameters(DbParameterCollection parameters) =>
         Accept(new ResolveParametersVisitor(parameters));
 

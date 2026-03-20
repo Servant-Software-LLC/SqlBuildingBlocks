@@ -23,6 +23,11 @@ public class SqlUpdateDefinition
     /// </summary>
     public SqlOutputClause? OutputClause { get; set; }
 
+    /// <summary>
+    /// PostgreSQL RETURNING clause for capturing updated rows.
+    /// </summary>
+    public SqlReturningClause? ReturningClause { get; set; }
+
     public void ResolveParameters(DbParameterCollection parameters) =>
         Accept(new ResolveParametersVisitor(parameters));
 
