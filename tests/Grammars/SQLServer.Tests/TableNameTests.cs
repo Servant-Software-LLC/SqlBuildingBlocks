@@ -15,7 +15,8 @@ public class TableNameTests
 
             var aliasOpt = new AliasOpt(this, simpleId);
             var id = new Id(this, simpleId);
-            var tableName = new TableName(this, aliasOpt, id);
+            var tableHintOpt = new TableHintOpt(this);
+            var tableName = new TableName(this, aliasOpt, id, tableHintOpt);
 
             Root = tableName;
         }
