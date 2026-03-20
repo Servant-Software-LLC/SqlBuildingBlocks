@@ -62,4 +62,34 @@ public class DeleteStmtTests
         Assert.Equal("c", join.Condition.Right!.Column!.TableName);
         Assert.Equal("id", join.Condition.Right.Column.ColumnName);
     }
+
+    [Fact]
+    public void Delete_BracketQuoted_TableName()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "DELETE FROM [Customers] WHERE [ID] = 1");
+
+        var deleteStmt = grammar.Create(node);
+
+        Assert.NotNull(deleteStmt.Table);
+        Assert.Equal("Customers", deleteStmt.Table!.TableName);
+        Assert.NotNull(deleteStmt.WhereClause);
+    }
+
+    [Fact]
+    public void Delete_BracketQuoted_WithJoin()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "DELETE [o] FROM [orders] [o] JOIN [Customers] [c] ON [o].[customer_id] = [c].[ID] WHERE [c].[CustomerName] = 'test'");
+
+        var deleteStmt = grammar.Create(node);
+
+        Assert.NotNull(deleteStmt.Table);
+        Assert.Equal("o", deleteStmt.Table!.TableName);
+        Assert.NotNull(deleteStmt.SourceTable);
+        Assert.Equal("orders", deleteStmt.SourceTable!.TableName);
+        Assert.Single(deleteStmt.Joins);
+        Assert.Equal("Customers", deleteStmt.Joins[0].Table.TableName);
+    }
 }

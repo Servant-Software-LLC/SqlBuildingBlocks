@@ -35,4 +35,49 @@ public class TableNameTests
         Assert.Equal("l", table.TableAlias);
     }
 
+    [Fact]
+    public void TableName_BracketQuoted_WithAlias()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "[locations] AS [l]");
+        var table = grammar.Create(node);
+
+        Assert.Null(table.DatabaseName);
+        Assert.Equal("locations", table.TableName);
+        Assert.Equal("l", table.TableAlias);
+    }
+
+    [Fact]
+    public void TableName_BracketQuoted_NoAlias()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "[Customers]");
+        var table = grammar.Create(node);
+
+        Assert.Null(table.DatabaseName);
+        Assert.Equal("Customers", table.TableName);
+        Assert.Null(table.TableAlias);
+    }
+
+    [Fact]
+    public void TableName_BracketQuoted_TwoPartName()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "[dbo].[Customers]");
+        var table = grammar.Create(node);
+
+        Assert.Equal("dbo", table.DatabaseName);
+        Assert.Equal("Customers", table.TableName);
+    }
+
+    [Fact]
+    public void TableName_BracketQuoted_ReservedWord()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, "[Order]");
+        var table = grammar.Create(node);
+
+        Assert.Null(table.DatabaseName);
+        Assert.Equal("Order", table.TableName);
+    }
 }
