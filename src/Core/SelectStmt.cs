@@ -67,8 +67,9 @@ public class SelectStmt : NonTerminal
         var INTERSECT = grammar.ToTerm("INTERSECT");
         var EXCEPT = grammar.ToTerm("EXCEPT");
 
-        var selRestrOpt = new NonTerminal("selRestrOpt");
-        selRestrOpt.Rule = grammar.Empty | "ALL" | "DISTINCT";
+        SelRestrOpt = new NonTerminal("selRestrOpt");
+        SelRestrOpt.Rule = grammar.Empty | "ALL" | "DISTINCT";
+        var selRestrOpt = SelRestrOpt;
 
         var aggregateName = new NonTerminal("aggregateName");
         aggregateName.Rule = COUNT | "Avg" | "Min" | "Max" | "StDev" | "StDevP" | "Sum" | "Var" | "VarP";
@@ -142,14 +143,17 @@ public class SelectStmt : NonTerminal
         var columnItemList = new NonTerminal("columnItemList");
         columnItemList.Rule = grammar.MakePlusRule(columnItemList, COMMA, columnItem);
 
-        var selList = new NonTerminal("selList");
-        selList.Rule = columnItemList | "*";
+        SelList = new NonTerminal("selList");
+        SelList.Rule = columnItemList | "*";
+        var selList = SelList;
 
-        var intoClauseOpt = new NonTerminal("intoClauseOpt");
-        intoClauseOpt.Rule = grammar.Empty | INTO + Id;
+        IntoClauseOpt = new NonTerminal("intoClauseOpt");
+        IntoClauseOpt.Rule = grammar.Empty | INTO + Id;
+        var intoClauseOpt = IntoClauseOpt;
 
-        var fromClauseOpt = new NonTerminal("fromClauseOpt");
-        fromClauseOpt.Rule = grammar.Empty | FROM + TableName + JoinChainOpt;
+        FromClauseOpt = new NonTerminal("fromClauseOpt");
+        FromClauseOpt.Rule = grammar.Empty | FROM + TableName + JoinChainOpt;
+        var fromClauseOpt = FromClauseOpt;
 
         IdList idList = new IdList(grammar, Id);
 
@@ -181,15 +185,17 @@ public class SelectStmt : NonTerminal
         GroupClauseOpt = new NonTerminal(sGroupClauseOpt);
         GroupClauseOpt.Rule = grammar.Empty | "GROUP" + BY + GroupByElementList;
 
-        var havingClauseOpt = new NonTerminal("havingClauseOpt");
-        havingClauseOpt.Rule = grammar.Empty | "HAVING" + expr;
+        HavingClauseOpt = new NonTerminal("havingClauseOpt");
+        HavingClauseOpt.Rule = grammar.Empty | "HAVING" + expr;
+        var havingClauseOpt = HavingClauseOpt;
 
         var orderClauseOpt = new NonTerminal("orderClauseOpt");
         orderClauseOpt.Rule = grammar.Empty | "ORDER" + BY + OrderByList;
 
-        var selectCore = new NonTerminal(sSelectCore);
-        selectCore.Rule = SELECT + selRestrOpt + selList + intoClauseOpt + fromClauseOpt + WhereClauseOpt +
+        SelectCoreNonTerminal = new NonTerminal(sSelectCore);
+        SelectCoreNonTerminal.Rule = SELECT + selRestrOpt + selList + intoClauseOpt + fromClauseOpt + WhereClauseOpt +
                           GroupClauseOpt + havingClauseOpt;
+        var selectCore = SelectCoreNonTerminal;
 
         var setOperator = new NonTerminal("setOperator");
         setOperator.Rule = UNION + ALL | UNION | INTERSECT | EXCEPT;
@@ -234,8 +240,14 @@ public class SelectStmt : NonTerminal
     public WhereClauseOpt WhereClauseOpt { get; }
     public FuncCall FuncCall { get; }
 
+    protected NonTerminal SelectCoreNonTerminal { get; set; }
+    protected NonTerminal SelRestrOpt { get; set; }
+    protected NonTerminal SelList { get; set; }
+    protected NonTerminal IntoClauseOpt { get; set; }
+    protected NonTerminal FromClauseOpt { get; set; }
     protected NonTerminal GroupClauseOpt { get; set; }
     protected NonTerminal GroupByElementList { get; set; }
+    protected NonTerminal HavingClauseOpt { get; set; }
 
     public virtual SqlSelectDefinition Create(ParseTreeNode selectStmt)
     {
