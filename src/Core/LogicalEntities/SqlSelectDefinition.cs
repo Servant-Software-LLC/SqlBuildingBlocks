@@ -27,6 +27,8 @@ public class SqlSelectDefinition
 
     public SqlLimitOffset? Limit { get; set; }
 
+    public SqlTopClause? Top { get; set; }
+
     public string? InvalidReferenceReason { get; set; }
     public bool InvalidReferences => !string.IsNullOrEmpty(InvalidReferenceReason);
 
