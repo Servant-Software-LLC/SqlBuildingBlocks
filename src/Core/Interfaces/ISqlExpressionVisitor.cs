@@ -68,4 +68,14 @@ public interface ISqlExpressionVisitor
     /// </summary>
     /// <param name="castExpr"></param>
     void Visit(SqlCastExpression castExpr);
+
+    /// <summary>
+    /// Visits the <see cref="SqlArrayConstructor"/> in the <see cref="SqlExpression"/> tree.
+    /// </summary>
+    void Visit(SqlArrayConstructor arrayConstructor);
+
+    /// <summary>
+    /// Visits the <see cref="SqlArraySubscript"/> in the <see cref="SqlExpression"/> tree.
+    /// </summary>
+    void Visit(SqlArraySubscript arraySubscript);
 }

@@ -83,4 +83,8 @@ internal class DetectVisitedVisitor : ISqlExpressionVisitor
     }
 
     public void Visit(SqlCastExpression castExpr) { }
+
+    public void Visit(SqlArrayConstructor arrayConstructor) { }
+
+    public void Visit(SqlArraySubscript arraySubscript) { }
 }

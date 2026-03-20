@@ -97,6 +97,10 @@ public class ResolveParametersVisitor : ISqlExpressionVisitor, ISqlValueVisitor
 
     public void Visit(SqlCastExpression castExpr) { }
 
+    public void Visit(SqlArrayConstructor arrayConstructor) { }
+
+    public void Visit(SqlArraySubscript arraySubscript) { }
+
     public SqlLimitValue? Visit(SqlLimitValue limit)
     {
         if (limit.Parameter != null)
