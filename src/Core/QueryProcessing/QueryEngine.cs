@@ -131,7 +131,7 @@ public class QueryEngine : IQueryEngine
 
         // Apply HAVING clause if present
         if (sqlSelectDefinition.HavingClause?.BinExpr != null)
-            resultRows = ApplyHavingClause(resultRows, processingState.QueryOutput, sqlSelectDefinition.HavingClause.BinExpr);
+            resultRows = ApplyHavingClause(resultRows, processingState.QueryOutput, sqlSelectDefinition.HavingClause.BinExpr, sqlSelectDefinition.Columns);
 
         return (processingState, resultRows);
     }
@@ -225,7 +225,7 @@ public class QueryEngine : IQueryEngine
 
         // Apply HAVING clause if present
         if (sqlSelectDefinition.HavingClause?.BinExpr != null)
-            result = ApplyHavingClause(result, processingState.QueryOutput, sqlSelectDefinition.HavingClause.BinExpr);
+            result = ApplyHavingClause(result, processingState.QueryOutput, sqlSelectDefinition.HavingClause.BinExpr, sqlSelectDefinition.Columns);
 
         // Apply ORDER BY
         if (sqlSelectDefinition.OrderBy != null && sqlSelectDefinition.OrderBy.Count > 0)
@@ -234,45 +234,35 @@ public class QueryEngine : IQueryEngine
         return (processingState, result);
     }
 
-    private static IEnumerable<DataRow> ApplyHavingClause(IEnumerable<DataRow> rows, VirtualDataTable queryOutput, SqlBinaryExpression havingClause)
+    private static IEnumerable<DataRow> ApplyHavingClause(IEnumerable<DataRow> rows, VirtualDataTable queryOutput, SqlBinaryExpression havingClause, IList<ISqlColumn> selectColumns)
     {
-        return rows.Where(row =>
-        {
-            // Evaluate the HAVING predicate against each result row
-            // Build column lookup from the result row
-            foreach (DataColumn col in queryOutput.Columns)
-            {
-                // The HAVING clause references columns by name in the result set
-            }
-
-            return EvaluateHavingPredicate(row, havingClause);
-        });
+        return rows.Where(row => EvaluateHavingPredicate(row, havingClause, selectColumns));
     }
 
-    private static bool EvaluateHavingPredicate(DataRow row, SqlBinaryExpression expr)
+    private static bool EvaluateHavingPredicate(DataRow row, SqlBinaryExpression expr, IList<ISqlColumn> selectColumns)
     {
         if (expr.Operator == SqlBinaryOperator.And)
         {
-            var left = expr.Left.BinExpr != null && EvaluateHavingPredicate(row, expr.Left.BinExpr);
-            var right = expr.Right?.BinExpr != null && EvaluateHavingPredicate(row, expr.Right.BinExpr);
+            var left = expr.Left.BinExpr != null && EvaluateHavingPredicate(row, expr.Left.BinExpr, selectColumns);
+            var right = expr.Right?.BinExpr != null && EvaluateHavingPredicate(row, expr.Right.BinExpr, selectColumns);
             return left && right;
         }
 
         if (expr.Operator == SqlBinaryOperator.Or)
         {
-            var left = expr.Left.BinExpr != null && EvaluateHavingPredicate(row, expr.Left.BinExpr);
-            var right = expr.Right?.BinExpr != null && EvaluateHavingPredicate(row, expr.Right.BinExpr);
+            var left = expr.Left.BinExpr != null && EvaluateHavingPredicate(row, expr.Left.BinExpr, selectColumns);
+            var right = expr.Right?.BinExpr != null && EvaluateHavingPredicate(row, expr.Right.BinExpr, selectColumns);
             return left || right;
         }
 
         // Get left and right values
-        var leftValue = ResolveHavingValue(row, expr.Left);
-        var rightValue = expr.Right != null ? ResolveHavingValue(row, expr.Right) : null;
+        var leftValue = ResolveHavingValue(row, expr.Left, selectColumns);
+        var rightValue = expr.Right != null ? ResolveHavingValue(row, expr.Right, selectColumns) : null;
 
         return CompareHavingValues(leftValue, rightValue, expr.Operator);
     }
 
-    private static object? ResolveHavingValue(DataRow row, SqlExpression expr)
+    private static object? ResolveHavingValue(DataRow row, SqlExpression expr, IList<ISqlColumn> selectColumns)
     {
         if (expr.Value != null)
             return expr.Value.Value;
@@ -284,10 +274,38 @@ public class QueryEngine : IQueryEngine
                 return row[colName];
         }
 
-        // Aggregate reference — look up by the default aggregate name pattern
+        // Aggregate function reference (e.g. COUNT(*), SUM(col)) — match against
+        // the SELECT list aggregates to find the corresponding result column name.
+        if (expr.Function != null)
+        {
+            var func = expr.Function;
+            var funcName = func.FunctionName.ToUpperInvariant();
+
+            // Match against SqlAggregate entries in the SELECT list
+            foreach (var col in selectColumns)
+            {
+                if (col is SqlAggregate agg &&
+                    string.Equals(agg.AggregateName, funcName, StringComparison.OrdinalIgnoreCase))
+                {
+                    var resultColName = agg.ColumnAlias ?? GetAggregateDefaultColumnName(agg);
+                    if (row.Table.Columns.Contains(resultColName))
+                        return row[resultColName];
+                }
+            }
+
+            // Fallback: try the default aggregate column name directly
+            string candidateName;
+            if (func.Arguments.Count > 0 && func.Arguments[0].Column != null)
+                candidateName = $"{funcName}({func.Arguments[0].Column.ColumnName})";
+            else
+                candidateName = funcName;
+
+            if (row.Table.Columns.Contains(candidateName))
+                return row[candidateName];
+        }
+
         if (expr.BinExpr != null)
         {
-            // Nested binary expression — shouldn't reach here for simple comparisons
             return null;
         }
 
