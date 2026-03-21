@@ -1570,4 +1570,258 @@ public class QueryEngineTests
     }
 
     #endregion
+
+    #region IN / NOT IN Tests
+
+    [Fact]
+    public void QueryAsDataTable_WhereIn_FiltersCorrectly()
+    {
+        const string databaseName = "MyDB";
+
+        // SELECT id, city FROM locations WHERE id IN (1, 3)
+        SqlSelectDefinition sqlSelect = new();
+        SqlColumn idCol = new(databaseName, "locations", "id") { ColumnType = typeof(int) };
+        SqlColumn cityCol = new(databaseName, "locations", "city") { ColumnType = typeof(string) };
+        sqlSelect.Columns.Add(idCol);
+        sqlSelect.Columns.Add(cityCol);
+
+        SqlTable locationsTable = new(databaseName, "locations");
+        idCol.TableRef = locationsTable;
+        cityCol.TableRef = locationsTable;
+        sqlSelect.Table = locationsTable;
+
+        // WHERE id IN (1, 3)
+        SqlColumnRef idColumnRef = new(null, null, "id") { Column = idCol };
+        var inList = new SqlInList(new List<SqlExpression>
+        {
+            new SqlExpression(new SqlLiteralValue(1)),
+            new SqlExpression(new SqlLiteralValue(3))
+        });
+        var whereClause = new SqlBinaryExpression(
+            new SqlExpression(idColumnRef),
+            SqlBinaryOperator.In,
+            new SqlExpression(inList));
+        sqlSelect.WhereClause = new SqlExpression(whereClause);
+
+        DataSet dataSet = new(databaseName);
+        DataTable locations = new("locations");
+        locations.Columns.Add("id", typeof(int));
+        locations.Columns.Add("city", typeof(string));
+        locations.Rows.Add(1, "Houston");
+        locations.Rows.Add(2, "Dallas");
+        locations.Rows.Add(3, "Austin");
+        locations.Rows.Add(4, "San Antonio");
+        dataSet.Tables.Add(locations);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var resultset = queryEngine.QueryAsDataTable();
+
+        Assert.Equal(2, resultset.Rows.Count);
+        Assert.Equal(1, resultset.Rows[0]["id"]);
+        Assert.Equal("Houston", resultset.Rows[0]["city"]);
+        Assert.Equal(3, resultset.Rows[1]["id"]);
+        Assert.Equal("Austin", resultset.Rows[1]["city"]);
+    }
+
+    [Fact]
+    public void QueryAsDataTable_WhereNotIn_FiltersCorrectly()
+    {
+        const string databaseName = "MyDB";
+
+        // SELECT id, city FROM locations WHERE id NOT IN (1, 3)
+        SqlSelectDefinition sqlSelect = new();
+        SqlColumn idCol = new(databaseName, "locations", "id") { ColumnType = typeof(int) };
+        SqlColumn cityCol = new(databaseName, "locations", "city") { ColumnType = typeof(string) };
+        sqlSelect.Columns.Add(idCol);
+        sqlSelect.Columns.Add(cityCol);
+
+        SqlTable locationsTable = new(databaseName, "locations");
+        idCol.TableRef = locationsTable;
+        cityCol.TableRef = locationsTable;
+        sqlSelect.Table = locationsTable;
+
+        // WHERE id NOT IN (1, 3)
+        SqlColumnRef idColumnRef = new(null, null, "id") { Column = idCol };
+        var inList = new SqlInList(new List<SqlExpression>
+        {
+            new SqlExpression(new SqlLiteralValue(1)),
+            new SqlExpression(new SqlLiteralValue(3))
+        });
+        var whereClause = new SqlBinaryExpression(
+            new SqlExpression(idColumnRef),
+            SqlBinaryOperator.NotIn,
+            new SqlExpression(inList));
+        sqlSelect.WhereClause = new SqlExpression(whereClause);
+
+        DataSet dataSet = new(databaseName);
+        DataTable locations = new("locations");
+        locations.Columns.Add("id", typeof(int));
+        locations.Columns.Add("city", typeof(string));
+        locations.Rows.Add(1, "Houston");
+        locations.Rows.Add(2, "Dallas");
+        locations.Rows.Add(3, "Austin");
+        locations.Rows.Add(4, "San Antonio");
+        dataSet.Tables.Add(locations);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var resultset = queryEngine.QueryAsDataTable();
+
+        Assert.Equal(2, resultset.Rows.Count);
+        Assert.Equal(2, resultset.Rows[0]["id"]);
+        Assert.Equal("Dallas", resultset.Rows[0]["city"]);
+        Assert.Equal(4, resultset.Rows[1]["id"]);
+        Assert.Equal("San Antonio", resultset.Rows[1]["city"]);
+    }
+
+    #endregion
+
+    #region GROUP BY Tests
+
+    [Fact]
+    public void QueryAsDataTable_GroupBy_WithCount()
+    {
+        const string databaseName = "MyDB";
+
+        // SELECT department, COUNT(*) as cnt FROM employees GROUP BY department
+        SqlSelectDefinition sqlSelect = new();
+
+        SqlColumn deptCol = new(databaseName, "employees", "department") { ColumnType = typeof(string) };
+        SqlTable employeesTable = new(databaseName, "employees");
+        deptCol.TableRef = employeesTable;
+        sqlSelect.Columns.Add(deptCol);
+
+        SqlAggregate countAgg = new("COUNT") { ColumnAlias = "cnt" };
+        sqlSelect.Columns.Add(countAgg);
+
+        sqlSelect.Table = employeesTable;
+        sqlSelect.GroupBy = new SqlGroupByClause();
+        sqlSelect.GroupBy.Columns.Add("department");
+
+        DataSet dataSet = new(databaseName);
+        DataTable employees = new("employees");
+        employees.Columns.Add("id", typeof(int));
+        employees.Columns.Add("name", typeof(string));
+        employees.Columns.Add("department", typeof(string));
+        employees.Rows.Add(1, "Alice", "Engineering");
+        employees.Rows.Add(2, "Bob", "Engineering");
+        employees.Rows.Add(3, "Carol", "Sales");
+        employees.Rows.Add(4, "Dave", "Engineering");
+        employees.Rows.Add(5, "Eve", "Sales");
+        dataSet.Tables.Add(employees);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var resultset = queryEngine.QueryAsDataTable();
+
+        Assert.Equal(2, resultset.Rows.Count);
+
+        // Find Engineering and Sales groups
+        var engRow = resultset.Rows.Cast<DataRow>().First(r => r["department"].ToString() == "Engineering");
+        var salesRow = resultset.Rows.Cast<DataRow>().First(r => r["department"].ToString() == "Sales");
+
+        Assert.Equal(3, engRow["cnt"]);
+        Assert.Equal(2, salesRow["cnt"]);
+    }
+
+    [Fact]
+    public void QueryAsDataTable_GroupBy_WithSum()
+    {
+        const string databaseName = "MyDB";
+
+        // SELECT department, SUM(salary) as total FROM employees GROUP BY department
+        SqlSelectDefinition sqlSelect = new();
+
+        SqlColumn deptCol = new(databaseName, "employees", "department") { ColumnType = typeof(string) };
+        SqlTable employeesTable = new(databaseName, "employees");
+        deptCol.TableRef = employeesTable;
+        sqlSelect.Columns.Add(deptCol);
+
+        SqlColumn salaryCol = new(databaseName, "employees", "salary") { ColumnType = typeof(decimal) };
+        salaryCol.TableRef = employeesTable;
+        SqlColumnRef salaryRef = new(null, null, "salary") { Column = salaryCol };
+        SqlAggregate sumAgg = new("SUM", new SqlExpression(salaryRef)) { ColumnAlias = "total" };
+        sqlSelect.Columns.Add(sumAgg);
+
+        sqlSelect.Table = employeesTable;
+        sqlSelect.GroupBy = new SqlGroupByClause();
+        sqlSelect.GroupBy.Columns.Add("department");
+
+        DataSet dataSet = new(databaseName);
+        DataTable employees = new("employees");
+        employees.Columns.Add("id", typeof(int));
+        employees.Columns.Add("name", typeof(string));
+        employees.Columns.Add("department", typeof(string));
+        employees.Columns.Add("salary", typeof(decimal));
+        employees.Rows.Add(1, "Alice", "Engineering", 100000m);
+        employees.Rows.Add(2, "Bob", "Engineering", 90000m);
+        employees.Rows.Add(3, "Carol", "Sales", 80000m);
+        employees.Rows.Add(4, "Dave", "Engineering", 110000m);
+        employees.Rows.Add(5, "Eve", "Sales", 75000m);
+        dataSet.Tables.Add(employees);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var resultset = queryEngine.QueryAsDataTable();
+
+        Assert.Equal(2, resultset.Rows.Count);
+
+        var engRow = resultset.Rows.Cast<DataRow>().First(r => r["department"].ToString() == "Engineering");
+        var salesRow = resultset.Rows.Cast<DataRow>().First(r => r["department"].ToString() == "Sales");
+
+        Assert.Equal(300000m, Convert.ToDecimal(engRow["total"]));
+        Assert.Equal(155000m, Convert.ToDecimal(salesRow["total"]));
+    }
+
+    #endregion
+
+    #region HAVING Tests
+
+    [Fact]
+    public void QueryAsDataTable_GroupBy_WithHaving()
+    {
+        const string databaseName = "MyDB";
+
+        // SELECT department, COUNT(*) as cnt FROM employees GROUP BY department HAVING COUNT(*) > 2
+        SqlSelectDefinition sqlSelect = new();
+
+        SqlColumn deptCol = new(databaseName, "employees", "department") { ColumnType = typeof(string) };
+        SqlTable employeesTable = new(databaseName, "employees");
+        deptCol.TableRef = employeesTable;
+        sqlSelect.Columns.Add(deptCol);
+
+        SqlAggregate countAgg = new("COUNT") { ColumnAlias = "cnt" };
+        sqlSelect.Columns.Add(countAgg);
+
+        sqlSelect.Table = employeesTable;
+        sqlSelect.GroupBy = new SqlGroupByClause();
+        sqlSelect.GroupBy.Columns.Add("department");
+
+        // HAVING COUNT(*) > 2 — reference the "cnt" column in the result
+        SqlColumnRef cntRef = new(null, null, "cnt") { Column = new SqlColumn(null, null, "cnt") { ColumnType = typeof(int) } };
+        var havingClause = new SqlBinaryExpression(
+            new SqlExpression(cntRef),
+            SqlBinaryOperator.GreaterThan,
+            new SqlExpression(new SqlLiteralValue(2)));
+        sqlSelect.HavingClause = new SqlExpression(havingClause);
+
+        DataSet dataSet = new(databaseName);
+        DataTable employees = new("employees");
+        employees.Columns.Add("id", typeof(int));
+        employees.Columns.Add("name", typeof(string));
+        employees.Columns.Add("department", typeof(string));
+        employees.Rows.Add(1, "Alice", "Engineering");
+        employees.Rows.Add(2, "Bob", "Engineering");
+        employees.Rows.Add(3, "Carol", "Sales");
+        employees.Rows.Add(4, "Dave", "Engineering");
+        employees.Rows.Add(5, "Eve", "Sales");
+        dataSet.Tables.Add(employees);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var resultset = queryEngine.QueryAsDataTable();
+
+        // Only Engineering has > 2 employees
+        Assert.Equal(1, resultset.Rows.Count);
+        Assert.Equal("Engineering", resultset.Rows[0]["department"]);
+        Assert.Equal(3, resultset.Rows[0]["cnt"]);
+    }
+
+    #endregion
 }

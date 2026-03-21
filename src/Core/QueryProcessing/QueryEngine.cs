@@ -74,9 +74,13 @@ public class QueryEngine : IQueryEngine
             return (processingState, new DataRow[] { dataRow });
         }
 
-        //If aggregates are present, evaluate them over the source rows directly.
+        //If aggregates are present (with or without GROUP BY), evaluate them.
         if (processingState.HasAggregates)
+        {
+            if (sqlSelectDefinition.GroupBy != null && sqlSelectDefinition.GroupBy.Columns.Count > 0)
+                return EvaluateGroupByAggregates(processingState, fromDataRows);
             return EvaluateAggregates(processingState, fromDataRows);
+        }
 
         //If only a FROM with no JOINs.
         var onlyFromWithNoJoins = sqlSelectDefinition.Joins == null || sqlSelectDefinition.Joins.Count == 0;
@@ -123,7 +127,223 @@ public class QueryEngine : IQueryEngine
         for (int i = 0; i < values.Count; i++)
             resultRow[i] = values[i];
 
-        return (processingState, new DataRow[] { resultRow });
+        IEnumerable<DataRow> resultRows = new DataRow[] { resultRow };
+
+        // Apply HAVING clause if present
+        if (sqlSelectDefinition.HavingClause?.BinExpr != null)
+            resultRows = ApplyHavingClause(resultRows, processingState.QueryOutput, sqlSelectDefinition.HavingClause.BinExpr);
+
+        return (processingState, resultRows);
+    }
+
+    private (ProcessingState processingState, IEnumerable<DataRow> SelectRows) EvaluateGroupByAggregates(ProcessingState processingState, IEnumerable<DataRow> sourceRows)
+    {
+        var allRows = sourceRows.ToList();
+        var groupByColumns = sqlSelectDefinition.GroupBy!.Columns;
+
+        // Group rows by the GROUP BY column values
+        var groups = allRows.GroupBy(row =>
+        {
+            var keyParts = new object[groupByColumns.Count];
+            for (int i = 0; i < groupByColumns.Count; i++)
+            {
+                var colName = GetColumnName(groupByColumns[i]);
+                keyParts[i] = row.Table.Columns.Contains(colName) ? row[colName] : DBNull.Value;
+            }
+            return new GroupKey(keyParts);
+        }).ToList();
+
+        // Build output schema
+        processingState.QueryOutput = new("ResultSet");
+        var columnDefs = new List<(bool isAggregate, int groupByIndex, SqlAggregate? aggregate)>();
+
+        foreach (var col in sqlSelectDefinition.Columns)
+        {
+            if (col is SqlAggregate agg)
+            {
+                var columnName = agg.ColumnAlias ?? GetAggregateDefaultColumnName(agg);
+                // Determine type from first group
+                var sampleValue = groups.Count > 0 ? ComputeAggregate(agg, groups[0].ToList()) : null;
+                var dataType = GetAggregateColumnType(agg, sampleValue);
+                processingState.QueryOutput.Columns.Add(new DataColumn(columnName, dataType));
+                columnDefs.Add((true, -1, agg));
+            }
+            else
+            {
+                // Non-aggregate column — must be a GROUP BY column
+                var colAlias = (col is ISqlColumnWithAlias colWithAlias) ? colWithAlias.ColumnAlias : null;
+                var colName = colAlias ?? col.ColumnName!;
+                var groupByIdx = -1;
+                for (int i = 0; i < groupByColumns.Count; i++)
+                {
+                    if (string.Equals(GetColumnName(groupByColumns[i]), col.ColumnName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        groupByIdx = i;
+                        break;
+                    }
+                }
+
+                var dataType = (col is SqlColumn sqlCol && sqlCol.ColumnType != null) ? sqlCol.ColumnType : typeof(object);
+                if (dataType.IsGenericType && dataType.GetGenericTypeDefinition() == typeof(Nullable<>))
+                    dataType = dataType.GenericTypeArguments[0];
+                processingState.QueryOutput.Columns.Add(new DataColumn(colName, dataType));
+                columnDefs.Add((false, groupByIdx, null));
+            }
+        }
+
+        // Produce one row per group
+        var resultRows = new List<DataRow>();
+        foreach (var group in groups)
+        {
+            var groupRows = group.ToList();
+            var resultRow = processingState.QueryOutput.NewRow();
+
+            for (int i = 0; i < columnDefs.Count; i++)
+            {
+                var def = columnDefs[i];
+                if (def.isAggregate)
+                {
+                    var aggValue = ComputeAggregate(def.aggregate!, groupRows);
+                    resultRow[i] = aggValue ?? DBNull.Value;
+                }
+                else if (def.groupByIndex >= 0)
+                {
+                    resultRow[i] = group.Key.Values[def.groupByIndex];
+                }
+                else
+                {
+                    // Non-aggregate, non-GROUP BY column — take first row's value
+                    var colName = processingState.QueryOutput.Columns[i].ColumnName;
+                    resultRow[i] = groupRows[0].Table.Columns.Contains(colName) ? groupRows[0][colName] : DBNull.Value;
+                }
+            }
+
+            resultRows.Add(resultRow);
+        }
+
+        IEnumerable<DataRow> result = resultRows;
+
+        // Apply HAVING clause if present
+        if (sqlSelectDefinition.HavingClause?.BinExpr != null)
+            result = ApplyHavingClause(result, processingState.QueryOutput, sqlSelectDefinition.HavingClause.BinExpr);
+
+        // Apply ORDER BY
+        if (sqlSelectDefinition.OrderBy != null && sqlSelectDefinition.OrderBy.Count > 0)
+            result = ApplyOrderBy(result, sqlSelectDefinition.OrderBy);
+
+        return (processingState, result);
+    }
+
+    private static IEnumerable<DataRow> ApplyHavingClause(IEnumerable<DataRow> rows, VirtualDataTable queryOutput, SqlBinaryExpression havingClause)
+    {
+        return rows.Where(row =>
+        {
+            // Evaluate the HAVING predicate against each result row
+            // Build column lookup from the result row
+            foreach (DataColumn col in queryOutput.Columns)
+            {
+                // The HAVING clause references columns by name in the result set
+            }
+
+            return EvaluateHavingPredicate(row, havingClause);
+        });
+    }
+
+    private static bool EvaluateHavingPredicate(DataRow row, SqlBinaryExpression expr)
+    {
+        if (expr.Operator == SqlBinaryOperator.And)
+        {
+            var left = expr.Left.BinExpr != null && EvaluateHavingPredicate(row, expr.Left.BinExpr);
+            var right = expr.Right?.BinExpr != null && EvaluateHavingPredicate(row, expr.Right.BinExpr);
+            return left && right;
+        }
+
+        if (expr.Operator == SqlBinaryOperator.Or)
+        {
+            var left = expr.Left.BinExpr != null && EvaluateHavingPredicate(row, expr.Left.BinExpr);
+            var right = expr.Right?.BinExpr != null && EvaluateHavingPredicate(row, expr.Right.BinExpr);
+            return left || right;
+        }
+
+        // Get left and right values
+        var leftValue = ResolveHavingValue(row, expr.Left);
+        var rightValue = expr.Right != null ? ResolveHavingValue(row, expr.Right) : null;
+
+        return CompareHavingValues(leftValue, rightValue, expr.Operator);
+    }
+
+    private static object? ResolveHavingValue(DataRow row, SqlExpression expr)
+    {
+        if (expr.Value != null)
+            return expr.Value.Value;
+
+        if (expr.Column != null)
+        {
+            var colName = expr.Column.ColumnName;
+            if (row.Table.Columns.Contains(colName))
+                return row[colName];
+        }
+
+        // Aggregate reference — look up by the default aggregate name pattern
+        if (expr.BinExpr != null)
+        {
+            // Nested binary expression — shouldn't reach here for simple comparisons
+            return null;
+        }
+
+        return null;
+    }
+
+    private static bool CompareHavingValues(object? left, object? right, SqlBinaryOperator op)
+    {
+        if (left == null || left == DBNull.Value || right == null || right == DBNull.Value)
+            return false;
+
+        var leftDecimal = Convert.ToDecimal(left);
+        var rightDecimal = Convert.ToDecimal(right);
+
+        return op switch
+        {
+            SqlBinaryOperator.Equal => leftDecimal == rightDecimal,
+            SqlBinaryOperator.NotEqualTo => leftDecimal != rightDecimal,
+            SqlBinaryOperator.LessThan => leftDecimal < rightDecimal,
+            SqlBinaryOperator.LessThanEqual => leftDecimal <= rightDecimal,
+            SqlBinaryOperator.GreaterThan => leftDecimal > rightDecimal,
+            SqlBinaryOperator.GreaterThanEqual => leftDecimal >= rightDecimal,
+            _ => false
+        };
+    }
+
+    /// <summary>
+    /// Key for grouping rows by GROUP BY column values.
+    /// </summary>
+    private class GroupKey : IEquatable<GroupKey>
+    {
+        public readonly object[] Values;
+
+        public GroupKey(object[] values) => Values = values;
+
+        public bool Equals(GroupKey? other)
+        {
+            if (other == null || Values.Length != other.Values.Length) return false;
+            for (int i = 0; i < Values.Length; i++)
+            {
+                if (Values[i] == DBNull.Value && other.Values[i] == DBNull.Value) continue;
+                if (Values[i] == DBNull.Value || other.Values[i] == DBNull.Value) return false;
+                if (!Values[i].Equals(other.Values[i])) return false;
+            }
+            return true;
+        }
+
+        public override bool Equals(object? obj) => Equals(obj as GroupKey);
+
+        public override int GetHashCode()
+        {
+            int hash = 17;
+            foreach (var v in Values)
+                hash = hash * 31 + (v == DBNull.Value ? 0 : v.GetHashCode());
+            return hash;
+        }
     }
 
     private object? ComputeAggregate(SqlAggregate aggregate, List<DataRow> rows)
@@ -496,6 +716,30 @@ public class QueryEngine : IQueryEngine
                     {
                         AddColumn(processingState, argSqlCol.ColumnName, null, argSqlCol.ColumnType ?? typeof(object),
                                   false, argSqlCol, tableRef, true);
+                    }
+                }
+            }
+
+            //For GROUP BY queries, also project the GROUP BY columns as hidden columns
+            //so their data is available for grouping.
+            if (sqlSelectDefinition.GroupBy != null)
+            {
+                foreach (var groupCol in sqlSelectDefinition.GroupBy.Columns)
+                {
+                    var colName = GetColumnName(groupCol);
+                    // Find the matching SqlColumn in the select columns or create a hidden projection
+                    var matchingCol = sqlSelectDefinition.Columns
+                        .OfType<SqlColumn>()
+                        .FirstOrDefault(c => string.Equals(c.ColumnName, colName, StringComparison.OrdinalIgnoreCase));
+
+                    if (matchingCol != null)
+                    {
+                        var tableRef = matchingCol.TableRef ?? sqlSelectDefinition.Table;
+                        if (tableRef != null)
+                        {
+                            AddColumn(processingState, matchingCol.ColumnName, null, matchingCol.ColumnType ?? typeof(object),
+                                      false, matchingCol, tableRef, true);
+                        }
                     }
                 }
             }
