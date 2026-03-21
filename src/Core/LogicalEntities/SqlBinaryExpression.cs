@@ -42,6 +42,12 @@ public class SqlBinaryExpression
         if (Operator == SqlBinaryOperator.IsNull || Operator == SqlBinaryOperator.IsNotNull)
             return GetIsNullExpression(substituteValues, tableDataRow, param);
 
+        // IN / NOT IN: the right-hand side is an InList, not a simple expression.
+        if (Operator == SqlBinaryOperator.In)
+            return GetInExpression(substituteValues, tableDataRow, param);
+        if (Operator == SqlBinaryOperator.NotIn)
+            return Expression.Not(GetInExpression(substituteValues, tableDataRow, param));
+
         var leftProperty = Left.GetExpression(substituteValues, tableDataRow, param, Right!);
         var rightProperty = Right!.GetExpression(substituteValues, tableDataRow, param, Left);
 
@@ -57,10 +63,54 @@ public class SqlBinaryExpression
             SqlBinaryOperator.Or => Expression.Or(leftProperty, rightProperty),
             SqlBinaryOperator.Like => GetRegexIsMatchExpression(leftProperty, rightProperty),
             SqlBinaryOperator.NotLike => Expression.Not(GetRegexIsMatchExpression(leftProperty, rightProperty)),
-            SqlBinaryOperator.In or SqlBinaryOperator.NotIn =>
-                throw new NotSupportedException($"LINQ expression generation for {Operator} is not supported. IN / NOT IN require tuple or subquery evaluation which is not implemented in the expression builder."),
             _ => throw new ArgumentException($"Invalid binary operator {Operator} in {nameof(GetExpression)}", nameof(Operator))
         };
+    }
+
+    private Expression GetInExpression(Dictionary<SqlTable, DataRow> substituteValues, SqlTable tableDataRow, ParameterExpression param)
+    {
+        if (Right?.InList == null)
+            throw new InvalidOperationException("IN / NOT IN requires an InList on the right-hand side.");
+
+        // Build the left-hand expression using a dummy companion for type inference
+        var dummyCompanion = Right.InList.Items.Count > 0 ? Right.InList.Items[0] : new SqlExpression(new SqlLiteralValue());
+        var leftExpr = Left.GetExpression(substituteValues, tableDataRow, param, dummyCompanion);
+
+        // Build an OR chain: left == item1 || left == item2 || ...
+        Expression? result = null;
+        foreach (var item in Right.InList.Items)
+        {
+            var itemExpr = item.GetExpression(substituteValues, tableDataRow, param, Left);
+
+            // Align types for comparison
+            Expression leftAligned = leftExpr;
+            Expression itemAligned = itemExpr;
+
+            if (leftExpr.Type != itemExpr.Type)
+            {
+                if (leftExpr.Type == typeof(object))
+                    leftAligned = Expression.Convert(leftExpr, itemExpr.Type);
+                else if (itemExpr.Type == typeof(object))
+                    itemAligned = Expression.Convert(itemExpr, leftExpr.Type);
+                else
+                {
+                    // Convert both to a common type
+                    try
+                    {
+                        itemAligned = Expression.Convert(itemExpr, leftExpr.Type);
+                    }
+                    catch
+                    {
+                        leftAligned = Expression.Convert(leftExpr, itemExpr.Type);
+                    }
+                }
+            }
+
+            var equalExpr = Expression.Equal(leftAligned, itemAligned);
+            result = result == null ? (Expression)equalExpr : Expression.OrElse(result, equalExpr);
+        }
+
+        return result ?? Expression.Constant(false);
     }
 
     private Expression GetIsNullExpression(Dictionary<SqlTable, DataRow> substituteValues, SqlTable tableDataRow, ParameterExpression param)
