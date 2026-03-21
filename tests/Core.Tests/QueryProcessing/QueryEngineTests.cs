@@ -1875,4 +1875,109 @@ public class QueryEngineTests
     }
 
     #endregion
+
+    #region DISTINCT (#123)
+
+    [Fact]
+    public void QueryAsDataTable_Distinct_RemovesDuplicateRows()
+    {
+        const string databaseName = "MyDB";
+
+        // SELECT DISTINCT city FROM customers
+        SqlSelectDefinition sqlSelect = new() { IsDistinct = true };
+        SqlColumn cityCol = new(databaseName, "customers", "city") { ColumnType = typeof(string) };
+        sqlSelect.Columns.Add(cityCol);
+
+        SqlTable customersTable = new(databaseName, "customers");
+        cityCol.TableRef = customersTable;
+        sqlSelect.Table = customersTable;
+
+        DataSet dataSet = new(databaseName);
+        DataTable customers = new("customers");
+        customers.Columns.Add("city", typeof(string));
+        customers.Rows.Add("New York");
+        customers.Rows.Add("Chicago");
+        customers.Rows.Add("New York");
+        customers.Rows.Add("Chicago");
+        customers.Rows.Add("Boston");
+        dataSet.Tables.Add(customers);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        DataTable result = queryEngine.QueryAsDataTable();
+
+        Assert.Equal(3, result.Rows.Count);
+        Assert.Equal("New York", result.Rows[0]["city"]);
+        Assert.Equal("Chicago", result.Rows[1]["city"]);
+        Assert.Equal("Boston", result.Rows[2]["city"]);
+    }
+
+    [Fact]
+    public void QueryAsDataTable_Distinct_MultipleColumns()
+    {
+        const string databaseName = "MyDB";
+
+        // SELECT DISTINCT city, state FROM locations
+        SqlSelectDefinition sqlSelect = new() { IsDistinct = true };
+        SqlColumn cityCol = new(databaseName, "locations", "city") { ColumnType = typeof(string) };
+        SqlColumn stateCol = new(databaseName, "locations", "state") { ColumnType = typeof(string) };
+        sqlSelect.Columns.Add(cityCol);
+        sqlSelect.Columns.Add(stateCol);
+
+        SqlTable locationsTable = new(databaseName, "locations");
+        cityCol.TableRef = locationsTable;
+        stateCol.TableRef = locationsTable;
+        sqlSelect.Table = locationsTable;
+
+        DataSet dataSet = new(databaseName);
+        DataTable locations = new("locations");
+        locations.Columns.Add("city", typeof(string));
+        locations.Columns.Add("state", typeof(string));
+        locations.Rows.Add("Portland", "OR");
+        locations.Rows.Add("Portland", "ME");
+        locations.Rows.Add("Portland", "OR");
+        locations.Rows.Add("Springfield", "IL");
+        locations.Rows.Add("Springfield", "IL");
+        dataSet.Tables.Add(locations);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        DataTable result = queryEngine.QueryAsDataTable();
+
+        Assert.Equal(3, result.Rows.Count);
+        Assert.Equal("Portland", result.Rows[0]["city"]);
+        Assert.Equal("OR", result.Rows[0]["state"]);
+        Assert.Equal("Portland", result.Rows[1]["city"]);
+        Assert.Equal("ME", result.Rows[1]["state"]);
+        Assert.Equal("Springfield", result.Rows[2]["city"]);
+        Assert.Equal("IL", result.Rows[2]["state"]);
+    }
+
+    [Fact]
+    public void QueryAsDataTable_WithoutDistinct_KeepsDuplicates()
+    {
+        const string databaseName = "MyDB";
+
+        // SELECT city FROM customers (no DISTINCT)
+        SqlSelectDefinition sqlSelect = new();
+        SqlColumn cityCol = new(databaseName, "customers", "city") { ColumnType = typeof(string) };
+        sqlSelect.Columns.Add(cityCol);
+
+        SqlTable customersTable = new(databaseName, "customers");
+        cityCol.TableRef = customersTable;
+        sqlSelect.Table = customersTable;
+
+        DataSet dataSet = new(databaseName);
+        DataTable customers = new("customers");
+        customers.Columns.Add("city", typeof(string));
+        customers.Rows.Add("New York");
+        customers.Rows.Add("New York");
+        customers.Rows.Add("Chicago");
+        dataSet.Tables.Add(customers);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        DataTable result = queryEngine.QueryAsDataTable();
+
+        Assert.Equal(3, result.Rows.Count);
+    }
+
+    #endregion
 }

@@ -9,6 +9,8 @@ public class SqlSelectDefinition
 {
     public IList<SqlCteDefinition> Ctes { get; set; } = new List<SqlCteDefinition>();
 
+    public bool IsDistinct { get; set; }
+
     public IList<ISqlColumn> Columns { get; private set; } = new List<ISqlColumn>();
 
     public SqlTable? Table { get; set; }

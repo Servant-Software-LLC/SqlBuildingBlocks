@@ -291,6 +291,14 @@ public class SelectStmt : NonTerminal
         if (selectCore.Term.Name != sSelectCore)
             throw new ArgumentException($"Expected a '{sSelectCore}' node but received '{selectCore.Term.Name}'.", nameof(selectCore));
 
+        // selRestrOpt: grammar.Empty | "ALL" | "DISTINCT"
+        var selRestrOpt = selectCore.ChildNodes[1];
+        if (selRestrOpt.ChildNodes.Count > 0 &&
+            string.Equals(selRestrOpt.ChildNodes[0].Term.Name, "DISTINCT", StringComparison.OrdinalIgnoreCase))
+        {
+            sqlSelectDefinition.IsDistinct = true;
+        }
+
         var selList = selectCore.ChildNodes[2];
         if (selList.Term.Name != nameof(selList))
             throw new Exception($"The {nameof(selectCore)} provided to the ctor of {nameof(SqlSelectDefinition)} did not have a {nameof(selList)} as its third child node.");

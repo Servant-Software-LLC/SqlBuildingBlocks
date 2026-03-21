@@ -91,6 +91,10 @@ public class QueryEngine : IQueryEngine
                                     //FROM with JOINs
                                     ResolveSelectColumns(processingState, fromDataRows);
 
+        //Apply DISTINCT before ORDER BY so that ordering operates on the deduplicated result set.
+        if (sqlSelectDefinition.IsDistinct)
+            selectRows = ApplyDistinct(selectRows, processingState.QueryOutput);
+
         //Apply ORDER BY before LIMIT/OFFSET so that LIMIT operates on the sorted result set.
         if (sqlSelectDefinition.OrderBy != null && sqlSelectDefinition.OrderBy.Count > 0)
             selectRows = ApplyOrderBy(selectRows, sqlSelectDefinition.OrderBy);
@@ -695,6 +699,24 @@ public class QueryEngine : IQueryEngine
         }
 
         return ordered;
+    }
+
+    private static IEnumerable<DataRow> ApplyDistinct(IEnumerable<DataRow> rows, VirtualDataTable queryOutput)
+    {
+        var columnNames = queryOutput.Columns.Cast<DataColumn>().Select(c => c.ColumnName).ToList();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var row in rows)
+        {
+            var key = string.Join("\0", columnNames.Select(c =>
+            {
+                var val = row[c];
+                return val == DBNull.Value ? "\x01NULL\x01" : val?.ToString() ?? "";
+            }));
+
+            if (seen.Add(key))
+                yield return row;
+        }
     }
 
     private static int CompareValues(object x, object y)

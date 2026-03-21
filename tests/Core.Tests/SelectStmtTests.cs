@@ -2023,4 +2023,55 @@ public class SelectStmtTests
         Assert.Equal("region", rollup.Sets[1][0]);
     }
 
+    // ── SELECT DISTINCT (#123) ────────────────────────────────────────────
+
+    [Fact]
+    public void Select_Distinct_SetsIsDistinctTrue()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "SELECT DISTINCT city FROM customers");
+
+        var selectStmt = ((SelectStmt)grammar.Root).Create(node);
+
+        Assert.True(selectStmt.IsDistinct);
+        Assert.Single(selectStmt.Columns);
+    }
+
+    [Fact]
+    public void Select_All_SetsIsDistinctFalse()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "SELECT ALL city FROM customers");
+
+        var selectStmt = ((SelectStmt)grammar.Root).Create(node);
+
+        Assert.False(selectStmt.IsDistinct);
+    }
+
+    [Fact]
+    public void Select_Default_SetsIsDistinctFalse()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "SELECT city FROM customers");
+
+        var selectStmt = ((SelectStmt)grammar.Root).Create(node);
+
+        Assert.False(selectStmt.IsDistinct);
+    }
+
+    [Fact]
+    public void Select_Distinct_MultipleColumns()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "SELECT DISTINCT city, state FROM customers");
+
+        var selectStmt = ((SelectStmt)grammar.Root).Create(node);
+
+        Assert.True(selectStmt.IsDistinct);
+        Assert.Equal(2, selectStmt.Columns.Count);
+    }
 }
