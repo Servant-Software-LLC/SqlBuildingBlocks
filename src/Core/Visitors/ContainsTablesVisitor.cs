@@ -6,6 +6,7 @@ namespace SqlBuildingBlocks.Visitors;
 class ContainsTablesVisitor : ISqlExpressionVisitor
 {
     private readonly HashSet<SqlTable> tables;
+    private bool insideFunction;
 
     public ContainsTablesVisitor(HashSet<SqlTable> tables)
     {
@@ -26,7 +27,7 @@ class ContainsTablesVisitor : ISqlExpressionVisitor
     public void Visit(SqlExistsExpression existsExpr) { }
 
     public void Visit(SqlScalarSubqueryExpression scalarSubqueryExpr) { }
-    
+
     public void Visit(SqlInList inList) { }
 
     public SqlExpression? Visit(SqlColumnRef column)
@@ -36,8 +37,11 @@ class ContainsTablesVisitor : ISqlExpressionVisitor
 
         if (columnOfOperand.TableRef is null)
         {
-            // Column without a table reference cannot be verified — treat as not contained.
-            Result = false;
+            // Inside a function, the argument column's TableRef may not be set by the parser.
+            // The function's LINQ expression generation resolves columns by name, so this is safe.
+            // Outside a function, a null TableRef means we can't verify table containment.
+            if (!insideFunction)
+                Result = false;
             return null;
         }
 
@@ -52,8 +56,11 @@ class ContainsTablesVisitor : ISqlExpressionVisitor
     public SqlExpression? Visit(SqlFunction function)
     {
         // Walk into function arguments to check table references of any columns specified.
+        var previousInsideFunction = insideFunction;
+        insideFunction = true;
         foreach (var arg in function.Arguments)
             arg.Accept(this);
+        insideFunction = previousInsideFunction;
         return null;
     }
 

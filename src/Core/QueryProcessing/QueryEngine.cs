@@ -489,10 +489,14 @@ public class QueryEngine : IQueryEngine
             //so the column data is available for aggregate computation.
             foreach (var agg in sqlSelectDefinition.Columns.OfType<SqlAggregate>())
             {
-                if (agg.Argument?.Column != null && agg.Argument.Column.Column is SqlColumn argSqlCol && argSqlCol.TableRef != null)
+                if (agg.Argument?.Column != null && agg.Argument.Column.Column is SqlColumn argSqlCol)
                 {
-                    AddColumn(processingState, argSqlCol.ColumnName, null, argSqlCol.ColumnType ?? typeof(object),
-                              false, argSqlCol, argSqlCol.TableRef, true);
+                    var tableRef = argSqlCol.TableRef ?? sqlSelectDefinition.Table;
+                    if (tableRef != null)
+                    {
+                        AddColumn(processingState, argSqlCol.ColumnName, null, argSqlCol.ColumnType ?? typeof(object),
+                                  false, argSqlCol, tableRef, true);
+                    }
                 }
             }
         }
