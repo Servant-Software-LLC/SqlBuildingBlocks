@@ -21,9 +21,13 @@ public class JoinChainOpt : NonTerminal
         
         var JOIN = grammar.ToTerm("JOIN");
         var ON = grammar.ToTerm("ON");
+        var OUTER = grammar.ToTerm("OUTER");
+
+        var outerOpt = new NonTerminal("outerOpt");
+        outerOpt.Rule = grammar.Empty | OUTER;
 
         var joinKindOpt = new NonTerminal("joinKindOpt");
-        joinKindOpt.Rule = grammar.Empty | "INNER" | "LEFT" | "RIGHT";
+        joinKindOpt.Rule = grammar.Empty | "INNER" | "LEFT" + outerOpt | "RIGHT" + outerOpt | "FULL" + outerOpt;
 
         var join = new NonTerminal("join");
         join.Rule = joinKindOpt + JOIN + tableName + ON + expr;
@@ -64,7 +68,7 @@ public class JoinChainOpt : NonTerminal
 
         SqlJoin join = new(table, condition);
 
-        //JOIN type
+        //JOIN type (e.g. INNER, LEFT, LEFT OUTER, RIGHT, RIGHT OUTER, FULL, FULL OUTER)
         var joinKindOpt = joinNode.ChildNodes[0];
         if (joinKindOpt.ChildNodes.Count > 0)
         {

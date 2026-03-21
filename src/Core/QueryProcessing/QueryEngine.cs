@@ -511,6 +511,19 @@ public class QueryEngine : IQueryEngine
     /// <returns></returns>
     private IEnumerable<DataRow> ResolveSelectColumns(ProcessingState processingState, IEnumerable<DataRow> fromDataRows)
     {
+        var joins = sqlSelectDefinition.Joins.ToArray();
+
+        // Pre-materialize all join table rows for RIGHT/FULL OUTER JOIN tracking
+        foreach (var join in joins)
+        {
+            if (join.JoinKind == SqlJoinKind.Right || join.JoinKind == SqlJoinKind.Full)
+            {
+                var allRows = GetAllRowsInJoinTable(processingState, join);
+                processingState.AllJoinTableRows[join.Table] = allRows;
+                processingState.MatchedJoinRows[join.Table] = new bool[allRows.Count];
+            }
+        }
+
         foreach (DataRow dataRow in fromDataRows)
         {
             if (sqlSelectDefinition.Table is null)
@@ -519,9 +532,38 @@ public class QueryEngine : IQueryEngine
             processingState.DataRowsOfOtherTables[sqlSelectDefinition.Table] = dataRow;
             processingState.CurrentSourceRow = dataRow;
 
-            var enumerableQueryRows = ResolveSelectColumns(processingState, sqlSelectDefinition.Joins.ToArray());
+            var enumerableQueryRows = ResolveSelectColumns(processingState, joins);
             foreach (var queryRow in enumerableQueryRows)
                 yield return queryRow;
+        }
+
+        // RIGHT/FULL OUTER JOIN: yield unmatched right-side rows with NULLs for left-side tables
+        foreach (var join in joins)
+        {
+            if (join.JoinKind != SqlJoinKind.Right && join.JoinKind != SqlJoinKind.Full)
+                continue;
+
+            var allRows = processingState.AllJoinTableRows[join.Table];
+            var matched = processingState.MatchedJoinRows[join.Table];
+
+            // Collect all tables that should have NULL values (FROM table + all joins before this one)
+            var nullTables = new HashSet<SqlTable>();
+            if (sqlSelectDefinition.Table != null)
+                nullTables.Add(sqlSelectDefinition.Table);
+            foreach (var j in joins)
+            {
+                if (j == join) break;
+                nullTables.Add(j.Table);
+            }
+
+            for (int i = 0; i < allRows.Count; i++)
+            {
+                if (!matched[i])
+                {
+                    processingState.DataRowsOfOtherTables[join.Table] = allRows[i];
+                    yield return BuildResultRow(processingState, nullTables);
+                }
+            }
         }
     }
 
@@ -538,36 +580,23 @@ public class QueryEngine : IQueryEngine
             throw new Exception("Expected a JOIN to process");
 
         var joinInProcessing = joinsToProcess[0];
+        var joinKind = joinInProcessing.JoinKind;
         var joinQueryable = GetQueryableRowsInJoinTable(processingState, joinInProcessing);
+        bool hasMatch = false;
+
         foreach (DataRow dataRow in joinQueryable)
         {
+            hasMatch = true;
             processingState.DataRowsOfOtherTables[joinInProcessing.Table] = dataRow;
+
+            // Track matched rows for RIGHT/FULL OUTER JOIN
+            if (processingState.MatchedJoinRows.TryGetValue(joinInProcessing.Table, out var matchedFlags))
+                MarkRowMatched(dataRow, processingState.AllJoinTableRows[joinInProcessing.Table], matchedFlags);
 
             //If this is the last JOIN in the chain
             if (joinsToProcess.Length == 1)
             {
-                var selectColumns = processingState.QueryOutput.NewRow();
-                foreach (DataColumn dataColumn in processingState.QueryOutput.Columns)
-                {
-                    var extraProperties = dataColumn.ExProps();
-                    var sourceColumnName = extraProperties.Column.ColumnName;
-                    var outputColumnName = dataColumn.ColumnName;
-
-                    if (extraProperties.TryGet(prop => prop.ValueResolver, out Func<object> valueResolver))
-                    {
-                        selectColumns[outputColumnName] = valueResolver();
-                        continue;
-                    }
-
-                    if (extraProperties.TryGet(prop => prop.Table, out SqlTable selectColumnTable))
-                    {
-                        //Copy the column value from fromDataRows to the selectColumns
-                        selectColumns[outputColumnName] = processingState.DataRowsOfOtherTables[selectColumnTable][GetColumnName(sourceColumnName)];
-                    }
-
-                }
-
-                yield return selectColumns;
+                yield return BuildResultRow(processingState);
                 continue;
             }
 
@@ -576,6 +605,14 @@ public class QueryEngine : IQueryEngine
             foreach (var queryRow in enumerableQueryRows)
                 yield return queryRow;
 
+        }
+
+        // LEFT/FULL OUTER JOIN: emit a row with NULLs for unmatched join table columns
+        if (!hasMatch && (joinKind == SqlJoinKind.Left || joinKind == SqlJoinKind.Full))
+        {
+            // All tables from this join onward get NULL values
+            var nullTables = new HashSet<SqlTable>(joinsToProcess.Select(j => j.Table));
+            yield return BuildResultRow(processingState, nullTables);
         }
 
     }
@@ -678,6 +715,101 @@ public class QueryEngine : IQueryEngine
 
         processingState.WhereApplied = sqlSelectDefinition.Table;
         return applyFilterMethodReturnValue;
+    }
+
+    /// <summary>
+    /// Gets ALL rows from a join table without applying any filter (ON or WHERE).
+    /// Used for RIGHT/FULL OUTER JOIN to identify unmatched rows.
+    /// </summary>
+    private List<DataRow> GetAllRowsInJoinTable(ProcessingState processingState, SqlJoin join)
+    {
+        var joinTableQueryable = tableDataProvider.GetTableData(join.Table);
+        if (joinTableQueryable is null)
+            throw new ArgumentNullException($"Table '{join.Table.TableName}' was not found in DataSet '{join.Table.DatabaseName}'", nameof(joinTableQueryable));
+
+        if (dataRowType)
+            joinTableQueryable = joinTableQueryable.Cast<DataRow>();
+
+        if (!processingState.TablesProjections.TryGetValue(join.Table, out var tableWithColumnsToProjectOnto))
+            tableWithColumnsToProjectOnto = emptyDataTable.Value;
+
+        var toDataRowsReturnValue = ReflectionHelper.CallMethod<IEnumerable<DataRow>>(
+                                        this,
+                                        methodName: nameof(ToDataRows),
+                                        typeParameter: joinTableQueryable.ElementType,
+                                        // Method arguments
+                                        joinTableQueryable, tableWithColumnsToProjectOnto);
+
+        if (toDataRowsReturnValue == null)
+            throw new ArgumentNullException($"{nameof(ToDataRows)}'s return value was null", innerException: null);
+
+        return toDataRowsReturnValue.ToList();
+    }
+
+    /// <summary>
+    /// Builds a result row from the current processing state. Columns belonging to tables in
+    /// <paramref name="nullTables"/> are set to DBNull.Value (for OUTER JOIN unmatched rows).
+    /// </summary>
+    private DataRow BuildResultRow(ProcessingState processingState, IEnumerable<SqlTable>? nullTables = null)
+    {
+        var nullTableSet = nullTables != null ? new HashSet<SqlTable>(nullTables) : null;
+        var selectColumns = processingState.QueryOutput.NewRow();
+
+        foreach (DataColumn dataColumn in processingState.QueryOutput.Columns)
+        {
+            var extraProperties = dataColumn.ExProps();
+            var sourceColumnName = extraProperties.Column.ColumnName;
+            var outputColumnName = dataColumn.ColumnName;
+
+            if (extraProperties.TryGet(prop => prop.ValueResolver, out Func<object> valueResolver))
+            {
+                selectColumns[outputColumnName] = valueResolver();
+                continue;
+            }
+
+            if (extraProperties.TryGet(prop => prop.Table, out SqlTable selectColumnTable))
+            {
+                if (nullTableSet != null && nullTableSet.Contains(selectColumnTable))
+                {
+                    selectColumns[outputColumnName] = DBNull.Value;
+                }
+                else
+                {
+                    selectColumns[outputColumnName] = processingState.DataRowsOfOtherTables[selectColumnTable][GetColumnName(sourceColumnName)];
+                }
+            }
+        }
+
+        return selectColumns;
+    }
+
+    /// <summary>
+    /// Marks a matched join row in the tracking array by finding it via value comparison.
+    /// </summary>
+    private static void MarkRowMatched(DataRow matchedRow, List<DataRow> allRows, bool[] matchedFlags)
+    {
+        for (int i = 0; i < allRows.Count; i++)
+        {
+            if (!matchedFlags[i] && RowValuesEqual(matchedRow, allRows[i]))
+            {
+                matchedFlags[i] = true;
+                break;
+            }
+        }
+    }
+
+    private static bool RowValuesEqual(DataRow a, DataRow b)
+    {
+        var aItems = a.ItemArray;
+        var bItems = b.ItemArray;
+        if (aItems.Length != bItems.Length)
+            return false;
+        for (int i = 0; i < aItems.Length; i++)
+        {
+            if (!Equals(aItems[i], bItems[i]))
+                return false;
+        }
+        return true;
     }
 
     private static IEnumerable<DataRow> ApplyOrderBy(IEnumerable<DataRow> rows, IList<SqlOrderByColumn> orderBy)

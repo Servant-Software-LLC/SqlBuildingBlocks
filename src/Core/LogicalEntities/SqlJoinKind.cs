@@ -2,5 +2,5 @@
 
 public enum SqlJoinKind
 {
-    Inner, Left, Right
+    Inner, Left, Right, Full
 }

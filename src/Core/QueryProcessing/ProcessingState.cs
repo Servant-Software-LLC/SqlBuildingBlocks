@@ -30,6 +30,16 @@ internal class ProcessingState
     public bool HasAggregates { get; set; }
 
     /// <summary>
+    /// For RIGHT/FULL OUTER JOIN: all rows from the join table, materialized for match tracking.
+    /// </summary>
+    public Dictionary<SqlTable, List<DataRow>> AllJoinTableRows = new();
+
+    /// <summary>
+    /// For RIGHT/FULL OUTER JOIN: tracks which rows in <see cref="AllJoinTableRows"/> have been matched.
+    /// </summary>
+    public Dictionary<SqlTable, bool[]> MatchedJoinRows = new();
+
+    /// <summary>
     /// The current source DataRow being processed. Used by built-in function closures
     /// to access column values from the current row during iteration.
     /// </summary>
