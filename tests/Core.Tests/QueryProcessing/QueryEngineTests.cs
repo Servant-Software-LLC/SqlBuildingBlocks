@@ -171,6 +171,90 @@ public class QueryEngineTests
     }
 
     [Fact]
+    public void Select_CountColumn_ExcludesNulls()
+    {
+        const string databaseName = "MyDB";
+
+        // SELECT COUNT(city) FROM locations
+        // Should count only non-null values of city
+        SqlSelectDefinition sqlSelect = new();
+
+        SqlTable locationsTable = new(databaseName, "locations");
+        sqlSelect.Table = locationsTable;
+
+        SqlColumn cityColumn = new(databaseName, locationsTable.TableName, "city")
+        {
+            ColumnType = typeof(string),
+            TableRef = locationsTable
+        };
+        SqlColumnRef cityColumnRef = new(null, null, "city") { Column = cityColumn };
+
+        SqlAggregate countColumn = new("COUNT", new SqlExpression(cityColumnRef));
+        sqlSelect.Columns.Add(countColumn);
+
+        // Create the DataSet with the schema and data.
+        DataSet dataSet = new(databaseName);
+
+        DataTable locations = new("locations");
+        locations.Columns.Add("id", typeof(int));
+        locations.Columns.Add("city", typeof(string));
+        dataSet.Tables.Add(locations);
+
+        // 3 rows, but city is null in one of them
+        locations.Rows.Add(1, "Houston");
+        locations.Rows.Add(2, DBNull.Value);
+        locations.Rows.Add(3, "San Antonio");
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+
+        var resultset = queryEngine.QueryAsDataTable();
+
+        Assert.NotNull(resultset);
+        Assert.Equal(1, resultset.Rows.Count);
+        var countValue = resultset.Rows[0][0];
+        Assert.IsType<int>(countValue);
+        Assert.Equal(2, (int)countValue);  // Only 2 non-null city values
+    }
+
+    [Fact]
+    public void Select_CountStar_CountsAllRows()
+    {
+        const string databaseName = "MyDB";
+
+        // SELECT COUNT(*) FROM locations
+        // Should count all rows regardless of nulls
+        SqlSelectDefinition sqlSelect = new();
+
+        SqlTable locationsTable = new(databaseName, "locations");
+        sqlSelect.Table = locationsTable;
+
+        SqlAggregate countColumn = new("COUNT");
+        sqlSelect.Columns.Add(countColumn);
+
+        DataSet dataSet = new(databaseName);
+
+        DataTable locations = new("locations");
+        locations.Columns.Add("id", typeof(int));
+        locations.Columns.Add("city", typeof(string));
+        dataSet.Tables.Add(locations);
+
+        // 3 rows, city is null in one
+        locations.Rows.Add(1, "Houston");
+        locations.Rows.Add(2, DBNull.Value);
+        locations.Rows.Add(3, "San Antonio");
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+
+        var resultset = queryEngine.QueryAsDataTable();
+
+        Assert.NotNull(resultset);
+        Assert.Equal(1, resultset.Rows.Count);
+        var countValue = resultset.Rows[0][0];
+        Assert.IsType<int>(countValue);
+        Assert.Equal(3, (int)countValue);  // All 3 rows counted
+    }
+
+    [Fact]
     public void QueryAsDataTable_Select_AliasedColumn()
     {
         const string databaseName = "MyDB";
