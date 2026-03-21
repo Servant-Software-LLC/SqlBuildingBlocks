@@ -373,7 +373,14 @@ public class QueryEngine : IQueryEngine
         var aggName = aggregate.AggregateName.ToUpperInvariant();
 
         if (aggName == "COUNT")
-            return rows.Count;
+        {
+            // COUNT(*) — count all rows; COUNT(col) — count non-null values
+            if (aggregate.Argument?.Column == null)
+                return rows.Count;
+
+            var countColName = aggregate.Argument.Column.ColumnName;
+            return rows.Count(r => r.Table.Columns.Contains(countColName) && r[countColName] != DBNull.Value);
+        }
 
         var colName = GetAggregateColumnName(aggregate);
         var nonNullValues = rows
@@ -437,7 +444,7 @@ public class QueryEngine : IQueryEngine
         if (aggregate.Argument?.Column != null)
             return aggregate.Argument.Column.ColumnName;
 
-        throw new NotSupportedException($"Aggregate '{aggregate.AggregateName}' requires a column argument.");
+        throw new NotSupportedException($"Aggregate '{aggregate.AggregateName}' requires a column argument. Use COUNT(*) for counting all rows.");
     }
 
     private IEnumerable<DataRow> ApplyFilter<TDataRow>(IQueryable<TDataRow> dataRows, SqlBinaryExpression filteringClause, Dictionary<SqlTable, DataRow> substituteValues, SqlTable tableDataRow, DataTable tableWithColumnsToProjectOnto)
