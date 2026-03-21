@@ -49,6 +49,9 @@ public class SqlExpression
             if (Value != null)
                 return Value.GetType();
 
+            if (Function != null)
+                return Function.ValueType ?? typeof(string);
+
             if (ExistsExpr != null)
                 return typeof(bool);
 
@@ -154,9 +157,8 @@ public class SqlExpression
             return Convert(valueExpression, Value.Value.GetType(), castToType);
         }
 
-        //TODO: Should we create a visitor to replace SqlFunction instances or is this a consumer specific type of visitor?
         if (Function != null)
-            throw new Exception($"Linq {typeof(Expression)} could not be created because there is an unresolved {typeof(SqlFunction)} within it.  Call the {nameof(Accept)} method on the {typeof(SqlExpression)} instance, providing it a your own custom class derived from {typeof(ISqlExpressionVisitor)}");
+            return GetBuiltInFunctionExpression(Function, substituteValues, tableDataRow, param);
 
         if (Parameter != null)
             throw new Exception($"Linq {typeof(Expression)} could not be created because there is an unresolved {typeof(SqlParameter)} within it.  Call the {nameof(Accept)} method on the {typeof(SqlExpression)} instance, providing it a {typeof(ResolveParametersVisitor)} instance.");
@@ -191,6 +193,62 @@ public class SqlExpression
 
         //Call the property on the param variable.
         return Expression.Property(param, columnOfOperand.ColumnName);
+    }
+
+    private Expression GetBuiltInFunctionExpression(SqlFunction function, Dictionary<SqlTable, DataRow> substituteValues, SqlTable tableDataRow, ParameterExpression param)
+    {
+        var funcName = function.FunctionName.ToUpperInvariant();
+
+        // Get the argument expression (the raw value from the data source)
+        Expression argExpr = GetFunctionArgumentExpression(function.Arguments[0], substituteValues, tableDataRow, param);
+
+        // Convert to string for string functions
+        var toStringMethod = typeof(object).GetMethod("ToString", Type.EmptyTypes)!;
+        var strExpr = argExpr.Type == typeof(string) ? argExpr : Expression.Call(argExpr, toStringMethod);
+
+        switch (funcName)
+        {
+            case "UPPER":
+                return Expression.Call(strExpr, typeof(string).GetMethod("ToUpper", Type.EmptyTypes)!);
+            case "LOWER":
+                return Expression.Call(strExpr, typeof(string).GetMethod("ToLower", Type.EmptyTypes)!);
+            case "LENGTH":
+            case "LEN":
+                return Expression.Property(strExpr, "Length");
+            case "ABS":
+                var absArgExpr = argExpr.Type == typeof(object) ? Expression.Convert(argExpr, typeof(double)) : argExpr;
+                return Expression.Call(typeof(Math), "Abs", null, Expression.Convert(absArgExpr, typeof(double)));
+            case "ROUND":
+                var roundArgExpr = argExpr.Type == typeof(object) ? Expression.Convert(argExpr, typeof(double)) : argExpr;
+                int digits = 0;
+                if (function.Arguments.Count > 1 && function.Arguments[1].Value != null)
+                    digits = System.Convert.ToInt32(function.Arguments[1].Value.Value);
+                return Expression.Call(typeof(Math), "Round", null,
+                    Expression.Convert(roundArgExpr, typeof(double)),
+                    Expression.Constant(digits));
+            default:
+                throw new Exception($"Linq {typeof(Expression)} could not be created because there is an unresolved {typeof(SqlFunction)} '{function.FunctionName}' within it.  Call the {nameof(Accept)} method on the {typeof(SqlExpression)} instance, providing it a your own custom class derived from {typeof(ISqlExpressionVisitor)}");
+        }
+    }
+
+    private Expression GetFunctionArgumentExpression(SqlExpression arg, Dictionary<SqlTable, DataRow> substituteValues, SqlTable tableDataRow, ParameterExpression param)
+    {
+        if (arg.Value != null)
+            return Expression.Constant(arg.Value.Value, arg.Value.Value?.GetType() ?? typeof(object));
+
+        if (arg.Column?.Column is SqlColumn argCol)
+        {
+            if (param.Type == typeof(DataRow))
+            {
+                var columnNameExpr = Expression.Constant(argCol.ColumnName);
+                var indexerProperty = typeof(DataRow).GetProperty("Item", new Type[] { typeof(string) });
+                return Expression.MakeIndex(param, indexerProperty!, new[] { columnNameExpr });
+            }
+
+            return Expression.Property(param, argCol.ColumnName);
+        }
+
+        throw new NotSupportedException("Function argument must be a column reference or literal value.");
     }
 
     private Expression GetExpressionForDataRow(ParameterExpression param, SqlColumn? columnOfOperand, SqlExpression companionOfBinExpr)

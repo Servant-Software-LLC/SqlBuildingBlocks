@@ -35,7 +35,11 @@ class ContainsTablesVisitor : ISqlExpressionVisitor
             throw new ArgumentException($"The {nameof(column)}.{nameof(column.Column)} parameter must be convertable to a {typeof(SqlColumnRef)}.", nameof(column));
 
         if (columnOfOperand.TableRef is null)
-            throw new ArgumentNullException(nameof(columnOfOperand.TableRef), $"{nameof(columnOfOperand)}.{nameof(columnOfOperand.TableRef)} cannot be null.");
+        {
+            // Column without a table reference cannot be verified — treat as not contained.
+            Result = false;
+            return null;
+        }
 
         if (!tables.Contains(columnOfOperand.TableRef))
             Result = false;
@@ -45,8 +49,13 @@ class ContainsTablesVisitor : ISqlExpressionVisitor
 
     public SqlExpression? Visit(SqlParameter parameter) => null;
 
-    // TODO: In the future, will we need to investigate the function arguments for the tables of any columns specified?
-    public SqlExpression? Visit(SqlFunction function) => null;
+    public SqlExpression? Visit(SqlFunction function)
+    {
+        // Walk into function arguments to check table references of any columns specified.
+        foreach (var arg in function.Arguments)
+            arg.Accept(this);
+        return null;
+    }
 
     public SqlExpression? Visit(SqlLiteralValue value) => null;
 
