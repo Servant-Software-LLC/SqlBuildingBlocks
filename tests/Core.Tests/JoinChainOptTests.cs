@@ -78,4 +78,30 @@ public class JoinChainOptTests
 
 
     }
+
+    [Fact]
+    public void OuterJoinKeyword_Parsed_CorrectJoinKind()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, @"LEFT OUTER JOIN [Orders] [o] ON [c].[ID] = [o].[CustomerID]
+                                                      RIGHT OUTER JOIN [OrderItems] [oi] ON [o].[ID] = [oi].[OrderID]
+                                                      FULL OUTER JOIN [Products] [p] ON [p].[ID] = [oi].[ProductID]");
+        var joinChainOpt = grammar.Create(node);
+
+        Assert.Equal(3, joinChainOpt.Count);
+        Assert.Equal(SqlJoinKind.Left, joinChainOpt[0].JoinKind);
+        Assert.Equal(SqlJoinKind.Right, joinChainOpt[1].JoinKind);
+        Assert.Equal(SqlJoinKind.Full, joinChainOpt[2].JoinKind);
+    }
+
+    [Fact]
+    public void FullJoin_WithoutOuter_Parsed_CorrectJoinKind()
+    {
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar, @"FULL JOIN [Orders] [o] ON [c].[ID] = [o].[CustomerID]");
+        var joinChainOpt = grammar.Create(node);
+
+        Assert.Single(joinChainOpt);
+        Assert.Equal(SqlJoinKind.Full, joinChainOpt[0].JoinKind);
+    }
 }

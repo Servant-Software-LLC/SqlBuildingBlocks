@@ -1980,4 +1980,155 @@ public class QueryEngineTests
     }
 
     #endregion
+
+    #region OUTER JOIN Tests
+
+    /// <summary>
+    /// Helper: builds a DataSet with Customers and Orders tables for outer join tests.
+    /// Customers: (1, Alice), (2, Bob), (3, Charlie)
+    /// Orders: (101, 1, "Widget"), (102, 1, "Gadget"), (103, 2, "Doohickey"), (104, 99, "Orphan")
+    /// Customer 3 (Charlie) has no orders.  Order 104 has no matching customer (CustomerID=99).
+    /// </summary>
+    private static (DataSet dataSet, SqlTable customersTable, SqlTable ordersTable,
+                     SqlColumn nameCol, SqlColumn productCol,
+                     SqlColumn custIdCol, SqlColumn orderCustIdCol) BuildOuterJoinDataSet()
+    {
+        const string db = "TestDB";
+        DataSet dataSet = new(db);
+
+        DataTable customers = new("Customers");
+        customers.Columns.Add("ID", typeof(int));
+        customers.Columns.Add("Name", typeof(string));
+        dataSet.Tables.Add(customers);
+        customers.Rows.Add(1, "Alice");
+        customers.Rows.Add(2, "Bob");
+        customers.Rows.Add(3, "Charlie");
+
+        DataTable orders = new("Orders");
+        orders.Columns.Add("OrderID", typeof(int));
+        orders.Columns.Add("CustomerID", typeof(int));
+        orders.Columns.Add("Product", typeof(string));
+        dataSet.Tables.Add(orders);
+        orders.Rows.Add(101, 1, "Widget");
+        orders.Rows.Add(102, 1, "Gadget");
+        orders.Rows.Add(103, 2, "Doohickey");
+        orders.Rows.Add(104, 99, "Orphan");
+
+        SqlTable customersTable = new(db, "Customers") { TableAlias = "c" };
+        SqlTable ordersTable = new(db, "Orders") { TableAlias = "o" };
+
+        SqlColumn nameCol = new(null, "c", "Name") { ColumnType = typeof(string), TableRef = customersTable };
+        SqlColumn productCol = new(null, "o", "Product") { ColumnType = typeof(string), TableRef = ordersTable };
+
+        SqlColumn custIdCol = new(db, "Customers", "ID") { ColumnType = typeof(int), TableRef = customersTable };
+        SqlColumn orderCustIdCol = new(db, "Orders", "CustomerID") { ColumnType = typeof(int), TableRef = ordersTable };
+
+        return (dataSet, customersTable, ordersTable, nameCol, productCol, custIdCol, orderCustIdCol);
+    }
+
+    private static SqlSelectDefinition BuildOuterJoinSelect(SqlJoinKind joinKind)
+    {
+        var (dataSet, customersTable, ordersTable, nameCol, productCol, custIdCol, orderCustIdCol) = BuildOuterJoinDataSet();
+
+        SqlSelectDefinition sqlSelect = new();
+        sqlSelect.Columns.Add(nameCol);
+        sqlSelect.Columns.Add(productCol);
+        sqlSelect.Table = customersTable;
+
+        SqlColumnRef custIdRef = new(null, "c", "ID") { Column = custIdCol };
+        SqlColumnRef orderCustIdRef = new(null, "o", "CustomerID") { Column = orderCustIdCol };
+
+        SqlJoin join = new(ordersTable, new SqlBinaryExpression(new(custIdRef), SqlBinaryOperator.Equal, new(orderCustIdRef)));
+        join.JoinKind = joinKind;
+        sqlSelect.Joins.Add(join);
+
+        return sqlSelect;
+    }
+
+    [Fact]
+    public void LeftJoin_UnmatchedLeftRows_ReturnNullForRightColumns()
+    {
+        // SELECT c.Name, o.Product FROM Customers c LEFT JOIN Orders o ON c.ID = o.CustomerID
+        // Alice has 2 orders, Bob has 1, Charlie has 0 → 4 rows, Charlie row has NULL product
+        var (dataSet, _, _, _, _, _, _) = BuildOuterJoinDataSet();
+        var sqlSelect = BuildOuterJoinSelect(SqlJoinKind.Left);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        DataTable result = queryEngine.QueryAsDataTable();
+
+        Assert.Equal(4, result.Rows.Count);
+
+        // Verify Charlie appears with NULL product
+        var charlieRows = result.AsEnumerable().Where(r => "Charlie".Equals(r["Name"])).ToList();
+        Assert.Single(charlieRows);
+        Assert.Equal(DBNull.Value, charlieRows[0]["Product"]);
+
+        // Verify matched rows are correct
+        var aliceRows = result.AsEnumerable().Where(r => "Alice".Equals(r["Name"])).ToList();
+        Assert.Equal(2, aliceRows.Count);
+    }
+
+    [Fact]
+    public void RightJoin_UnmatchedRightRows_ReturnNullForLeftColumns()
+    {
+        // SELECT c.Name, o.Product FROM Customers c RIGHT JOIN Orders o ON c.ID = o.CustomerID
+        // Orders 101-103 match customers. Order 104 (Orphan) has no customer → NULL name.
+        var (dataSet, _, _, _, _, _, _) = BuildOuterJoinDataSet();
+        var sqlSelect = BuildOuterJoinSelect(SqlJoinKind.Right);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        DataTable result = queryEngine.QueryAsDataTable();
+
+        Assert.Equal(4, result.Rows.Count);
+
+        // Verify the orphan order appears with NULL name
+        var orphanRows = result.AsEnumerable().Where(r => "Orphan".Equals(r["Product"])).ToList();
+        Assert.Single(orphanRows);
+        Assert.Equal(DBNull.Value, orphanRows[0]["Name"]);
+
+        // Verify matched rows exist
+        var widgetRows = result.AsEnumerable().Where(r => "Widget".Equals(r["Product"])).ToList();
+        Assert.Single(widgetRows);
+        Assert.Equal("Alice", widgetRows[0]["Name"]);
+    }
+
+    [Fact]
+    public void FullJoin_UnmatchedBothSides_ReturnNullForMissingColumns()
+    {
+        // SELECT c.Name, o.Product FROM Customers c FULL JOIN Orders o ON c.ID = o.CustomerID
+        // 3 matched rows + Charlie (no orders, NULL product) + Orphan (no customer, NULL name) = 5 rows
+        var (dataSet, _, _, _, _, _, _) = BuildOuterJoinDataSet();
+        var sqlSelect = BuildOuterJoinSelect(SqlJoinKind.Full);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        DataTable result = queryEngine.QueryAsDataTable();
+
+        Assert.Equal(5, result.Rows.Count);
+
+        // Charlie has NULL product (LEFT side unmatched)
+        var charlieRows = result.AsEnumerable().Where(r => "Charlie".Equals(r["Name"])).ToList();
+        Assert.Single(charlieRows);
+        Assert.Equal(DBNull.Value, charlieRows[0]["Product"]);
+
+        // Orphan has NULL name (RIGHT side unmatched)
+        var orphanRows = result.AsEnumerable().Where(r => "Orphan".Equals(r["Product"])).ToList();
+        Assert.Single(orphanRows);
+        Assert.Equal(DBNull.Value, orphanRows[0]["Name"]);
+    }
+
+    [Fact]
+    public void InnerJoin_Unchanged_NoNullPaddedRows()
+    {
+        // Verify INNER JOIN still works correctly (no regression) — only matched rows
+        var (dataSet, _, _, _, _, _, _) = BuildOuterJoinDataSet();
+        var sqlSelect = BuildOuterJoinSelect(SqlJoinKind.Inner);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        DataTable result = queryEngine.QueryAsDataTable();
+
+        // Only 3 matched rows (Alice×2, Bob×1). No Charlie, no Orphan.
+        Assert.Equal(3, result.Rows.Count);
+    }
+
+    #endregion
 }
