@@ -9,6 +9,7 @@ namespace SqlBuildingBlocks.POCOs;
 /// </summary>
 public class VirtualDataTable
 {
+    private readonly object _syncRoot = new object();
     private DataTable schemaTable = null!;
 
     public VirtualDataTable(string tableName)
@@ -19,8 +20,8 @@ public class VirtualDataTable
     public VirtualDataTable(DataTable dataTable) => AdoptDataTable(dataTable);
     public VirtualDataTable(VirtualDataTable virtualDataTable) => AdoptDataTable(virtualDataTable);
 
-    public string TableName => schemaTable.TableName;
-    public DataColumnCollection Columns => schemaTable.Columns;
+    public string TableName { get { lock (_syncRoot) { return schemaTable.TableName; } } }
+    public DataColumnCollection Columns { get { lock (_syncRoot) { return schemaTable.Columns; } } }
     public IEnumerable<DataRow>? Rows { get; set; }
 
     public void AdoptDataTable(DataTable dataTable)
@@ -28,45 +29,61 @@ public class VirtualDataTable
         if (dataTable == null)
             throw new ArgumentNullException(nameof(dataTable));
 
-        // Set the Rows property to the rows from the provided table.
-        schemaTable = dataTable;
-        Rows = dataTable.Rows.Cast<DataRow>();
+        lock (_syncRoot)
+        {
+            // Set the Rows property to the rows from the provided table.
+            schemaTable = dataTable;
+            Rows = dataTable.Rows.Cast<DataRow>();
+        }
     }
 
     /// <summary>
     /// Allows two virtual tables to share the same schema
     /// </summary>
     /// <param name="virtualDataTable"></param>
-    public void AdoptDataTable(VirtualDataTable virtualDataTable) => AdoptDataTable(virtualDataTable.schemaTable);
+    public void AdoptDataTable(VirtualDataTable virtualDataTable)
+    {
+        DataTable source;
+        lock (virtualDataTable._syncRoot)
+        {
+            source = virtualDataTable.schemaTable;
+        }
+        AdoptDataTable(source);
+    }
 
     public DataTable CreateEmptyDataTable()
     {
-        DataTable table = new DataTable();
-        SetSchema(table);
-
-        return table;
+        lock (_syncRoot)
+        {
+            DataTable table = new DataTable();
+            SetSchema(table);
+            return table;
+        }
     }
 
     /// <summary>
-    /// Make a full copy of the schema and data contained in this virtual data table.  
+    /// Make a full copy of the schema and data contained in this virtual data table.
     /// </summary>
     /// <remarks>Be careful, this call will copy of the data into memory.  The enumerable of <see cref="Rows"/> isn't necessarily in-memory.</remarks>
     /// <returns></returns>
     public DataTable ToDataTable()
     {
-        DataTable table = new DataTable(TableName);
-        SetSchema(table);
-
-        if (Rows != null)
+        lock (_syncRoot)
         {
-            //Copy the data.
-            foreach (DataRow dataRow in Rows)
-            {
-                table.Rows.Add(dataRow.ItemArray);
-            }
-        }
+            DataTable table = new DataTable(TableName);
+            SetSchema(table);
 
-        return table;
+            if (Rows != null)
+            {
+                //Copy the data.
+                foreach (DataRow dataRow in Rows)
+                {
+                    table.Rows.Add(dataRow.ItemArray);
+                }
+            }
+
+            return table;
+        }
     }
 
     /// <summary>
@@ -100,13 +117,16 @@ public class VirtualDataTable
             .Cast<DataColumn>()
             .ToDictionary(col => col.ColumnName, col => foreignRow[col]);
 
-        //Check if this DataRow has the same DataTable as its columns
-        bool sameDataTable = object.ReferenceEquals(foreignRow.Table, schemaTable);
-
-        if (!sameDataTable)
+        lock (_syncRoot)
         {
-            // Create a new DataRow from the validated dictionary and append it.
-            foreignRow = CreateNewRowFromData(foreignDictionary);
+            //Check if this DataRow has the same DataTable as its columns
+            bool sameDataTable = object.ReferenceEquals(foreignRow.Table, schemaTable);
+
+            if (!sameDataTable)
+            {
+                // Create a new DataRow from the validated dictionary and append it.
+                foreignRow = CreateNewRowFromData(foreignDictionary);
+            }
         }
 
         return foreignRow;
@@ -129,7 +149,7 @@ public class VirtualDataTable
         AppendNewRow(newRow);
     }
 
-    public DataRow NewRow() => schemaTable.NewRow();
+    public DataRow NewRow() { lock (_syncRoot) { return schemaTable.NewRow(); } }
 
     /// <summary>
     /// Creates a new DataRow using the VirtualDataTable's underlying schema from Columns.
@@ -137,17 +157,20 @@ public class VirtualDataTable
     /// </summary>
     public DataRow CreateNewRowFromData(IDictionary<string, object> data)
     {
-        ValidateMatchesSchema(data);
-
-        DataRow newRow = schemaTable.NewRow();
-
-        // Use the VirtualDataTable's column order to assign values.
-        foreach (DataColumn col in Columns)
+        lock (_syncRoot)
         {
-            newRow[col] = data[col.ColumnName];
-        }
+            ValidateMatchesSchema(data);
 
-        return newRow;
+            DataRow newRow = schemaTable.NewRow();
+
+            // Use the VirtualDataTable's column order to assign values.
+            foreach (DataColumn col in schemaTable.Columns)
+            {
+                newRow[col] = data[col.ColumnName];
+            }
+
+            return newRow;
+        }
     }
 
     /// <summary>
@@ -167,14 +190,15 @@ public class VirtualDataTable
 
     private void ValidateMatchesSchema(IDictionary<string, object> data)
     {
-        if (Columns == null || Columns.Count == 0)
+        var columns = schemaTable.Columns;
+        if (columns == null || columns.Count == 0)
             throw new InvalidOperationException("VirtualDataTable.Columns is not set.");
 
-        if (data.Count != Columns.Count)
+        if (data.Count != columns.Count)
             throw new InvalidOperationException("Provided row data does not have the same number of columns as VirtualDataTable.");
 
         // Validate that every column required by the VirtualDataTable is present and the value is of the correct type.
-        foreach (DataColumn col in Columns)
+        foreach (DataColumn col in columns)
         {
             if (!data.ContainsKey(col.ColumnName))
                 throw new InvalidOperationException($"Provided row data is missing required column '{col.ColumnName}'.");
@@ -191,9 +215,10 @@ public class VirtualDataTable
 
     private void SetSchema(DataTable table)
     {
-        if (Columns != null)
+        var columns = schemaTable.Columns;
+        if (columns != null)
         {
-            foreach (DataColumn col in Columns)
+            foreach (DataColumn col in columns)
             {
                 // Create a new DataColumn with the same name and data type.
                 DataColumn newCol = new DataColumn(col.ColumnName, col.DataType)
