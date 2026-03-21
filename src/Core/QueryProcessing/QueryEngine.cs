@@ -1,4 +1,4 @@
-﻿using SqlBuildingBlocks.Extensions;
+using SqlBuildingBlocks.Extensions;
 using SqlBuildingBlocks.Interfaces;
 using SqlBuildingBlocks.LogicalEntities;
 using SqlBuildingBlocks.POCOs;
@@ -55,7 +55,7 @@ public class QueryEngine : IQueryEngine
         //Get all the rows and add them to this processing table.
         processingState.QueryOutput.Rows = selectRows;
 
-        return processingState.QueryOutput.ToDataTable();        
+        return processingState.QueryOutput.ToDataTable();
     }
 
     private (ProcessingState processingState, IEnumerable<DataRow> SelectRows) QueryInternal()
@@ -74,12 +74,16 @@ public class QueryEngine : IQueryEngine
             return (processingState, new DataRow[] { dataRow });
         }
 
+        //If aggregates are present, evaluate them over the source rows directly.
+        if (processingState.HasAggregates)
+            return EvaluateAggregates(processingState, fromDataRows);
+
         //If only a FROM with no JOINs.
         var onlyFromWithNoJoins = sqlSelectDefinition.Joins == null || sqlSelectDefinition.Joins.Count == 0;
 
         var selectRows = onlyFromWithNoJoins ?
                                     //FROM with no JOINs
-                                    ResolveSelectColumns(processingState.QueryOutput, fromDataRows) :
+                                    ResolveSelectColumnsFromTable(processingState, fromDataRows) :
                                     //FROM with JOINs
                                     ResolveSelectColumns(processingState, fromDataRows);
 
@@ -93,18 +97,72 @@ public class QueryEngine : IQueryEngine
         if (sqlSelectDefinition.Limit != null && sqlSelectDefinition.Limit.RowCount.Value > 0)
             selectRows = selectRows.Take(sqlSelectDefinition.Limit.RowCount.Value);
 
-        //If this is a COUNT aggregate, then we only return 1 DataRow that has only the count itself.  (TODO: Technically, there could be other columns in this SELECT, but it hasn't been a needed use case yet)
-        if (processingState.CountAggregate)
-        {
-            processingState.QueryOutput = new("ResultSet");
-            processingState.QueryOutput.Columns.Add(new DataColumn("Count", typeof(int)));
+        return (processingState, selectRows);
+    }
 
-            var onlyDataRow = processingState.QueryOutput.NewRow();
-            onlyDataRow[0] = selectRows.Count();
-            selectRows = new DataRow[] { onlyDataRow };
+    private (ProcessingState processingState, IEnumerable<DataRow> SelectRows) EvaluateAggregates(ProcessingState processingState, IEnumerable<DataRow> sourceRows)
+    {
+        var allRows = sourceRows.ToList();
+        processingState.QueryOutput = new("ResultSet");
+
+        var values = new List<object>();
+        foreach (var col in sqlSelectDefinition.Columns)
+        {
+            if (col is not SqlAggregate agg)
+                throw new InvalidOperationException("When aggregates are present, all columns must be aggregates.");
+
+            var aggValue = ComputeAggregate(agg, allRows);
+            values.Add(aggValue ?? DBNull.Value);
+
+            var columnName = agg.ColumnAlias ?? agg.AggregateName;
+            var dataType = (aggValue != null && aggValue != DBNull.Value) ? aggValue.GetType() : typeof(int);
+            processingState.QueryOutput.Columns.Add(new DataColumn(columnName, dataType));
         }
 
-        return (processingState, selectRows);
+        var resultRow = processingState.QueryOutput.NewRow();
+        for (int i = 0; i < values.Count; i++)
+            resultRow[i] = values[i];
+
+        return (processingState, new DataRow[] { resultRow });
+    }
+
+    private object? ComputeAggregate(SqlAggregate aggregate, List<DataRow> rows)
+    {
+        var aggName = aggregate.AggregateName.ToUpperInvariant();
+
+        if (aggName == "COUNT")
+            return rows.Count;
+
+        var colName = GetAggregateColumnName(aggregate);
+        var nonNullValues = rows
+            .Where(r => r.Table.Columns.Contains(colName) && r[colName] != DBNull.Value)
+            .Select(r => r[colName])
+            .ToList();
+
+        if (!nonNullValues.Any())
+            return DBNull.Value;
+
+        switch (aggName)
+        {
+            case "MAX":
+                return nonNullValues.Cast<IComparable>().Max();
+            case "MIN":
+                return nonNullValues.Cast<IComparable>().Min();
+            case "SUM":
+                return nonNullValues.Select(v => Convert.ToDecimal(v)).Sum();
+            case "AVG":
+                return nonNullValues.Select(v => Convert.ToDecimal(v)).Average();
+            default:
+                throw new NotSupportedException($"Aggregate '{aggregate.AggregateName}' is not supported.");
+        }
+    }
+
+    private static string GetAggregateColumnName(SqlAggregate aggregate)
+    {
+        if (aggregate.Argument?.Column != null)
+            return aggregate.Argument.Column.ColumnName;
+
+        throw new NotSupportedException($"Aggregate '{aggregate.AggregateName}' requires a column argument.");
     }
 
     private IEnumerable<DataRow> ApplyFilter<TDataRow>(IQueryable<TDataRow> dataRows, SqlBinaryExpression filteringClause, Dictionary<SqlTable, DataRow> substituteValues, SqlTable tableDataRow, DataTable tableWithColumnsToProjectOnto)
@@ -137,25 +195,32 @@ public class QueryEngine : IQueryEngine
     }
 
     /// <summary>
-    /// Resolves query output if there is only a FROM table.
+    /// Resolves query output if there is only a FROM table. Supports both regular columns
+    /// and function columns with ValueResolver.
     /// </summary>
-    /// <param name="queryOutput"></param>
-    /// <param name="fromDataRows"></param>
-    /// <returns></returns>
-    private IEnumerable<DataRow> ResolveSelectColumns(VirtualDataTable queryOutput, IEnumerable<DataRow> fromDataRows)
+    private IEnumerable<DataRow> ResolveSelectColumnsFromTable(ProcessingState processingState, IEnumerable<DataRow> fromDataRows)
     {
         //TODO: Maltby - Possible performance improvement.  Map columns of the SELECT to integer index values in fromDataRows' DataRow
         //               before enumerating all rows of fromDataRows.
 
         foreach (DataRow dataRow in fromDataRows)
         {
-            var selectColumns = queryOutput.NewRow();
-            foreach (DataColumn dataColumn in queryOutput.Columns)
+            processingState.CurrentSourceRow = dataRow;
+            var selectColumns = processingState.QueryOutput.NewRow();
+            foreach (DataColumn dataColumn in processingState.QueryOutput.Columns)
             {
-                //Items in the dataRow are using their original column names, so we need to get the original column name
-                var sqlColumn = dataColumn.ExProps().Column;
+                var exProps = dataColumn.ExProps();
 
-                //Copy the column value from fromDataRows to the selectColumns. 
+                if (exProps.TryGet(prop => prop.ValueResolver, out var valueResolver))
+                {
+                    selectColumns[dataColumn.ColumnName] = valueResolver();
+                    continue;
+                }
+
+                //Items in the dataRow are using their original column names, so we need to get the original column name
+                var sqlColumn = exProps.Column;
+
+                //Copy the column value from fromDataRows to the selectColumns.
                 selectColumns[dataColumn.ColumnName] = dataRow[GetColumnName(sqlColumn.ColumnName)];
             }
 
@@ -177,6 +242,7 @@ public class QueryEngine : IQueryEngine
                 throw new ArgumentNullException(nameof(sqlSelectDefinition.Table), $"Cannot lookup table in processingState.DataRowsOfOtherTables because table value is null");
 
             processingState.DataRowsOfOtherTables[sqlSelectDefinition.Table] = dataRow;
+            processingState.CurrentSourceRow = dataRow;
 
             var enumerableQueryRows = ResolveSelectColumns(processingState, sqlSelectDefinition.Joins.ToArray());
             foreach (var queryRow in enumerableQueryRows)
@@ -380,17 +446,25 @@ public class QueryEngine : IQueryEngine
 
     private void DetermineColumns(ProcessingState processingState)
     {
-        bool firstColumnCountAggregate = sqlSelectDefinition.Columns.Count > 0 && sqlSelectDefinition.Columns[0] is SqlAggregate &&
-                                         ((SqlAggregate)sqlSelectDefinition.Columns[0]).AggregateName == "COUNT";
-        if (firstColumnCountAggregate)
+        //Detect if any columns are aggregates
+        bool hasAggregates = sqlSelectDefinition.Columns.OfType<SqlAggregate>().Any();
+        if (hasAggregates)
         {
-            if (sqlSelectDefinition.Columns.Count > 1)
-                throw new InvalidOperationException("The aggregate COUNT can be the only column in the SELECT when used.");
+            processingState.HasAggregates = true;
 
-            processingState.CountAggregate = true;
+            //For aggregates with column arguments, add the argument column as a hidden projection
+            //so the column data is available for aggregate computation.
+            foreach (var agg in sqlSelectDefinition.Columns.OfType<SqlAggregate>())
+            {
+                if (agg.Argument?.Column != null && agg.Argument.Column.Column is SqlColumn argSqlCol && argSqlCol.TableRef != null)
+                {
+                    AddColumn(processingState, argSqlCol.ColumnName, null, argSqlCol.ColumnType ?? typeof(object),
+                              false, argSqlCol, argSqlCol.TableRef, true);
+                }
+            }
         }
 
-        //Get a list of all column names that would have the same column name (i.e. a column with same name in two tables JOIN'd or where one conflicts with an alias) 
+        //Get a list of all column names that would have the same column name (i.e. a column with same name in two tables JOIN'd or where one conflicts with an alias)
         var duplicateColumnNames = new HashSet<string>(sqlSelectDefinition.Columns
             .Where(col => !string.IsNullOrEmpty(col.ColumnName))
             .GroupBy(col => col.ColumnName)
@@ -468,15 +542,24 @@ public class QueryEngine : IQueryEngine
         {
             case SqlFunctionColumn functionColumn:
                 if (functionColumn.Function.CalculateValue == null)
-                    throw new Exception($"The {typeof(SqlFunction)} {functionColumn.Function} in the list of columns for this SQL statement, must either be calculated (i.e. replaced with a {nameof(SqlLiteralValue)}) before the {nameof(Query)} method is called, or it must have a lambda defined for its {nameof(SqlFunction.CalculateValue)} property which will calculate its value for each row of the resultset.");
+                {
+                    var builtIn = TryCreateBuiltInFunction(processingState, functionColumn.Function);
+                    if (builtIn == null)
+                        throw new Exception($"The {typeof(SqlFunction)} {functionColumn.Function} in the list of columns for this SQL statement, must either be calculated (i.e. replaced with a {nameof(SqlLiteralValue)}) before the {nameof(Query)} method is called, or it must have a lambda defined for its {nameof(SqlFunction.CalculateValue)} property which will calculate its value for each row of the resultset.");
 
-                AddOutputColumn(processingState, functionColumn.ColumnName!, functionColumn.ColumnAlias, 
-                                functionColumn.ColumnType, duplicateColumnNames.Contains(functionColumn.ColumnName!), 
+                    functionColumn.Function.CalculateValue = builtIn;
+                }
+
+                //For built-in functions with column arguments, ensure the argument column is projected
+                EnsureFunctionArgumentsProjected(processingState, functionColumn.Function);
+
+                AddOutputColumn(processingState, functionColumn.ColumnName!, functionColumn.ColumnAlias,
+                                functionColumn.ColumnType, duplicateColumnNames.Contains(functionColumn.ColumnName!),
                                 functionColumn, null, functionColumn.Function.CalculateValue);
                 break;
 
             case SqlColumn column:
-                AddColumn(processingState, column.ColumnName, column.ColumnAlias, column.ColumnType ?? typeof(string), 
+                AddColumn(processingState, column.ColumnName, column.ColumnAlias, column.ColumnType ?? typeof(string),
                           duplicateColumnNames.Contains(column.ColumnName), column, column.TableRef, false);
                 break;
 
@@ -487,9 +570,87 @@ public class QueryEngine : IQueryEngine
             default:
                 var aggregate = iColumn as SqlAggregate;
 
-                if (aggregate == null || string.Compare(aggregate.AggregateName, "COUNT", true) != 0)
+                if (aggregate == null)
                     throw new Exception($"In trying to determine the Columns for SELECT output, there is no case that handles the type {iColumn.GetType().FullName}");
+                //Aggregates are handled in EvaluateAggregates, not as output columns.
                 break;
+        }
+    }
+
+    private Func<object>? TryCreateBuiltInFunction(ProcessingState processingState, SqlFunction function)
+    {
+        var funcName = function.FunctionName.ToUpperInvariant();
+        switch (funcName)
+        {
+            case "UPPER":
+                return () =>
+                {
+                    var argValue = ResolveArgumentValue(processingState, function.Arguments[0]);
+                    if (argValue == null || argValue == DBNull.Value) return DBNull.Value;
+                    return argValue.ToString()!.ToUpper();
+                };
+            case "LOWER":
+                return () =>
+                {
+                    var argValue = ResolveArgumentValue(processingState, function.Arguments[0]);
+                    if (argValue == null || argValue == DBNull.Value) return DBNull.Value;
+                    return argValue.ToString()!.ToLower();
+                };
+            case "LENGTH":
+            case "LEN":
+                return () =>
+                {
+                    var argValue = ResolveArgumentValue(processingState, function.Arguments[0]);
+                    if (argValue == null || argValue == DBNull.Value) return DBNull.Value;
+                    return argValue.ToString()!.Length;
+                };
+            case "ABS":
+                return () =>
+                {
+                    var argValue = ResolveArgumentValue(processingState, function.Arguments[0]);
+                    if (argValue == null || argValue == DBNull.Value) return DBNull.Value;
+                    return Math.Abs(Convert.ToDouble(argValue));
+                };
+            case "ROUND":
+                return () =>
+                {
+                    var argValue = ResolveArgumentValue(processingState, function.Arguments[0]);
+                    if (argValue == null || argValue == DBNull.Value) return DBNull.Value;
+                    int digits = function.Arguments.Count > 1
+                        ? Convert.ToInt32(ResolveArgumentValue(processingState, function.Arguments[1]))
+                        : 0;
+                    return Math.Round(Convert.ToDouble(argValue), digits);
+                };
+            default:
+                return null;
+        }
+    }
+
+    private static object? ResolveArgumentValue(ProcessingState processingState, SqlExpression arg)
+    {
+        if (arg.Value != null)
+            return arg.Value.Value;
+
+        if (arg.Column != null)
+        {
+            var row = processingState.CurrentSourceRow;
+            if (row == null)
+                throw new InvalidOperationException("No current row available for function evaluation.");
+            return row[arg.Column.ColumnName];
+        }
+
+        throw new NotSupportedException("Function argument must be a column reference or literal value.");
+    }
+
+    private void EnsureFunctionArgumentsProjected(ProcessingState processingState, SqlFunction function)
+    {
+        foreach (var arg in function.Arguments)
+        {
+            if (arg.Column?.Column is SqlColumn argCol && argCol.TableRef != null)
+            {
+                AddColumn(processingState, argCol.ColumnName, null, argCol.ColumnType ?? typeof(string),
+                          false, argCol, argCol.TableRef, true);
+            }
         }
     }
 

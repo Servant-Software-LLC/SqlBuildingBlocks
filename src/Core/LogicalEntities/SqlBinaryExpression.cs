@@ -65,28 +65,39 @@ public class SqlBinaryExpression
 
     private Expression GetIsNullExpression(Dictionary<SqlTable, DataRow> substituteValues, SqlTable tableDataRow, ParameterExpression param)
     {
+        // For DataRow parameters, check for DBNull.Value directly on the raw object
+        // without type-converting the value (which would throw on DBNull).
+        if (param.Type == typeof(DataRow) && Left.Column != null)
+        {
+            var columnNameExpr = Expression.Constant(Left.Column.ColumnName);
+            var indexerProperty = typeof(DataRow).GetProperty("Item", new Type[] { typeof(string) });
+            var rawValue = Expression.MakeIndex(param, indexerProperty, new[] { columnNameExpr });
+            var isNullCheck = Expression.Equal(rawValue, Expression.Constant(DBNull.Value, typeof(object)));
+            return Operator == SqlBinaryOperator.IsNull ? isNullCheck : Expression.Not(isNullCheck);
+        }
+
         // Use a dummy companion expression (null literal) to satisfy the GetExpression signature
         var nullCompanion = new SqlExpression(new SqlLiteralValue());
         var leftProperty = Left.GetExpression(substituteValues, tableDataRow, param, nullCompanion);
 
-        Expression isNullCheck;
+        Expression isNullCheckExpr;
         if (leftProperty.Type.IsValueType && !(leftProperty.Type.IsGenericType && leftProperty.Type.GetGenericTypeDefinition() == typeof(Nullable<>)))
         {
             // Non-nullable value type: IS NULL is always false, IS NOT NULL is always true
-            isNullCheck = Expression.Constant(false);
+            isNullCheckExpr = Expression.Constant(false);
         }
         else if (leftProperty.Type.IsGenericType && leftProperty.Type.GetGenericTypeDefinition() == typeof(Nullable<>))
         {
             // Nullable value type: check HasValue
-            isNullCheck = Expression.Not(Expression.Property(leftProperty, "HasValue"));
+            isNullCheckExpr = Expression.Not(Expression.Property(leftProperty, "HasValue"));
         }
         else
         {
             // Reference type or object: compare to null
-            isNullCheck = Expression.Equal(leftProperty, Expression.Constant(null, leftProperty.Type));
+            isNullCheckExpr = Expression.Equal(leftProperty, Expression.Constant(null, leftProperty.Type));
         }
 
-        return Operator == SqlBinaryOperator.IsNull ? isNullCheck : Expression.Not(isNullCheck);
+        return Operator == SqlBinaryOperator.IsNull ? isNullCheckExpr : Expression.Not(isNullCheckExpr);
     }
 
 
