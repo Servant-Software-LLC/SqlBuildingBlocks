@@ -236,6 +236,9 @@ public class SqlExpression
         if (arg.Value != null)
             return Expression.Constant(arg.Value.Value, arg.Value.Value?.GetType() ?? typeof(object));
 
+        if (arg.Function != null)
+            return GetBuiltInFunctionExpression(arg.Function, substituteValues, tableDataRow, param);
+
         if (arg.Column?.Column is SqlColumn argCol)
         {
             if (param.Type == typeof(DataRow))
