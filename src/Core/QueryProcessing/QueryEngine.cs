@@ -114,8 +114,8 @@ public class QueryEngine : IQueryEngine
             var aggValue = ComputeAggregate(agg, allRows);
             values.Add(aggValue ?? DBNull.Value);
 
-            var columnName = agg.ColumnAlias ?? agg.AggregateName;
-            var dataType = (aggValue != null && aggValue != DBNull.Value) ? aggValue.GetType() : typeof(int);
+            var columnName = agg.ColumnAlias ?? GetAggregateDefaultColumnName(agg);
+            var dataType = GetAggregateColumnType(agg, aggValue);
             processingState.QueryOutput.Columns.Add(new DataColumn(columnName, dataType));
         }
 
@@ -155,6 +155,39 @@ public class QueryEngine : IQueryEngine
             default:
                 throw new NotSupportedException($"Aggregate '{aggregate.AggregateName}' is not supported.");
         }
+    }
+
+    private static string GetAggregateDefaultColumnName(SqlAggregate aggregate)
+    {
+        if (aggregate.Argument?.Column != null)
+            return $"{aggregate.AggregateName}({aggregate.Argument.Column.ColumnName})";
+
+        return aggregate.AggregateName;
+    }
+
+    private static Type GetAggregateColumnType(SqlAggregate aggregate, object? aggValue)
+    {
+        var aggName = aggregate.AggregateName.ToUpperInvariant();
+
+        // COUNT always returns int
+        if (aggName == "COUNT")
+            return typeof(int);
+
+        // For MAX/MIN/SUM/AVG, use the source column's type if available
+        if (aggregate.Argument?.Column?.Column is SqlColumn argCol && argCol.ColumnType != null)
+        {
+            var sourceType = argCol.ColumnType;
+            // Unwrap Nullable<T>
+            if (sourceType.IsGenericType && sourceType.GetGenericTypeDefinition() == typeof(Nullable<>))
+                sourceType = sourceType.GenericTypeArguments[0];
+            return sourceType;
+        }
+
+        // Fall back to the computed value's type
+        if (aggValue != null && aggValue != DBNull.Value)
+            return aggValue.GetType();
+
+        return typeof(object);
     }
 
     private static string GetAggregateColumnName(SqlAggregate aggregate)
@@ -646,10 +679,14 @@ public class QueryEngine : IQueryEngine
     {
         foreach (var arg in function.Arguments)
         {
-            if (arg.Column?.Column is SqlColumn argCol && argCol.TableRef != null)
+            if (arg.Column?.Column is SqlColumn argCol)
             {
-                AddColumn(processingState, argCol.ColumnName, null, argCol.ColumnType ?? typeof(string),
-                          false, argCol, argCol.TableRef, true);
+                var tableRef = argCol.TableRef ?? sqlSelectDefinition.Table;
+                if (tableRef != null)
+                {
+                    AddColumn(processingState, argCol.ColumnName, null, argCol.ColumnType ?? typeof(string),
+                              false, argCol, tableRef, true);
+                }
             }
         }
     }

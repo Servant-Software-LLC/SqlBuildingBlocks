@@ -984,4 +984,332 @@ public class QueryEngineTests
     }
 
     #endregion
+
+    #region Bug Fix: UPPER/LOWER projection with missing TableRef
+
+    [Fact]
+    public void QueryAsDataTable_Upper_Function_NoTableRef()
+    {
+        const string databaseName = "MyDB";
+
+        // SELECT UPPER(name) FROM employees — function arg column has no TableRef
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable employeesTable = new(databaseName, "employees");
+
+        // Column without TableRef set (simulates parser not resolving table reference)
+        SqlColumn nameCol = new(databaseName, "employees", "name") { ColumnType = typeof(string) };
+        SqlFunction upperFunc = new("UPPER");
+        upperFunc.Arguments.Add(new SqlExpression(new SqlColumnRef(null, null, "name") { Column = nameCol }));
+        SqlFunctionColumn funcCol = new(upperFunc) { ColumnAlias = "upper_name" };
+        sqlSelect.Columns.Add(funcCol);
+        sqlSelect.Table = employeesTable;
+
+        DataSet dataSet = new(databaseName);
+        DataTable employees = new("employees");
+        employees.Columns.Add("name", typeof(string));
+        employees.Rows.Add("Alice");
+        employees.Rows.Add("bob");
+        dataSet.Tables.Add(employees);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var resultset = queryEngine.QueryAsDataTable();
+
+        Assert.Equal(2, resultset.Rows.Count);
+        Assert.Equal("ALICE", resultset.Rows[0]["upper_name"]);
+        Assert.Equal("BOB", resultset.Rows[1]["upper_name"]);
+    }
+
+    [Fact]
+    public void QueryAsDataTable_Lower_Function_NoTableRef()
+    {
+        const string databaseName = "MyDB";
+
+        // SELECT LOWER(name) FROM employees — function arg column has no TableRef
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable employeesTable = new(databaseName, "employees");
+
+        SqlColumn nameCol = new(databaseName, "employees", "name") { ColumnType = typeof(string) };
+        SqlFunction lowerFunc = new("LOWER");
+        lowerFunc.Arguments.Add(new SqlExpression(new SqlColumnRef(null, null, "name") { Column = nameCol }));
+        SqlFunctionColumn funcCol = new(lowerFunc) { ColumnAlias = "lower_name" };
+        sqlSelect.Columns.Add(funcCol);
+        sqlSelect.Table = employeesTable;
+
+        DataSet dataSet = new(databaseName);
+        DataTable employees = new("employees");
+        employees.Columns.Add("name", typeof(string));
+        employees.Rows.Add("ALICE");
+        employees.Rows.Add("Bob");
+        dataSet.Tables.Add(employees);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var resultset = queryEngine.QueryAsDataTable();
+
+        Assert.Equal(2, resultset.Rows.Count);
+        Assert.Equal("alice", resultset.Rows[0]["lower_name"]);
+        Assert.Equal("bob", resultset.Rows[1]["lower_name"]);
+    }
+
+    [Fact]
+    public void QueryAsDataTable_Upper_WithOtherColumn_NoTableRef()
+    {
+        const string databaseName = "MyDB";
+
+        // SELECT id, UPPER(name) FROM employees — ensures projection includes function arg column
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable employeesTable = new(databaseName, "employees");
+
+        SqlColumn idCol = new(databaseName, "employees", "id") { ColumnType = typeof(int), TableRef = employeesTable };
+        sqlSelect.Columns.Add(idCol);
+
+        SqlColumn nameCol = new(databaseName, "employees", "name") { ColumnType = typeof(string) };
+        SqlFunction upperFunc = new("UPPER");
+        upperFunc.Arguments.Add(new SqlExpression(new SqlColumnRef(null, null, "name") { Column = nameCol }));
+        SqlFunctionColumn funcCol = new(upperFunc) { ColumnAlias = "upper_name" };
+        sqlSelect.Columns.Add(funcCol);
+        sqlSelect.Table = employeesTable;
+
+        DataSet dataSet = new(databaseName);
+        DataTable employees = new("employees");
+        employees.Columns.Add("id", typeof(int));
+        employees.Columns.Add("name", typeof(string));
+        employees.Rows.Add(1, "Alice");
+        employees.Rows.Add(2, "bob");
+        dataSet.Tables.Add(employees);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var resultset = queryEngine.QueryAsDataTable();
+
+        Assert.Equal(2, resultset.Rows.Count);
+        Assert.Equal(1, resultset.Rows[0]["id"]);
+        Assert.Equal("ALICE", resultset.Rows[0]["upper_name"]);
+        Assert.Equal(2, resultset.Rows[1]["id"]);
+        Assert.Equal("BOB", resultset.Rows[1]["upper_name"]);
+    }
+
+    #endregion
+
+    #region Bug Fix: LENGTH/LEN in WHERE clause
+
+    [Fact]
+    public void QueryAsDataTable_Length_InWhere()
+    {
+        const string databaseName = "MyDB";
+
+        // SELECT id, name FROM employees WHERE LENGTH(name) > 3
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable employeesTable = new(databaseName, "employees");
+
+        SqlColumn idCol = new(databaseName, "employees", "id") { ColumnType = typeof(int), TableRef = employeesTable };
+        sqlSelect.Columns.Add(idCol);
+
+        SqlColumn nameCol = new(databaseName, "employees", "name") { ColumnType = typeof(string), TableRef = employeesTable };
+        sqlSelect.Columns.Add(nameCol);
+
+        sqlSelect.Table = employeesTable;
+
+        // WHERE LENGTH(name) > 3
+        SqlColumn whereNameCol = new(databaseName, "employees", "name") { ColumnType = typeof(string), TableRef = employeesTable };
+        SqlFunction lengthFunc = new("LENGTH") { ValueType = typeof(int) };
+        lengthFunc.Arguments.Add(new SqlExpression(new SqlColumnRef(null, null, "name") { Column = whereNameCol }));
+        SqlBinaryExpression whereClause = new(
+            new SqlExpression(lengthFunc),
+            SqlBinaryOperator.GreaterThan,
+            new SqlExpression(new SqlLiteralValue(3)));
+        sqlSelect.WhereClause = new SqlExpression(whereClause);
+
+        DataSet dataSet = new(databaseName);
+        DataTable employees = new("employees");
+        employees.Columns.Add("id", typeof(int));
+        employees.Columns.Add("name", typeof(string));
+        employees.Rows.Add(1, "Alice");
+        employees.Rows.Add(2, "Bo");
+        employees.Rows.Add(3, "Charlotte");
+        employees.Rows.Add(4, "Ed");
+        dataSet.Tables.Add(employees);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var resultset = queryEngine.QueryAsDataTable();
+
+        Assert.Equal(2, resultset.Rows.Count);
+        Assert.Equal(1, resultset.Rows[0]["id"]);
+        Assert.Equal("Alice", resultset.Rows[0]["name"]);
+        Assert.Equal(3, resultset.Rows[1]["id"]);
+        Assert.Equal("Charlotte", resultset.Rows[1]["name"]);
+    }
+
+    [Fact]
+    public void QueryAsDataTable_Upper_InWhere()
+    {
+        const string databaseName = "MyDB";
+
+        // SELECT id, name FROM employees WHERE UPPER(name) = 'ALICE'
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable employeesTable = new(databaseName, "employees");
+
+        SqlColumn idCol = new(databaseName, "employees", "id") { ColumnType = typeof(int), TableRef = employeesTable };
+        sqlSelect.Columns.Add(idCol);
+
+        SqlColumn nameCol = new(databaseName, "employees", "name") { ColumnType = typeof(string), TableRef = employeesTable };
+        sqlSelect.Columns.Add(nameCol);
+
+        sqlSelect.Table = employeesTable;
+
+        // WHERE UPPER(name) = 'ALICE'
+        SqlColumn whereNameCol = new(databaseName, "employees", "name") { ColumnType = typeof(string), TableRef = employeesTable };
+        SqlFunction upperFunc = new("UPPER") { ValueType = typeof(string) };
+        upperFunc.Arguments.Add(new SqlExpression(new SqlColumnRef(null, null, "name") { Column = whereNameCol }));
+        SqlBinaryExpression whereClause = new(
+            new SqlExpression(upperFunc),
+            SqlBinaryOperator.Equal,
+            new SqlExpression(new SqlLiteralValue("ALICE")));
+        sqlSelect.WhereClause = new SqlExpression(whereClause);
+
+        DataSet dataSet = new(databaseName);
+        DataTable employees = new("employees");
+        employees.Columns.Add("id", typeof(int));
+        employees.Columns.Add("name", typeof(string));
+        employees.Rows.Add(1, "Alice");
+        employees.Rows.Add(2, "Bob");
+        employees.Rows.Add(3, "alice");
+        dataSet.Tables.Add(employees);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var resultset = queryEngine.QueryAsDataTable();
+
+        Assert.Equal(2, resultset.Rows.Count);
+        Assert.Equal(1, resultset.Rows[0]["id"]);
+        Assert.Equal(3, resultset.Rows[1]["id"]);
+    }
+
+    #endregion
+
+    #region Bug Fix: MAX/MIN aggregate DataTable format
+
+    [Fact]
+    public void QueryAsDataTable_Max_ColumnName_MatchesSourceColumn()
+    {
+        const string databaseName = "MyDB";
+
+        // SELECT MAX(price) FROM products — no alias, column name should include column arg
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable productsTable = new(databaseName, "products");
+
+        SqlColumn priceCol = new(databaseName, "products", "price") { ColumnType = typeof(double), TableRef = productsTable };
+        SqlColumnRef priceRef = new(null, null, "price") { Column = priceCol };
+        SqlAggregate maxAgg = new("MAX", new SqlExpression(priceRef));
+        sqlSelect.Columns.Add(maxAgg);
+        sqlSelect.Table = productsTable;
+
+        DataSet dataSet = new(databaseName);
+        DataTable products = new("products");
+        products.Columns.Add("price", typeof(double));
+        products.Rows.Add(10.0);
+        products.Rows.Add(50.0);
+        products.Rows.Add(30.0);
+        dataSet.Tables.Add(products);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var resultset = queryEngine.QueryAsDataTable();
+
+        Assert.Single(resultset.Rows);
+        Assert.Equal("MAX(price)", resultset.Columns[0].ColumnName);
+        Assert.Equal(typeof(double), resultset.Columns[0].DataType);
+        Assert.Equal(50.0, resultset.Rows[0][0]);
+    }
+
+    [Fact]
+    public void QueryAsDataTable_Max_WithAlias_UsesAlias()
+    {
+        const string databaseName = "MyDB";
+
+        // SELECT MAX(price) AS max_price FROM products
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable productsTable = new(databaseName, "products");
+
+        SqlColumn priceCol = new(databaseName, "products", "price") { ColumnType = typeof(double), TableRef = productsTable };
+        SqlColumnRef priceRef = new(null, null, "price") { Column = priceCol };
+        SqlAggregate maxAgg = new("MAX", new SqlExpression(priceRef)) { ColumnAlias = "max_price" };
+        sqlSelect.Columns.Add(maxAgg);
+        sqlSelect.Table = productsTable;
+
+        DataSet dataSet = new(databaseName);
+        DataTable products = new("products");
+        products.Columns.Add("price", typeof(double));
+        products.Rows.Add(10.0);
+        products.Rows.Add(50.0);
+        dataSet.Tables.Add(products);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var resultset = queryEngine.QueryAsDataTable();
+
+        Assert.Single(resultset.Rows);
+        Assert.Equal("max_price", resultset.Columns[0].ColumnName);
+        Assert.Equal(typeof(double), resultset.Columns[0].DataType);
+        Assert.Equal(50.0, resultset.Rows[0]["max_price"]);
+    }
+
+    [Fact]
+    public void QueryAsDataTable_Max_IntColumn_CorrectType()
+    {
+        const string databaseName = "MyDB";
+
+        // SELECT MAX(age) AS max_age FROM employees — int column should produce int type
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable employeesTable = new(databaseName, "employees");
+
+        SqlColumn ageCol = new(databaseName, "employees", "age") { ColumnType = typeof(int), TableRef = employeesTable };
+        SqlColumnRef ageRef = new(null, null, "age") { Column = ageCol };
+        SqlAggregate maxAgg = new("MAX", new SqlExpression(ageRef)) { ColumnAlias = "max_age" };
+        sqlSelect.Columns.Add(maxAgg);
+        sqlSelect.Table = employeesTable;
+
+        DataSet dataSet = new(databaseName);
+        DataTable employees = new("employees");
+        employees.Columns.Add("age", typeof(int));
+        employees.Rows.Add(25);
+        employees.Rows.Add(42);
+        employees.Rows.Add(31);
+        dataSet.Tables.Add(employees);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var resultset = queryEngine.QueryAsDataTable();
+
+        Assert.Single(resultset.Rows);
+        Assert.Equal(typeof(int), resultset.Columns[0].DataType);
+        Assert.Equal(42, resultset.Rows[0]["max_age"]);
+    }
+
+    [Fact]
+    public void QueryAsDataTable_Min_IntColumn_CorrectType()
+    {
+        const string databaseName = "MyDB";
+
+        // SELECT MIN(age) AS min_age FROM employees
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable employeesTable = new(databaseName, "employees");
+
+        SqlColumn ageCol = new(databaseName, "employees", "age") { ColumnType = typeof(int), TableRef = employeesTable };
+        SqlColumnRef ageRef = new(null, null, "age") { Column = ageCol };
+        SqlAggregate minAgg = new("MIN", new SqlExpression(ageRef)) { ColumnAlias = "min_age" };
+        sqlSelect.Columns.Add(minAgg);
+        sqlSelect.Table = employeesTable;
+
+        DataSet dataSet = new(databaseName);
+        DataTable employees = new("employees");
+        employees.Columns.Add("age", typeof(int));
+        employees.Rows.Add(25);
+        employees.Rows.Add(42);
+        employees.Rows.Add(31);
+        dataSet.Tables.Add(employees);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var resultset = queryEngine.QueryAsDataTable();
+
+        Assert.Single(resultset.Rows);
+        Assert.Equal(typeof(int), resultset.Columns[0].DataType);
+        Assert.Equal(25, resultset.Rows[0]["min_age"]);
+    }
+
+    #endregion
 }
