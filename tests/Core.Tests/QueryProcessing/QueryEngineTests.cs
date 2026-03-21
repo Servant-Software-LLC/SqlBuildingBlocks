@@ -535,4 +535,453 @@ public class QueryEngineTests
                 break;
         }
     }
+
+    #region IS NOT NULL
+
+    [Fact]
+    public void QueryAsDataTable_Where_IsNotNull()
+    {
+        const string databaseName = "MyDB";
+
+        // SELECT id, name FROM employees WHERE name IS NOT NULL
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable employeesTable = new(databaseName, "employees");
+
+        SqlColumn idCol = new(databaseName, "employees", "id") { ColumnType = typeof(int), TableRef = employeesTable };
+        SqlColumn nameCol = new(databaseName, "employees", "name") { ColumnType = typeof(string), TableRef = employeesTable };
+        sqlSelect.Columns.Add(idCol);
+        sqlSelect.Columns.Add(nameCol);
+        sqlSelect.Table = employeesTable;
+
+        // WHERE name IS NOT NULL
+        SqlColumnRef nameRef = new(null, null, "name") { Column = nameCol };
+        SqlBinaryExpression whereClause = new(new SqlExpression(nameRef), SqlBinaryOperator.IsNotNull, null);
+        sqlSelect.WhereClause = new SqlExpression(whereClause);
+
+        DataSet dataSet = new(databaseName);
+        DataTable employees = new("employees");
+        employees.Columns.Add("id", typeof(int));
+        employees.Columns.Add("name", typeof(string));
+        employees.Rows.Add(1, "Alice");
+        employees.Rows.Add(2, DBNull.Value);
+        employees.Rows.Add(3, "Charlie");
+        employees.Rows.Add(4, DBNull.Value);
+        employees.Rows.Add(5, "Eve");
+        dataSet.Tables.Add(employees);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var resultset = queryEngine.QueryAsDataTable();
+
+        Assert.Equal(3, resultset.Rows.Count);
+        Assert.Equal("Alice", resultset.Rows[0]["name"]);
+        Assert.Equal("Charlie", resultset.Rows[1]["name"]);
+        Assert.Equal("Eve", resultset.Rows[2]["name"]);
+    }
+
+    [Fact]
+    public void QueryAsDataTable_Where_IsNull()
+    {
+        const string databaseName = "MyDB";
+
+        // SELECT id FROM employees WHERE name IS NULL
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable employeesTable = new(databaseName, "employees");
+
+        SqlColumn idCol = new(databaseName, "employees", "id") { ColumnType = typeof(int), TableRef = employeesTable };
+        SqlColumn nameCol = new(databaseName, "employees", "name") { ColumnType = typeof(string), TableRef = employeesTable };
+        sqlSelect.Columns.Add(idCol);
+        sqlSelect.Table = employeesTable;
+
+        // WHERE name IS NULL
+        SqlColumnRef nameRef = new(null, null, "name") { Column = nameCol };
+        SqlBinaryExpression whereClause = new(new SqlExpression(nameRef), SqlBinaryOperator.IsNull, null);
+        sqlSelect.WhereClause = new SqlExpression(whereClause);
+
+        DataSet dataSet = new(databaseName);
+        DataTable employees = new("employees");
+        employees.Columns.Add("id", typeof(int));
+        employees.Columns.Add("name", typeof(string));
+        employees.Rows.Add(1, "Alice");
+        employees.Rows.Add(2, DBNull.Value);
+        employees.Rows.Add(3, "Charlie");
+        employees.Rows.Add(4, DBNull.Value);
+        dataSet.Tables.Add(employees);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var resultset = queryEngine.QueryAsDataTable();
+
+        Assert.Equal(2, resultset.Rows.Count);
+        Assert.Equal(2, resultset.Rows[0]["id"]);
+        Assert.Equal(4, resultset.Rows[1]["id"]);
+    }
+
+    #endregion
+
+    #region Built-in Functions
+
+    [Fact]
+    public void QueryAsDataTable_Upper_Function()
+    {
+        const string databaseName = "MyDB";
+
+        // SELECT UPPER(name) FROM employees
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable employeesTable = new(databaseName, "employees");
+
+        SqlColumn nameCol = new(databaseName, "employees", "name") { ColumnType = typeof(string), TableRef = employeesTable };
+        SqlFunction upperFunc = new("UPPER");
+        upperFunc.Arguments.Add(new SqlExpression(new SqlColumnRef(null, null, "name") { Column = nameCol }));
+        SqlFunctionColumn funcCol = new(upperFunc) { ColumnAlias = "upper_name" };
+        sqlSelect.Columns.Add(funcCol);
+        sqlSelect.Table = employeesTable;
+
+        DataSet dataSet = new(databaseName);
+        DataTable employees = new("employees");
+        employees.Columns.Add("name", typeof(string));
+        employees.Rows.Add("Alice");
+        employees.Rows.Add("bob");
+        employees.Rows.Add("Charlie");
+        dataSet.Tables.Add(employees);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var resultset = queryEngine.QueryAsDataTable();
+
+        Assert.Equal(3, resultset.Rows.Count);
+        Assert.Equal("ALICE", resultset.Rows[0]["upper_name"]);
+        Assert.Equal("BOB", resultset.Rows[1]["upper_name"]);
+        Assert.Equal("CHARLIE", resultset.Rows[2]["upper_name"]);
+    }
+
+    [Fact]
+    public void QueryAsDataTable_Lower_Function()
+    {
+        const string databaseName = "MyDB";
+
+        // SELECT LOWER(name) FROM employees
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable employeesTable = new(databaseName, "employees");
+
+        SqlColumn nameCol = new(databaseName, "employees", "name") { ColumnType = typeof(string), TableRef = employeesTable };
+        SqlFunction lowerFunc = new("LOWER");
+        lowerFunc.Arguments.Add(new SqlExpression(new SqlColumnRef(null, null, "name") { Column = nameCol }));
+        SqlFunctionColumn funcCol = new(lowerFunc) { ColumnAlias = "lower_name" };
+        sqlSelect.Columns.Add(funcCol);
+        sqlSelect.Table = employeesTable;
+
+        DataSet dataSet = new(databaseName);
+        DataTable employees = new("employees");
+        employees.Columns.Add("name", typeof(string));
+        employees.Rows.Add("ALICE");
+        employees.Rows.Add("Bob");
+        dataSet.Tables.Add(employees);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var resultset = queryEngine.QueryAsDataTable();
+
+        Assert.Equal(2, resultset.Rows.Count);
+        Assert.Equal("alice", resultset.Rows[0]["lower_name"]);
+        Assert.Equal("bob", resultset.Rows[1]["lower_name"]);
+    }
+
+    [Fact]
+    public void QueryAsDataTable_Length_Function()
+    {
+        const string databaseName = "MyDB";
+
+        // SELECT LENGTH(name) AS name_len FROM employees
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable employeesTable = new(databaseName, "employees");
+
+        SqlColumn nameCol = new(databaseName, "employees", "name") { ColumnType = typeof(string), TableRef = employeesTable };
+        SqlFunction lengthFunc = new("LENGTH") { ValueType = typeof(int) };
+        lengthFunc.Arguments.Add(new SqlExpression(new SqlColumnRef(null, null, "name") { Column = nameCol }));
+        SqlFunctionColumn funcCol = new(lengthFunc) { ColumnAlias = "name_len" };
+        sqlSelect.Columns.Add(funcCol);
+        sqlSelect.Table = employeesTable;
+
+        DataSet dataSet = new(databaseName);
+        DataTable employees = new("employees");
+        employees.Columns.Add("name", typeof(string));
+        employees.Rows.Add("Alice");
+        employees.Rows.Add("Bo");
+        employees.Rows.Add("Charlotte");
+        dataSet.Tables.Add(employees);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var resultset = queryEngine.QueryAsDataTable();
+
+        Assert.Equal(3, resultset.Rows.Count);
+        Assert.Equal(5, resultset.Rows[0]["name_len"]);
+        Assert.Equal(2, resultset.Rows[1]["name_len"]);
+        Assert.Equal(9, resultset.Rows[2]["name_len"]);
+    }
+
+    [Fact]
+    public void QueryAsDataTable_Abs_Function()
+    {
+        const string databaseName = "MyDB";
+
+        // SELECT ABS(balance) AS abs_balance FROM accounts
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable accountsTable = new(databaseName, "accounts");
+
+        SqlColumn balanceCol = new(databaseName, "accounts", "balance") { ColumnType = typeof(double), TableRef = accountsTable };
+        SqlFunction absFunc = new("ABS") { ValueType = typeof(double) };
+        absFunc.Arguments.Add(new SqlExpression(new SqlColumnRef(null, null, "balance") { Column = balanceCol }));
+        SqlFunctionColumn funcCol = new(absFunc) { ColumnAlias = "abs_balance" };
+        sqlSelect.Columns.Add(funcCol);
+        sqlSelect.Table = accountsTable;
+
+        DataSet dataSet = new(databaseName);
+        DataTable accounts = new("accounts");
+        accounts.Columns.Add("balance", typeof(double));
+        accounts.Rows.Add(-100.5);
+        accounts.Rows.Add(200.0);
+        accounts.Rows.Add(-50.25);
+        dataSet.Tables.Add(accounts);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var resultset = queryEngine.QueryAsDataTable();
+
+        Assert.Equal(3, resultset.Rows.Count);
+        Assert.Equal(100.5, resultset.Rows[0]["abs_balance"]);
+        Assert.Equal(200.0, resultset.Rows[1]["abs_balance"]);
+        Assert.Equal(50.25, resultset.Rows[2]["abs_balance"]);
+    }
+
+    [Fact]
+    public void QueryAsDataTable_Round_Function()
+    {
+        const string databaseName = "MyDB";
+
+        // SELECT ROUND(price, 1) AS rounded FROM products
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable productsTable = new(databaseName, "products");
+
+        SqlColumn priceCol = new(databaseName, "products", "price") { ColumnType = typeof(double), TableRef = productsTable };
+        SqlFunction roundFunc = new("ROUND") { ValueType = typeof(double) };
+        roundFunc.Arguments.Add(new SqlExpression(new SqlColumnRef(null, null, "price") { Column = priceCol }));
+        roundFunc.Arguments.Add(new SqlExpression(new SqlLiteralValue(1)));
+        SqlFunctionColumn funcCol = new(roundFunc) { ColumnAlias = "rounded" };
+        sqlSelect.Columns.Add(funcCol);
+        sqlSelect.Table = productsTable;
+
+        DataSet dataSet = new(databaseName);
+        DataTable products = new("products");
+        products.Columns.Add("price", typeof(double));
+        products.Rows.Add(10.456);
+        products.Rows.Add(20.789);
+        products.Rows.Add(30.123);
+        dataSet.Tables.Add(products);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var resultset = queryEngine.QueryAsDataTable();
+
+        Assert.Equal(3, resultset.Rows.Count);
+        Assert.Equal(10.5, resultset.Rows[0]["rounded"]);
+        Assert.Equal(20.8, resultset.Rows[1]["rounded"]);
+        Assert.Equal(30.1, resultset.Rows[2]["rounded"]);
+    }
+
+    [Fact]
+    public void QueryAsDataTable_Len_Function_Alias()
+    {
+        const string databaseName = "MyDB";
+
+        // SELECT LEN(name) AS name_len FROM employees  (LEN as alias for LENGTH)
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable employeesTable = new(databaseName, "employees");
+
+        SqlColumn nameCol = new(databaseName, "employees", "name") { ColumnType = typeof(string), TableRef = employeesTable };
+        SqlFunction lenFunc = new("LEN") { ValueType = typeof(int) };
+        lenFunc.Arguments.Add(new SqlExpression(new SqlColumnRef(null, null, "name") { Column = nameCol }));
+        SqlFunctionColumn funcCol = new(lenFunc) { ColumnAlias = "name_len" };
+        sqlSelect.Columns.Add(funcCol);
+        sqlSelect.Table = employeesTable;
+
+        DataSet dataSet = new(databaseName);
+        DataTable employees = new("employees");
+        employees.Columns.Add("name", typeof(string));
+        employees.Rows.Add("Hi");
+        dataSet.Tables.Add(employees);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var resultset = queryEngine.QueryAsDataTable();
+
+        Assert.Single(resultset.Rows);
+        Assert.Equal(2, resultset.Rows[0]["name_len"]);
+    }
+
+    #endregion
+
+    #region MAX/MIN Aggregates
+
+    [Fact]
+    public void QueryAsDataTable_Select_Max()
+    {
+        const string databaseName = "MyDB";
+
+        // SELECT MAX(price) FROM products
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable productsTable = new(databaseName, "products");
+
+        SqlColumn priceCol = new(databaseName, "products", "price") { ColumnType = typeof(double), TableRef = productsTable };
+        SqlColumnRef priceRef = new(null, null, "price") { Column = priceCol };
+        SqlAggregate maxAgg = new("MAX", new SqlExpression(priceRef));
+        sqlSelect.Columns.Add(maxAgg);
+        sqlSelect.Table = productsTable;
+
+        DataSet dataSet = new(databaseName);
+        DataTable products = new("products");
+        products.Columns.Add("price", typeof(double));
+        products.Rows.Add(10.0);
+        products.Rows.Add(50.0);
+        products.Rows.Add(30.0);
+        dataSet.Tables.Add(products);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var resultset = queryEngine.QueryAsDataTable();
+
+        Assert.Single(resultset.Rows);
+        Assert.Equal(50.0, resultset.Rows[0][0]);
+    }
+
+    [Fact]
+    public void QueryAsDataTable_Select_Min()
+    {
+        const string databaseName = "MyDB";
+
+        // SELECT MIN(price) FROM products
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable productsTable = new(databaseName, "products");
+
+        SqlColumn priceCol = new(databaseName, "products", "price") { ColumnType = typeof(double), TableRef = productsTable };
+        SqlColumnRef priceRef = new(null, null, "price") { Column = priceCol };
+        SqlAggregate minAgg = new("MIN", new SqlExpression(priceRef));
+        sqlSelect.Columns.Add(minAgg);
+        sqlSelect.Table = productsTable;
+
+        DataSet dataSet = new(databaseName);
+        DataTable products = new("products");
+        products.Columns.Add("price", typeof(double));
+        products.Rows.Add(10.0);
+        products.Rows.Add(50.0);
+        products.Rows.Add(30.0);
+        dataSet.Tables.Add(products);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var resultset = queryEngine.QueryAsDataTable();
+
+        Assert.Single(resultset.Rows);
+        Assert.Equal(10.0, resultset.Rows[0][0]);
+    }
+
+    [Fact]
+    public void QueryAsDataTable_Select_MaxAndMin()
+    {
+        const string databaseName = "MyDB";
+
+        // SELECT MAX(price), MIN(price) FROM products
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable productsTable = new(databaseName, "products");
+
+        SqlColumn priceCol = new(databaseName, "products", "price") { ColumnType = typeof(double), TableRef = productsTable };
+
+        SqlColumnRef maxRef = new(null, null, "price") { Column = priceCol };
+        SqlAggregate maxAgg = new("MAX", new SqlExpression(maxRef)) { ColumnAlias = "max_price" };
+        sqlSelect.Columns.Add(maxAgg);
+
+        SqlColumnRef minRef = new(null, null, "price") { Column = priceCol };
+        SqlAggregate minAgg = new("MIN", new SqlExpression(minRef)) { ColumnAlias = "min_price" };
+        sqlSelect.Columns.Add(minAgg);
+
+        sqlSelect.Table = productsTable;
+
+        DataSet dataSet = new(databaseName);
+        DataTable products = new("products");
+        products.Columns.Add("price", typeof(double));
+        products.Rows.Add(10.0);
+        products.Rows.Add(50.0);
+        products.Rows.Add(30.0);
+        dataSet.Tables.Add(products);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var resultset = queryEngine.QueryAsDataTable();
+
+        Assert.Single(resultset.Rows);
+        Assert.Equal(2, resultset.Columns.Count);
+        Assert.Equal(50.0, resultset.Rows[0]["max_price"]);
+        Assert.Equal(10.0, resultset.Rows[0]["min_price"]);
+    }
+
+    [Fact]
+    public void QueryAsDataTable_Select_Max_WithFilter()
+    {
+        const string databaseName = "MyDB";
+
+        // SELECT MAX(price) FROM products WHERE category = 'A'
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable productsTable = new(databaseName, "products");
+
+        SqlColumn priceCol = new(databaseName, "products", "price") { ColumnType = typeof(double), TableRef = productsTable };
+        SqlColumn categoryCol = new(databaseName, "products", "category") { ColumnType = typeof(string), TableRef = productsTable };
+
+        SqlColumnRef priceRef = new(null, null, "price") { Column = priceCol };
+        SqlAggregate maxAgg = new("MAX", new SqlExpression(priceRef));
+        sqlSelect.Columns.Add(maxAgg);
+        sqlSelect.Table = productsTable;
+
+        // WHERE category = 'A'
+        SqlColumnRef categoryRef = new(null, null, "category") { Column = categoryCol };
+        SqlBinaryExpression whereClause = new(new SqlExpression(categoryRef), SqlBinaryOperator.Equal, new SqlExpression(new SqlLiteralValue("A")));
+        sqlSelect.WhereClause = new SqlExpression(whereClause);
+
+        DataSet dataSet = new(databaseName);
+        DataTable products = new("products");
+        products.Columns.Add("price", typeof(double));
+        products.Columns.Add("category", typeof(string));
+        products.Rows.Add(10.0, "A");
+        products.Rows.Add(50.0, "B");
+        products.Rows.Add(30.0, "A");
+        products.Rows.Add(20.0, "A");
+        dataSet.Tables.Add(products);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var resultset = queryEngine.QueryAsDataTable();
+
+        Assert.Single(resultset.Rows);
+        Assert.Equal(30.0, resultset.Rows[0][0]);
+    }
+
+    [Fact]
+    public void QueryAsDataTable_Select_Min_StringColumn()
+    {
+        const string databaseName = "MyDB";
+
+        // SELECT MIN(name) FROM employees
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable employeesTable = new(databaseName, "employees");
+
+        SqlColumn nameCol = new(databaseName, "employees", "name") { ColumnType = typeof(string), TableRef = employeesTable };
+        SqlColumnRef nameRef = new(null, null, "name") { Column = nameCol };
+        SqlAggregate minAgg = new("MIN", new SqlExpression(nameRef));
+        sqlSelect.Columns.Add(minAgg);
+        sqlSelect.Table = employeesTable;
+
+        DataSet dataSet = new(databaseName);
+        DataTable employees = new("employees");
+        employees.Columns.Add("name", typeof(string));
+        employees.Rows.Add("Charlie");
+        employees.Rows.Add("Alice");
+        employees.Rows.Add("Bob");
+        dataSet.Tables.Add(employees);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var resultset = queryEngine.QueryAsDataTable();
+
+        Assert.Single(resultset.Rows);
+        Assert.Equal("Alice", resultset.Rows[0][0]);
+    }
+
+    #endregion
 }

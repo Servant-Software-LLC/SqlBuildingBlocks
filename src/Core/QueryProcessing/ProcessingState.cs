@@ -8,7 +8,7 @@ internal class ProcessingState
 {
 
     /// <summary>
-    /// Table in the processing chain where the WHERE statement can be evaluated. (i.e. all of the columns referenced in the WHERE condition can have values to evaluate) 
+    /// Table in the processing chain where the WHERE statement can be evaluated. (i.e. all of the columns referenced in the WHERE condition can have values to evaluate)
     /// </summary>
     public SqlTable? WhereApplied { get; set; }
 
@@ -27,5 +27,11 @@ internal class ProcessingState
 
     public VirtualDataTable QueryOutput = new("ResultSet");
 
-    public bool CountAggregate { get; set; }
+    public bool HasAggregates { get; set; }
+
+    /// <summary>
+    /// The current source DataRow being processed. Used by built-in function closures
+    /// to access column values from the current row during iteration.
+    /// </summary>
+    public DataRow? CurrentSourceRow { get; set; }
 }
