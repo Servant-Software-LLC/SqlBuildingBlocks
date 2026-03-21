@@ -1823,5 +1823,56 @@ public class QueryEngineTests
         Assert.Equal(3, resultset.Rows[0]["cnt"]);
     }
 
+    [Fact]
+    public void QueryAsDataTable_GroupBy_WithHaving_AggregateFunctionRef()
+    {
+        const string databaseName = "MyDB";
+
+        // SELECT department, COUNT(*) as cnt FROM employees GROUP BY department HAVING COUNT(*) > 2
+        // This time the HAVING clause references the aggregate as an SqlFunction (as the parser produces)
+        // rather than by column alias.
+        SqlSelectDefinition sqlSelect = new();
+
+        SqlColumn deptCol = new(databaseName, "employees", "department") { ColumnType = typeof(string) };
+        SqlTable employeesTable = new(databaseName, "employees");
+        deptCol.TableRef = employeesTable;
+        sqlSelect.Columns.Add(deptCol);
+
+        SqlAggregate countAgg = new("COUNT") { ColumnAlias = "cnt" };
+        sqlSelect.Columns.Add(countAgg);
+
+        sqlSelect.Table = employeesTable;
+        sqlSelect.GroupBy = new SqlGroupByClause();
+        sqlSelect.GroupBy.Columns.Add("department");
+
+        // HAVING COUNT(*) > 2 — reference as SqlFunction (how the parser creates it)
+        var countFunc = new SqlFunction("COUNT");
+        var havingClause = new SqlBinaryExpression(
+            new SqlExpression(countFunc),
+            SqlBinaryOperator.GreaterThan,
+            new SqlExpression(new SqlLiteralValue(2)));
+        sqlSelect.HavingClause = new SqlExpression(havingClause);
+
+        DataSet dataSet = new(databaseName);
+        DataTable employees = new("employees");
+        employees.Columns.Add("id", typeof(int));
+        employees.Columns.Add("name", typeof(string));
+        employees.Columns.Add("department", typeof(string));
+        employees.Rows.Add(1, "Alice", "Engineering");
+        employees.Rows.Add(2, "Bob", "Engineering");
+        employees.Rows.Add(3, "Carol", "Sales");
+        employees.Rows.Add(4, "Dave", "Engineering");
+        employees.Rows.Add(5, "Eve", "Sales");
+        dataSet.Tables.Add(employees);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var resultset = queryEngine.QueryAsDataTable();
+
+        // Only Engineering has > 2 employees
+        Assert.Equal(1, resultset.Rows.Count);
+        Assert.Equal("Engineering", resultset.Rows[0]["department"]);
+        Assert.Equal(3, resultset.Rows[0]["cnt"]);
+    }
+
     #endregion
 }
