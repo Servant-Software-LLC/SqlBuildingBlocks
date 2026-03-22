@@ -1,4 +1,6 @@
 using SqlBuildingBlocks.Interfaces;
+using System.Data;
+using System.Linq.Expressions;
 using System.Text;
 
 namespace SqlBuildingBlocks.LogicalEntities;
@@ -21,6 +23,65 @@ public class SqlCaseExpression
 
     /// <summary>The ELSE expression, or <c>null</c> if no ELSE clause is present.</summary>
     public SqlExpression? ElseResult { get; }
+
+    public Expression GetExpression(Dictionary<SqlTable, DataRow> substituteValues, SqlTable tableDataRow, ParameterExpression param)
+    {
+        // Build nested ternary: Condition(c1, r1, Condition(c2, r2, ... else))
+        // Work backwards from the ELSE (or default) to build the chain.
+
+        // A dummy companion used for type inference when sub-expressions need one.
+        var dummyCompanion = new SqlExpression(new SqlLiteralValue());
+
+        // Start with the ELSE branch (or a default value).
+        Expression elseExpr;
+        if (ElseResult != null)
+        {
+            elseExpr = ElseResult.GetExpression(substituteValues, tableDataRow, param, dummyCompanion);
+        }
+        else
+        {
+            // No ELSE clause — default to null (as object).
+            elseExpr = Expression.Constant(null, typeof(object));
+        }
+
+        // Build the chain from the last WHEN clause backwards.
+        for (int i = WhenClauses.Count - 1; i >= 0; i--)
+        {
+            var (condition, result) = WhenClauses[i];
+
+            var condExpr = condition.GetExpression(substituteValues, tableDataRow, param, dummyCompanion);
+            var resultExpr = result.GetExpression(substituteValues, tableDataRow, param, dummyCompanion);
+
+            // Align result and else branch types so Expression.Condition succeeds.
+            AlignTypes(ref resultExpr, ref elseExpr);
+
+            elseExpr = Expression.Condition(condExpr, resultExpr, elseExpr);
+        }
+
+        return elseExpr;
+    }
+
+    private static void AlignTypes(ref Expression left, ref Expression right)
+    {
+        if (left.Type == right.Type)
+            return;
+
+        if (left.Type == typeof(object))
+            left = Expression.Convert(left, right.Type);
+        else if (right.Type == typeof(object))
+            right = Expression.Convert(right, left.Type);
+        else
+        {
+            try
+            {
+                right = Expression.Convert(right, left.Type);
+            }
+            catch
+            {
+                left = Expression.Convert(left, right.Type);
+            }
+        }
+    }
 
     public void Accept(ISqlExpressionVisitor visitor)
     {

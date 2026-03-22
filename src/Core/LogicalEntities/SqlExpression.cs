@@ -148,6 +148,9 @@ public class SqlExpression
         if (BetweenExpr != null)
             return BetweenExpr.GetExpression(substituteValues, tableDataRow, param);
 
+        if (CaseExpr != null)
+            return CaseExpr.GetExpression(substituteValues, tableDataRow, param);
+
         if (Value != null)
         {
             var valueExpression = Value.GetExpression(companionOfBinExpr);
