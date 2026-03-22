@@ -1,4 +1,7 @@
 using SqlBuildingBlocks.Interfaces;
+using System.Data;
+using System.Linq.Expressions;
+using System.Reflection;
 
 namespace SqlBuildingBlocks.LogicalEntities;
 
@@ -23,6 +26,65 @@ public class SqlBetweenExpression
 
     /// <summary>True when the predicate is NOT BETWEEN; false for plain BETWEEN.</summary>
     public bool IsNegated { get; set; }
+
+    public Expression GetExpression(Dictionary<SqlTable, DataRow> substituteValues, SqlTable tableDataRow, ParameterExpression param)
+    {
+        // BETWEEN is equivalent to: operand >= lower AND operand <= upper
+        // NOT BETWEEN is equivalent to: operand < lower OR operand > upper
+        var operandVsLower = Operand.GetExpression(substituteValues, tableDataRow, param, LowerBound);
+        var lowerExpr = LowerBound.GetExpression(substituteValues, tableDataRow, param, Operand);
+
+        var operandVsUpper = Operand.GetExpression(substituteValues, tableDataRow, param, UpperBound);
+        var upperExpr = UpperBound.GetExpression(substituteValues, tableDataRow, param, Operand);
+
+        // Align types for comparison
+        AlignTypes(ref operandVsLower, ref lowerExpr);
+        AlignTypes(ref operandVsUpper, ref upperExpr);
+
+        var greaterThanOrEqual = MakeComparison(operandVsLower, lowerExpr, ExpressionType.GreaterThanOrEqual);
+        var lessThanOrEqual = MakeComparison(operandVsUpper, upperExpr, ExpressionType.LessThanOrEqual);
+
+        var result = Expression.AndAlso(greaterThanOrEqual, lessThanOrEqual);
+
+        return IsNegated ? Expression.Not(result) : result;
+    }
+
+    private static Expression MakeComparison(Expression left, Expression right, ExpressionType comparisonType)
+    {
+        // String types don't support >=, <= directly; use string.Compare instead
+        if (left.Type == typeof(string) && right.Type == typeof(string))
+        {
+            MethodInfo compareMethod = typeof(string).GetMethod("Compare", new[] { typeof(string), typeof(string) })!;
+            var compareCall = Expression.Call(compareMethod, left, right);
+            var zero = Expression.Constant(0);
+            return Expression.MakeBinary(comparisonType, compareCall, zero);
+        }
+
+        return Expression.MakeBinary(comparisonType, left, right);
+    }
+
+    private static void AlignTypes(ref Expression left, ref Expression right)
+    {
+        if (left.Type == right.Type)
+            return;
+
+        if (left.Type == typeof(object))
+            left = Expression.Convert(left, right.Type);
+        else if (right.Type == typeof(object))
+            right = Expression.Convert(right, left.Type);
+        else
+        {
+            // Convert the narrower type to the wider type
+            try
+            {
+                right = Expression.Convert(right, left.Type);
+            }
+            catch
+            {
+                left = Expression.Convert(left, right.Type);
+            }
+        }
+    }
 
     public void Accept(ISqlExpressionVisitor visitor)
     {
