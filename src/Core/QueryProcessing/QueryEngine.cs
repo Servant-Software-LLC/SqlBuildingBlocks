@@ -71,6 +71,10 @@ public class QueryEngine : IQueryEngine
         // Silently ignoring these produces wrong results, so throw early.
         ThrowIfUnsupportedFeatures();
 
+        // If CTEs are present, execute them first and delegate to a CTE-aware engine.
+        if (sqlSelectDefinition.Ctes.Count > 0)
+            return ExecuteWithCtes();
+
         ProcessingState processingState = new();
         DetermineColumns(processingState);
 
@@ -1210,9 +1214,7 @@ public class QueryEngine : IQueryEngine
 
     private void ThrowIfUnsupportedFeatures()
     {
-        if (sqlSelectDefinition.Ctes.Count > 0)
-            throw new NotSupportedException("Common Table Expression (WITH clause) execution is not yet supported.");
-
+        // CTEs (WITH clause) are now supported — guard removed.
         // Set operations (UNION, INTERSECT, EXCEPT) are now supported — guard removed.
 
         foreach (var col in sqlSelectDefinition.Columns)
@@ -1224,6 +1226,116 @@ public class QueryEngine : IQueryEngine
                 throw new NotSupportedException($"Window function '{funcCol.Function.FunctionName}() OVER(...)' execution is not yet supported.");
         }
     }
+
+    #region CTE (WITH clause) Execution
+
+    /// <summary>
+    /// Executes all CTEs in definition order, then runs the main SELECT against
+    /// a table-data provider that includes the materialized CTE results.
+    /// </summary>
+    private (ProcessingState processingState, IEnumerable<DataRow> SelectRows) ExecuteWithCtes()
+    {
+        // Build a CTE-aware provider by executing each CTE in order.
+        // Later CTEs can reference earlier ones because we add results progressively.
+        var cteProvider = new CteTableDataProvider(tableDataProvider);
+
+        foreach (var cte in sqlSelectDefinition.Ctes)
+        {
+            var cteResult = ExecuteCte(cte, cteProvider);
+            cteProvider.AddCteResult(cte.Name, cteResult);
+        }
+
+        // Create a new select definition without CTEs for the main query.
+        var mainSelect = CloneSelectDefinitionWithoutCtes(sqlSelectDefinition);
+
+        // Run the main query using the CTE-aware provider.
+        var mainEngine = new QueryEngine(cteProvider, mainSelect, dataRowType);
+        return mainEngine.QueryInternal();
+    }
+
+    /// <summary>
+    /// Executes a single CTE's subquery and returns the result as a DataTable.
+    /// </summary>
+    private DataTable ExecuteCte(SqlCteDefinition cte, CteTableDataProvider cteProvider)
+    {
+        var cteEngine = new QueryEngine(cteProvider, cte.SelectDefinition, dataRowType);
+        var cteVirtualTable = cteEngine.Query();
+        return cteVirtualTable.ToDataTable();
+    }
+
+    /// <summary>
+    /// Creates a shallow copy of the select definition with the Ctes list cleared,
+    /// so that the delegated QueryEngine doesn't re-enter CTE processing.
+    /// </summary>
+    private static SqlSelectDefinition CloneSelectDefinitionWithoutCtes(SqlSelectDefinition original)
+    {
+        var clone = new SqlSelectDefinition
+        {
+            IsDistinct = original.IsDistinct,
+            Table = original.Table,
+            Joins = original.Joins,
+            SetOperations = original.SetOperations,
+            WhereClause = original.WhereClause,
+            GroupBy = original.GroupBy,
+            HavingClause = original.HavingClause,
+            OrderBy = original.OrderBy,
+            Limit = original.Limit,
+            Top = original.Top,
+            QueryHints = original.QueryHints,
+            InvalidReferenceReason = original.InvalidReferenceReason,
+            // Ctes intentionally left empty (default) to prevent re-entry.
+        };
+
+        // Columns has a private setter, so copy via the public list.
+        foreach (var col in original.Columns)
+            clone.Columns.Add(col);
+
+        return clone;
+    }
+
+    /// <summary>
+    /// A decorator over ITableDataProvider that serves materialized CTE results as virtual tables.
+    /// When a table lookup matches a CTE name (case-insensitive), the CTE result is returned.
+    /// All other lookups are forwarded to the underlying provider.
+    /// </summary>
+    private class CteTableDataProvider : ITableDataProvider
+    {
+        private readonly ITableDataProvider inner;
+        private readonly Dictionary<string, DataTable> cteResults = new(StringComparer.OrdinalIgnoreCase);
+
+        public CteTableDataProvider(ITableDataProvider inner)
+        {
+            this.inner = inner;
+        }
+
+        public void AddCteResult(string cteName, DataTable result)
+        {
+            cteResults[cteName] = result;
+        }
+
+        public IQueryable? GetTableData(SqlTable sqlTable)
+        {
+            if (cteResults.TryGetValue(sqlTable.TableName, out var cteTable))
+                return cteTable.Rows.Cast<DataRow>().AsQueryable();
+
+            return inner.GetTableData(sqlTable);
+        }
+
+        public IEnumerable<DataColumn> GetColumns(SqlTable sqlTable)
+        {
+            if (cteResults.TryGetValue(sqlTable.TableName, out var cteTable))
+                return cteTable.Columns.Cast<DataColumn>();
+
+            return inner.GetColumns(sqlTable);
+        }
+
+        public (bool DatabaseServiced, IEnumerable<SqlTableInfo> Tables) GetTables(string? database)
+        {
+            return inner.GetTables(database);
+        }
+    }
+
+    #endregion
 
     #region Set Operations (UNION, INTERSECT, EXCEPT)
 
