@@ -60,6 +60,10 @@ public class QueryEngine : IQueryEngine
 
     private (ProcessingState processingState, IEnumerable<DataRow> SelectRows) QueryInternal()
     {
+        // Guard against SQL features that are parsed but not yet executed correctly.
+        // Silently ignoring these produces wrong results, so throw early.
+        ThrowIfUnsupportedFeatures();
+
         ProcessingState processingState = new();
         DetermineColumns(processingState);
 
@@ -1191,5 +1195,23 @@ public class QueryEngine : IQueryEngine
         }
 
         processingState.QueryOutput.Columns.Add(newColumn);
+    }
+
+    private void ThrowIfUnsupportedFeatures()
+    {
+        if (sqlSelectDefinition.Ctes.Count > 0)
+            throw new NotSupportedException("Common Table Expression (WITH clause) execution is not yet supported.");
+
+        if (sqlSelectDefinition.SetOperations.Count > 0)
+            throw new NotSupportedException("Set operation (UNION, INTERSECT, EXCEPT) execution is not yet supported.");
+
+        foreach (var col in sqlSelectDefinition.Columns)
+        {
+            if (col is SqlAggregate agg && agg.IsWindowFunction)
+                throw new NotSupportedException($"Window aggregate '{agg.AggregateName}() OVER(...)' execution is not yet supported.");
+
+            if (col is SqlFunctionColumn funcCol && funcCol.Function.IsWindowFunction)
+                throw new NotSupportedException($"Window function '{funcCol.Function.FunctionName}() OVER(...)' execution is not yet supported.");
+        }
     }
 }

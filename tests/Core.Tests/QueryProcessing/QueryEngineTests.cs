@@ -2215,4 +2215,110 @@ public class QueryEngineTests
     }
 
     #endregion
+
+    #region Unsupported Feature Guards
+
+    [Fact]
+    public void Query_WithCte_ThrowsNotSupportedException()
+    {
+        const string databaseName = "MyDB";
+
+        SqlSelectDefinition sqlSelect = new();
+        sqlSelect.Columns.Add(new SqlColumn(databaseName, "Employees", "Name"));
+        sqlSelect.Table = new SqlTable(databaseName, "Employees");
+
+        // Add a CTE: WITH cte AS (SELECT ...)
+        var cteSelect = new SqlSelectDefinition();
+        cteSelect.Columns.Add(new SqlColumn(databaseName, "Employees", "Name"));
+        sqlSelect.Ctes.Add(new SqlCteDefinition("cte", cteSelect));
+
+        DataSet dataSet = new(databaseName);
+        DataTable employees = new("Employees");
+        employees.Columns.Add("Name", typeof(string));
+        employees.Rows.Add("Alice");
+        dataSet.Tables.Add(employees);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+
+        var ex = Assert.Throws<NotSupportedException>(() => queryEngine.QueryAsDataTable());
+        Assert.Contains("Common Table Expression", ex.Message);
+    }
+
+    [Fact]
+    public void Query_WithUnion_ThrowsNotSupportedException()
+    {
+        const string databaseName = "MyDB";
+
+        SqlSelectDefinition sqlSelect = new();
+        sqlSelect.Columns.Add(new SqlColumn(databaseName, "Employees", "Name"));
+        sqlSelect.Table = new SqlTable(databaseName, "Employees");
+
+        // Add a UNION: SELECT ... UNION SELECT ...
+        var rightSelect = new SqlSelectDefinition();
+        rightSelect.Columns.Add(new SqlColumn(databaseName, "Contractors", "Name"));
+        sqlSelect.SetOperations.Add(new SqlSetOperation(SqlSetOperator.Union, rightSelect));
+
+        DataSet dataSet = new(databaseName);
+        DataTable employees = new("Employees");
+        employees.Columns.Add("Name", typeof(string));
+        employees.Rows.Add("Alice");
+        dataSet.Tables.Add(employees);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+
+        var ex = Assert.Throws<NotSupportedException>(() => queryEngine.QueryAsDataTable());
+        Assert.Contains("Set operation", ex.Message);
+    }
+
+    [Fact]
+    public void Query_WithWindowAggregate_ThrowsNotSupportedException()
+    {
+        const string databaseName = "MyDB";
+
+        SqlSelectDefinition sqlSelect = new();
+        var agg = new SqlAggregate("SUM", new SqlExpression(new SqlColumnRef(null, null, "Salary")))
+        {
+            WindowSpecification = new SqlWindowSpecification()
+        };
+        sqlSelect.Columns.Add(agg);
+        sqlSelect.Table = new SqlTable(databaseName, "Employees");
+
+        DataSet dataSet = new(databaseName);
+        DataTable employees = new("Employees");
+        employees.Columns.Add("Salary", typeof(decimal));
+        employees.Rows.Add(50000m);
+        dataSet.Tables.Add(employees);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+
+        var ex = Assert.Throws<NotSupportedException>(() => queryEngine.QueryAsDataTable());
+        Assert.Contains("Window aggregate", ex.Message);
+    }
+
+    [Fact]
+    public void Query_WithWindowFunction_ThrowsNotSupportedException()
+    {
+        const string databaseName = "MyDB";
+
+        SqlSelectDefinition sqlSelect = new();
+        var func = new SqlFunction("ROW_NUMBER")
+        {
+            WindowSpecification = new SqlWindowSpecification()
+        };
+        sqlSelect.Columns.Add(new SqlFunctionColumn(func));
+        sqlSelect.Table = new SqlTable(databaseName, "Employees");
+
+        DataSet dataSet = new(databaseName);
+        DataTable employees = new("Employees");
+        employees.Columns.Add("Name", typeof(string));
+        employees.Rows.Add("Alice");
+        dataSet.Tables.Add(employees);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+
+        var ex = Assert.Throws<NotSupportedException>(() => queryEngine.QueryAsDataTable());
+        Assert.Contains("Window function", ex.Message);
+    }
+
+    #endregion
 }
