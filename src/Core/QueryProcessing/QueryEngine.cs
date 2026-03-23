@@ -28,6 +28,13 @@ public class QueryEngine : IQueryEngine
         dataRowType = true;
     }
 
+    private QueryEngine(ITableDataProvider tableDataProvider, SqlSelectDefinition sqlSelectDefinition, bool dataRowType)
+    {
+        this.tableDataProvider = tableDataProvider;
+        this.sqlSelectDefinition = sqlSelectDefinition;
+        this.dataRowType = dataRowType;
+    }
+
     /// <summary>
     /// Executes the SELECT statement described in the <see cref="sqlSelectDefinition"/>.  Requires that by the time of
     /// calling this method, that all instances of <see cref="SqlParameter"/> and <see cref="SqlFunction"/> have been
@@ -98,6 +105,10 @@ public class QueryEngine : IQueryEngine
         //Apply DISTINCT before ORDER BY so that ordering operates on the deduplicated result set.
         if (sqlSelectDefinition.IsDistinct)
             selectRows = ApplyDistinct(selectRows, processingState.QueryOutput);
+
+        //Apply set operations (UNION, INTERSECT, EXCEPT) before ORDER BY/LIMIT.
+        if (sqlSelectDefinition.SetOperations.Count > 0)
+            selectRows = ApplySetOperations(selectRows, processingState.QueryOutput);
 
         //Apply ORDER BY before LIMIT/OFFSET so that LIMIT operates on the sorted result set.
         if (sqlSelectDefinition.OrderBy != null && sqlSelectDefinition.OrderBy.Count > 0)
@@ -1202,8 +1213,7 @@ public class QueryEngine : IQueryEngine
         if (sqlSelectDefinition.Ctes.Count > 0)
             throw new NotSupportedException("Common Table Expression (WITH clause) execution is not yet supported.");
 
-        if (sqlSelectDefinition.SetOperations.Count > 0)
-            throw new NotSupportedException("Set operation (UNION, INTERSECT, EXCEPT) execution is not yet supported.");
+        // Set operations (UNION, INTERSECT, EXCEPT) are now supported — guard removed.
 
         foreach (var col in sqlSelectDefinition.Columns)
         {
@@ -1214,4 +1224,122 @@ public class QueryEngine : IQueryEngine
                 throw new NotSupportedException($"Window function '{funcCol.Function.FunctionName}() OVER(...)' execution is not yet supported.");
         }
     }
+
+    #region Set Operations (UNION, INTERSECT, EXCEPT)
+
+    private IEnumerable<DataRow> ApplySetOperations(IEnumerable<DataRow> leftRows, VirtualDataTable outputSchema)
+    {
+        var currentRows = leftRows;
+
+        foreach (var setOp in sqlSelectDefinition.SetOperations)
+        {
+            var rightRows = ExecuteSubSelect(setOp.Right, outputSchema);
+
+            currentRows = setOp.Operator switch
+            {
+                SqlSetOperator.UnionAll => currentRows.Concat(rightRows),
+                SqlSetOperator.Union => ApplyUnion(currentRows, rightRows, outputSchema),
+                SqlSetOperator.Intersect => ApplyIntersect(currentRows, rightRows, outputSchema),
+                SqlSetOperator.Except => ApplyExcept(currentRows, rightRows, outputSchema),
+                _ => throw new NotSupportedException($"Set operator '{setOp.Operator}' is not supported.")
+            };
+        }
+
+        return currentRows;
+    }
+
+    private IEnumerable<DataRow> ExecuteSubSelect(SqlSelectDefinition subSelect, VirtualDataTable outputSchema)
+    {
+        var subEngine = new QueryEngine(tableDataProvider, subSelect, dataRowType);
+        var subResult = subEngine.Query();
+
+        return MapRowsToSchema(subResult, outputSchema);
+    }
+
+    private static IEnumerable<DataRow> MapRowsToSchema(VirtualDataTable source, VirtualDataTable target)
+    {
+        if (source.Rows == null)
+            yield break;
+
+        var sourceColumns = source.Columns.Cast<DataColumn>().ToList();
+        var targetColumns = target.Columns.Cast<DataColumn>().ToList();
+
+        if (sourceColumns.Count != targetColumns.Count)
+            throw new InvalidOperationException(
+                $"Each SELECT in a set operation must have the same number of columns. " +
+                $"Left has {targetColumns.Count}, right has {sourceColumns.Count}.");
+
+        foreach (var row in source.Rows)
+        {
+            var newRow = target.NewRow();
+            for (int i = 0; i < targetColumns.Count; i++)
+            {
+                newRow[targetColumns[i].ColumnName] = row[sourceColumns[i].ColumnName];
+            }
+            yield return newRow;
+        }
+    }
+
+    private static string GetRowKey(DataRow row, IList<string> columnNames)
+    {
+        return string.Join("\0", columnNames.Select(c =>
+        {
+            var val = row[c];
+            return val == DBNull.Value ? "\x01NULL\x01" : val?.ToString() ?? "";
+        }));
+    }
+
+    private static IEnumerable<DataRow> ApplyUnion(
+        IEnumerable<DataRow> left, IEnumerable<DataRow> right, VirtualDataTable schema)
+    {
+        var columnNames = schema.Columns.Cast<DataColumn>().Select(c => c.ColumnName).ToList();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var row in left.Concat(right))
+        {
+            var key = GetRowKey(row, columnNames);
+            if (seen.Add(key))
+                yield return row;
+        }
+    }
+
+    private static IEnumerable<DataRow> ApplyIntersect(
+        IEnumerable<DataRow> left, IEnumerable<DataRow> right, VirtualDataTable schema)
+    {
+        var columnNames = schema.Columns.Cast<DataColumn>().Select(c => c.ColumnName).ToList();
+
+        // Materialize right side to build lookup set.
+        var rightKeys = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var row in right)
+            rightKeys.Add(GetRowKey(row, columnNames));
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var row in left)
+        {
+            var key = GetRowKey(row, columnNames);
+            if (rightKeys.Contains(key) && seen.Add(key))
+                yield return row;
+        }
+    }
+
+    private static IEnumerable<DataRow> ApplyExcept(
+        IEnumerable<DataRow> left, IEnumerable<DataRow> right, VirtualDataTable schema)
+    {
+        var columnNames = schema.Columns.Cast<DataColumn>().Select(c => c.ColumnName).ToList();
+
+        // Materialize right side to build lookup set.
+        var rightKeys = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var row in right)
+            rightKeys.Add(GetRowKey(row, columnNames));
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var row in left)
+        {
+            var key = GetRowKey(row, columnNames);
+            if (!rightKeys.Contains(key) && seen.Add(key))
+                yield return row;
+        }
+    }
+
+    #endregion
 }
