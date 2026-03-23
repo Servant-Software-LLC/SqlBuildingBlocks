@@ -2245,29 +2245,212 @@ public class QueryEngineTests
     }
 
     [Fact]
-    public void Query_WithUnion_ThrowsNotSupportedException()
+    public void Query_WithUnion_DeduplicatesRows()
     {
         const string databaseName = "MyDB";
 
+        // SELECT Name FROM Employees UNION SELECT Name FROM Contractors
         SqlSelectDefinition sqlSelect = new();
-        sqlSelect.Columns.Add(new SqlColumn(databaseName, "Employees", "Name"));
-        sqlSelect.Table = new SqlTable(databaseName, "Employees");
+        SqlTable employeesTable = new(databaseName, "Employees");
+        sqlSelect.Table = employeesTable;
+        sqlSelect.Columns.Add(new SqlColumn(databaseName, "Employees", "Name") { TableRef = employeesTable });
 
-        // Add a UNION: SELECT ... UNION SELECT ...
         var rightSelect = new SqlSelectDefinition();
-        rightSelect.Columns.Add(new SqlColumn(databaseName, "Contractors", "Name"));
+        SqlTable contractorsTable = new(databaseName, "Contractors");
+        rightSelect.Table = contractorsTable;
+        rightSelect.Columns.Add(new SqlColumn(databaseName, "Contractors", "Name") { TableRef = contractorsTable });
         sqlSelect.SetOperations.Add(new SqlSetOperation(SqlSetOperator.Union, rightSelect));
 
         DataSet dataSet = new(databaseName);
         DataTable employees = new("Employees");
         employees.Columns.Add("Name", typeof(string));
         employees.Rows.Add("Alice");
+        employees.Rows.Add("Bob");
         dataSet.Tables.Add(employees);
 
-        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        DataTable contractors = new("Contractors");
+        contractors.Columns.Add("Name", typeof(string));
+        contractors.Rows.Add("Bob");   // duplicate
+        contractors.Rows.Add("Carol");
+        dataSet.Tables.Add(contractors);
 
-        var ex = Assert.Throws<NotSupportedException>(() => queryEngine.QueryAsDataTable());
-        Assert.Contains("Set operation", ex.Message);
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var result = queryEngine.QueryAsDataTable();
+
+        Assert.Equal(3, result.Rows.Count);
+        var names = result.Rows.Cast<DataRow>().Select(r => r["Name"].ToString()).OrderBy(n => n).ToList();
+        Assert.Equal(new[] { "Alice", "Bob", "Carol" }, names);
+    }
+
+    [Fact]
+    public void Query_WithUnionAll_KeepsDuplicates()
+    {
+        const string databaseName = "MyDB";
+
+        // SELECT Name FROM Employees UNION ALL SELECT Name FROM Contractors
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable employeesTable = new(databaseName, "Employees");
+        sqlSelect.Table = employeesTable;
+        sqlSelect.Columns.Add(new SqlColumn(databaseName, "Employees", "Name") { TableRef = employeesTable });
+
+        var rightSelect = new SqlSelectDefinition();
+        SqlTable contractorsTable = new(databaseName, "Contractors");
+        rightSelect.Table = contractorsTable;
+        rightSelect.Columns.Add(new SqlColumn(databaseName, "Contractors", "Name") { TableRef = contractorsTable });
+        sqlSelect.SetOperations.Add(new SqlSetOperation(SqlSetOperator.UnionAll, rightSelect));
+
+        DataSet dataSet = new(databaseName);
+        DataTable employees = new("Employees");
+        employees.Columns.Add("Name", typeof(string));
+        employees.Rows.Add("Alice");
+        employees.Rows.Add("Bob");
+        dataSet.Tables.Add(employees);
+
+        DataTable contractors = new("Contractors");
+        contractors.Columns.Add("Name", typeof(string));
+        contractors.Rows.Add("Bob");
+        contractors.Rows.Add("Carol");
+        dataSet.Tables.Add(contractors);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var result = queryEngine.QueryAsDataTable();
+
+        Assert.Equal(4, result.Rows.Count);
+        var names = result.Rows.Cast<DataRow>().Select(r => r["Name"].ToString()).ToList();
+        Assert.Contains("Alice", names);
+        Assert.Equal(2, names.Count(n => n == "Bob"));
+        Assert.Contains("Carol", names);
+    }
+
+    [Fact]
+    public void Query_WithIntersect_ReturnsCommonRows()
+    {
+        const string databaseName = "MyDB";
+
+        // SELECT Name FROM Employees INTERSECT SELECT Name FROM Contractors
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable employeesTable = new(databaseName, "Employees");
+        sqlSelect.Table = employeesTable;
+        sqlSelect.Columns.Add(new SqlColumn(databaseName, "Employees", "Name") { TableRef = employeesTable });
+
+        var rightSelect = new SqlSelectDefinition();
+        SqlTable contractorsTable = new(databaseName, "Contractors");
+        rightSelect.Table = contractorsTable;
+        rightSelect.Columns.Add(new SqlColumn(databaseName, "Contractors", "Name") { TableRef = contractorsTable });
+        sqlSelect.SetOperations.Add(new SqlSetOperation(SqlSetOperator.Intersect, rightSelect));
+
+        DataSet dataSet = new(databaseName);
+        DataTable employees = new("Employees");
+        employees.Columns.Add("Name", typeof(string));
+        employees.Rows.Add("Alice");
+        employees.Rows.Add("Bob");
+        employees.Rows.Add("Dave");
+        dataSet.Tables.Add(employees);
+
+        DataTable contractors = new("Contractors");
+        contractors.Columns.Add("Name", typeof(string));
+        contractors.Rows.Add("Bob");
+        contractors.Rows.Add("Carol");
+        contractors.Rows.Add("Dave");
+        dataSet.Tables.Add(contractors);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var result = queryEngine.QueryAsDataTable();
+
+        Assert.Equal(2, result.Rows.Count);
+        var names = result.Rows.Cast<DataRow>().Select(r => r["Name"].ToString()).OrderBy(n => n).ToList();
+        Assert.Equal(new[] { "Bob", "Dave" }, names);
+    }
+
+    [Fact]
+    public void Query_WithExcept_ReturnsDifference()
+    {
+        const string databaseName = "MyDB";
+
+        // SELECT Name FROM Employees EXCEPT SELECT Name FROM Contractors
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable employeesTable = new(databaseName, "Employees");
+        sqlSelect.Table = employeesTable;
+        sqlSelect.Columns.Add(new SqlColumn(databaseName, "Employees", "Name") { TableRef = employeesTable });
+
+        var rightSelect = new SqlSelectDefinition();
+        SqlTable contractorsTable = new(databaseName, "Contractors");
+        rightSelect.Table = contractorsTable;
+        rightSelect.Columns.Add(new SqlColumn(databaseName, "Contractors", "Name") { TableRef = contractorsTable });
+        sqlSelect.SetOperations.Add(new SqlSetOperation(SqlSetOperator.Except, rightSelect));
+
+        DataSet dataSet = new(databaseName);
+        DataTable employees = new("Employees");
+        employees.Columns.Add("Name", typeof(string));
+        employees.Rows.Add("Alice");
+        employees.Rows.Add("Bob");
+        employees.Rows.Add("Dave");
+        dataSet.Tables.Add(employees);
+
+        DataTable contractors = new("Contractors");
+        contractors.Columns.Add("Name", typeof(string));
+        contractors.Rows.Add("Bob");
+        contractors.Rows.Add("Carol");
+        dataSet.Tables.Add(contractors);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var result = queryEngine.QueryAsDataTable();
+
+        Assert.Equal(2, result.Rows.Count);
+        var names = result.Rows.Cast<DataRow>().Select(r => r["Name"].ToString()).OrderBy(n => n).ToList();
+        Assert.Equal(new[] { "Alice", "Dave" }, names);
+    }
+
+    [Fact]
+    public void Query_WithChainedSetOperations_AppliesInOrder()
+    {
+        const string databaseName = "MyDB";
+
+        // SELECT Name FROM T1 UNION ALL SELECT Name FROM T2 EXCEPT SELECT Name FROM T3
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable t1Table = new(databaseName, "T1");
+        sqlSelect.Table = t1Table;
+        sqlSelect.Columns.Add(new SqlColumn(databaseName, "T1", "Name") { TableRef = t1Table });
+
+        var rightSelect1 = new SqlSelectDefinition();
+        SqlTable t2Table = new(databaseName, "T2");
+        rightSelect1.Table = t2Table;
+        rightSelect1.Columns.Add(new SqlColumn(databaseName, "T2", "Name") { TableRef = t2Table });
+        sqlSelect.SetOperations.Add(new SqlSetOperation(SqlSetOperator.UnionAll, rightSelect1));
+
+        var rightSelect2 = new SqlSelectDefinition();
+        SqlTable t3Table = new(databaseName, "T3");
+        rightSelect2.Table = t3Table;
+        rightSelect2.Columns.Add(new SqlColumn(databaseName, "T3", "Name") { TableRef = t3Table });
+        sqlSelect.SetOperations.Add(new SqlSetOperation(SqlSetOperator.Except, rightSelect2));
+
+        DataSet dataSet = new(databaseName);
+
+        DataTable t1 = new("T1");
+        t1.Columns.Add("Name", typeof(string));
+        t1.Rows.Add("Alice");
+        t1.Rows.Add("Bob");
+        dataSet.Tables.Add(t1);
+
+        DataTable t2 = new("T2");
+        t2.Columns.Add("Name", typeof(string));
+        t2.Rows.Add("Carol");
+        t2.Rows.Add("Bob");
+        dataSet.Tables.Add(t2);
+
+        DataTable t3 = new("T3");
+        t3.Columns.Add("Name", typeof(string));
+        t3.Rows.Add("Bob");
+        dataSet.Tables.Add(t3);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var result = queryEngine.QueryAsDataTable();
+
+        // After UNION ALL: Alice, Bob, Carol, Bob
+        // After EXCEPT (remove Bob): Alice, Carol
+        var names = result.Rows.Cast<DataRow>().Select(r => r["Name"].ToString()).OrderBy(n => n).ToList();
+        Assert.Equal(2, result.Rows.Count);
+        Assert.Equal(new[] { "Alice", "Carol" }, names);
     }
 
     [Fact]
