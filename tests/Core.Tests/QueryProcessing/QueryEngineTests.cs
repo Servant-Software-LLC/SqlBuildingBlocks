@@ -2219,18 +2219,74 @@ public class QueryEngineTests
     #region Unsupported Feature Guards
 
     [Fact]
-    public void Query_WithCte_ThrowsNotSupportedException()
+    public void Query_WithCte_ReturnsCteDerivedRows()
     {
+        // WITH cte AS (SELECT Name FROM Employees) SELECT Name FROM cte
         const string databaseName = "MyDB";
 
-        SqlSelectDefinition sqlSelect = new();
-        sqlSelect.Columns.Add(new SqlColumn(databaseName, "Employees", "Name"));
-        sqlSelect.Table = new SqlTable(databaseName, "Employees");
-
-        // Add a CTE: WITH cte AS (SELECT ...)
+        // CTE subquery: SELECT Name FROM Employees
         var cteSelect = new SqlSelectDefinition();
-        cteSelect.Columns.Add(new SqlColumn(databaseName, "Employees", "Name"));
+        SqlTable cteEmployeesTable = new(databaseName, "Employees");
+        cteSelect.Table = cteEmployeesTable;
+        cteSelect.Columns.Add(new SqlColumn(databaseName, "Employees", "Name") { TableRef = cteEmployeesTable });
+
+        // Main query: SELECT Name FROM cte
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable cteTable = new(databaseName, "cte");
+        sqlSelect.Table = cteTable;
+        sqlSelect.Columns.Add(new SqlColumn(databaseName, "cte", "Name") { TableRef = cteTable });
+
         sqlSelect.Ctes.Add(new SqlCteDefinition("cte", cteSelect));
+
+        DataSet dataSet = new(databaseName);
+        DataTable employees = new("Employees");
+        employees.Columns.Add("Name", typeof(string));
+        employees.Rows.Add("Alice");
+        employees.Rows.Add("Bob");
+        dataSet.Tables.Add(employees);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var result = queryEngine.QueryAsDataTable();
+
+        Assert.Equal(2, result.Rows.Count);
+        var names = result.Rows.Cast<DataRow>().Select(r => r["Name"].ToString()).OrderBy(n => n).ToList();
+        Assert.Equal(new[] { "Alice", "Bob" }, names);
+    }
+
+    [Fact]
+    public void Query_WithMultipleCtes_ReturnsCorrectResults()
+    {
+        // WITH emp_cte AS (SELECT Name FROM Employees),
+        //      con_cte AS (SELECT Name FROM Contractors)
+        // SELECT Name FROM emp_cte UNION ALL SELECT Name FROM con_cte
+        const string databaseName = "MyDB";
+
+        // CTE 1: SELECT Name FROM Employees
+        var empCteSelect = new SqlSelectDefinition();
+        SqlTable empTable = new(databaseName, "Employees");
+        empCteSelect.Table = empTable;
+        empCteSelect.Columns.Add(new SqlColumn(databaseName, "Employees", "Name") { TableRef = empTable });
+
+        // CTE 2: SELECT Name FROM Contractors
+        var conCteSelect = new SqlSelectDefinition();
+        SqlTable conTable = new(databaseName, "Contractors");
+        conCteSelect.Table = conTable;
+        conCteSelect.Columns.Add(new SqlColumn(databaseName, "Contractors", "Name") { TableRef = conTable });
+
+        // Main query: SELECT Name FROM emp_cte UNION ALL SELECT Name FROM con_cte
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable empCteTable = new(databaseName, "emp_cte");
+        sqlSelect.Table = empCteTable;
+        sqlSelect.Columns.Add(new SqlColumn(databaseName, "emp_cte", "Name") { TableRef = empCteTable });
+
+        var rightSelect = new SqlSelectDefinition();
+        SqlTable conCteTable = new(databaseName, "con_cte");
+        rightSelect.Table = conCteTable;
+        rightSelect.Columns.Add(new SqlColumn(databaseName, "con_cte", "Name") { TableRef = conCteTable });
+        sqlSelect.SetOperations.Add(new SqlSetOperation(SqlSetOperator.UnionAll, rightSelect));
+
+        sqlSelect.Ctes.Add(new SqlCteDefinition("emp_cte", empCteSelect));
+        sqlSelect.Ctes.Add(new SqlCteDefinition("con_cte", conCteSelect));
 
         DataSet dataSet = new(databaseName);
         DataTable employees = new("Employees");
@@ -2238,10 +2294,62 @@ public class QueryEngineTests
         employees.Rows.Add("Alice");
         dataSet.Tables.Add(employees);
 
-        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        DataTable contractors = new("Contractors");
+        contractors.Columns.Add("Name", typeof(string));
+        contractors.Rows.Add("Bob");
+        dataSet.Tables.Add(contractors);
 
-        var ex = Assert.Throws<NotSupportedException>(() => queryEngine.QueryAsDataTable());
-        Assert.Contains("Common Table Expression", ex.Message);
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var result = queryEngine.QueryAsDataTable();
+
+        Assert.Equal(2, result.Rows.Count);
+        var names = result.Rows.Cast<DataRow>().Select(r => r["Name"].ToString()).OrderBy(n => n).ToList();
+        Assert.Equal(new[] { "Alice", "Bob" }, names);
+    }
+
+    [Fact]
+    public void Query_WithCteReferencingPriorCte_ReturnsCorrectResults()
+    {
+        // WITH base_cte AS (SELECT Name FROM Employees),
+        //      filtered_cte AS (SELECT Name FROM base_cte)
+        // SELECT Name FROM filtered_cte
+        const string databaseName = "MyDB";
+
+        // CTE 1: SELECT Name FROM Employees
+        var baseCteSelect = new SqlSelectDefinition();
+        SqlTable empTable = new(databaseName, "Employees");
+        baseCteSelect.Table = empTable;
+        baseCteSelect.Columns.Add(new SqlColumn(databaseName, "Employees", "Name") { TableRef = empTable });
+
+        // CTE 2: SELECT Name FROM base_cte (references CTE 1)
+        var filteredCteSelect = new SqlSelectDefinition();
+        SqlTable baseCteRef = new(databaseName, "base_cte");
+        filteredCteSelect.Table = baseCteRef;
+        filteredCteSelect.Columns.Add(new SqlColumn(databaseName, "base_cte", "Name") { TableRef = baseCteRef });
+
+        // Main query: SELECT Name FROM filtered_cte
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable filteredCteTable = new(databaseName, "filtered_cte");
+        sqlSelect.Table = filteredCteTable;
+        sqlSelect.Columns.Add(new SqlColumn(databaseName, "filtered_cte", "Name") { TableRef = filteredCteTable });
+
+        sqlSelect.Ctes.Add(new SqlCteDefinition("base_cte", baseCteSelect));
+        sqlSelect.Ctes.Add(new SqlCteDefinition("filtered_cte", filteredCteSelect));
+
+        DataSet dataSet = new(databaseName);
+        DataTable employees = new("Employees");
+        employees.Columns.Add("Name", typeof(string));
+        employees.Rows.Add("Alice");
+        employees.Rows.Add("Bob");
+        employees.Rows.Add("Carol");
+        dataSet.Tables.Add(employees);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var result = queryEngine.QueryAsDataTable();
+
+        Assert.Equal(3, result.Rows.Count);
+        var names = result.Rows.Cast<DataRow>().Select(r => r["Name"].ToString()).OrderBy(n => n).ToList();
+        Assert.Equal(new[] { "Alice", "Bob", "Carol" }, names);
     }
 
     [Fact]
