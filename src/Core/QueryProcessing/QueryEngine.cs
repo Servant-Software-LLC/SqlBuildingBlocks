@@ -97,6 +97,10 @@ public class QueryEngine : IQueryEngine
             return EvaluateAggregates(processingState, fromDataRows);
         }
 
+        //If window functions are present, materialize source rows and compute window values.
+        if (processingState.HasWindowFunctions)
+            return EvaluateWindowFunctions(processingState, fromDataRows);
+
         //If only a FROM with no JOINs.
         var onlyFromWithNoJoins = sqlSelectDefinition.Joins == null || sqlSelectDefinition.Joins.Count == 0;
 
@@ -897,8 +901,14 @@ public class QueryEngine : IQueryEngine
 
     private void DetermineColumns(ProcessingState processingState)
     {
-        //Detect if any columns are aggregates
-        bool hasAggregates = sqlSelectDefinition.Columns.OfType<SqlAggregate>().Any();
+        //Detect window functions
+        bool hasWindowFunctions = sqlSelectDefinition.Columns.Any(c =>
+            (c is SqlAggregate agg && agg.IsWindowFunction) ||
+            (c is SqlFunctionColumn fc && fc.Function.IsWindowFunction));
+        processingState.HasWindowFunctions = hasWindowFunctions;
+
+        //Detect if any columns are non-window aggregates
+        bool hasAggregates = sqlSelectDefinition.Columns.OfType<SqlAggregate>().Any(a => !a.IsWindowFunction);
         if (hasAggregates)
         {
             processingState.HasAggregates = true;
@@ -1020,6 +1030,15 @@ public class QueryEngine : IQueryEngine
         switch (iColumn)
         {
             case SqlFunctionColumn functionColumn:
+                if (functionColumn.Function.IsWindowFunction)
+                {
+                    // Window functions are handled in EvaluateWindowFunctions — skip output column here.
+                    // Ensure argument columns and window spec columns are projected from source tables.
+                    EnsureFunctionArgumentsProjected(processingState, functionColumn.Function);
+                    ProjectWindowSpecColumns(processingState, functionColumn.Function.WindowSpecification!);
+                    break;
+                }
+
                 if (functionColumn.Function.CalculateValue == null)
                 {
                     var builtIn = TryCreateBuiltInFunction(processingState, functionColumn.Function);
@@ -1051,7 +1070,12 @@ public class QueryEngine : IQueryEngine
 
                 if (aggregate == null)
                     throw new Exception($"In trying to determine the Columns for SELECT output, there is no case that handles the type {iColumn.GetType().FullName}");
-                //Aggregates are handled in EvaluateAggregates, not as output columns.
+
+                // Window aggregates: ensure argument and window spec columns are projected.
+                if (aggregate.IsWindowFunction)
+                    ProjectWindowSpecColumns(processingState, aggregate.WindowSpecification!);
+
+                //Aggregates are handled in EvaluateAggregates (or EvaluateWindowFunctions for window aggs).
                 break;
         }
     }
@@ -1216,16 +1240,450 @@ public class QueryEngine : IQueryEngine
     {
         // CTEs (WITH clause) are now supported — guard removed.
         // Set operations (UNION, INTERSECT, EXCEPT) are now supported — guard removed.
+        // Window functions (OVER clause) are now supported — guard removed.
+    }
+
+    #region Window Function Execution
+
+    /// <summary>
+    /// Materializes source rows, computes window function values, and produces output rows
+    /// with both regular columns and window function result columns.
+    /// </summary>
+    private (ProcessingState processingState, IEnumerable<DataRow> SelectRows) EvaluateWindowFunctions(
+        ProcessingState processingState, IEnumerable<DataRow> fromDataRows)
+    {
+        var allSourceRows = fromDataRows.ToList();
+
+        // Build a fresh output schema and compute window values
+        processingState.QueryOutput = new VirtualDataTable("ResultSet");
+        var windowResults = new Dictionary<string, object?[]>();
 
         foreach (var col in sqlSelectDefinition.Columns)
         {
-            if (col is SqlAggregate agg && agg.IsWindowFunction)
-                throw new NotSupportedException($"Window aggregate '{agg.AggregateName}() OVER(...)' execution is not yet supported.");
+            if (col is SqlFunctionColumn fc && fc.Function.IsWindowFunction)
+            {
+                var name = fc.ColumnAlias ?? fc.Function.FunctionName;
+                var type = GetWindowFunctionOutputType(fc.Function);
+                processingState.QueryOutput.Columns.Add(new DataColumn(name, type));
+                windowResults[name] = ComputeNamedWindowFunctionValues(fc.Function, fc.Function.WindowSpecification!, allSourceRows);
+            }
+            else if (col is SqlAggregate agg && agg.IsWindowFunction)
+            {
+                var name = agg.ColumnAlias ?? GetAggregateDefaultColumnName(agg);
+                var type = GetWindowAggregateOutputType(agg, allSourceRows);
+                processingState.QueryOutput.Columns.Add(new DataColumn(name, type));
+                windowResults[name] = ComputeWindowAggregateValues(agg, agg.WindowSpecification!, allSourceRows);
+            }
+            else if (col is SqlColumn sqlCol)
+            {
+                var colType = sqlCol.ColumnType ?? typeof(object);
+                if (colType.IsGenericType && colType.GetGenericTypeDefinition() == typeof(Nullable<>))
+                    colType = colType.GenericTypeArguments[0];
+                var outputName = sqlCol.ColumnAlias ?? sqlCol.ColumnName;
+                processingState.QueryOutput.Columns.Add(new DataColumn(outputName, colType));
+            }
+            else if (col is SqlAllColumns allCols)
+            {
+                if (allCols.Columns != null)
+                {
+                    foreach (var c in allCols.Columns)
+                    {
+                        var colType = c.ColumnType ?? typeof(object);
+                        if (colType.IsGenericType && colType.GetGenericTypeDefinition() == typeof(Nullable<>))
+                            colType = colType.GenericTypeArguments[0];
+                        processingState.QueryOutput.Columns.Add(new DataColumn(c.ColumnName, colType));
+                    }
+                }
+            }
+            else if (col is SqlFunctionColumn regularFunc)
+            {
+                // Regular (non-window) function column
+                if (regularFunc.Function.CalculateValue == null)
+                {
+                    var builtIn = TryCreateBuiltInFunction(processingState, regularFunc.Function);
+                    if (builtIn != null)
+                        regularFunc.Function.CalculateValue = builtIn;
+                }
+                EnsureFunctionArgumentsProjected(processingState, regularFunc.Function);
+                var name = regularFunc.ColumnAlias ?? regularFunc.Function.FunctionName;
+                processingState.QueryOutput.Columns.Add(new DataColumn(name, regularFunc.ColumnType));
+            }
+        }
 
-            if (col is SqlFunctionColumn funcCol && funcCol.Function.IsWindowFunction)
-                throw new NotSupportedException($"Window function '{funcCol.Function.FunctionName}() OVER(...)' execution is not yet supported.");
+        // Build output rows
+        var resultRows = new List<DataRow>(allSourceRows.Count);
+        for (int i = 0; i < allSourceRows.Count; i++)
+        {
+            var sourceRow = allSourceRows[i];
+            processingState.CurrentSourceRow = sourceRow;
+            var outputRow = processingState.QueryOutput.NewRow();
+
+            foreach (DataColumn outCol in processingState.QueryOutput.Columns)
+            {
+                if (windowResults.TryGetValue(outCol.ColumnName, out var values))
+                {
+                    outputRow[outCol.ColumnName] = values[i] ?? DBNull.Value;
+                }
+                else
+                {
+                    // Regular column — copy from source row
+                    var colName = GetColumnName(outCol.ColumnName);
+                    if (sourceRow.Table.Columns.Contains(colName))
+                        outputRow[outCol.ColumnName] = sourceRow[colName];
+                    else
+                        outputRow[outCol.ColumnName] = DBNull.Value;
+                }
+            }
+
+            resultRows.Add(outputRow);
+        }
+
+        IEnumerable<DataRow> result = resultRows;
+
+        // Apply DISTINCT, set operations, ORDER BY, LIMIT
+        if (sqlSelectDefinition.IsDistinct)
+            result = ApplyDistinct(result, processingState.QueryOutput);
+        if (sqlSelectDefinition.SetOperations.Count > 0)
+            result = ApplySetOperations(result, processingState.QueryOutput);
+        if (sqlSelectDefinition.OrderBy != null && sqlSelectDefinition.OrderBy.Count > 0)
+            result = ApplyOrderBy(result, sqlSelectDefinition.OrderBy);
+        if (sqlSelectDefinition.Limit != null && sqlSelectDefinition.Limit.RowOffset.Value > 0)
+            result = result.Skip(sqlSelectDefinition.Limit.RowOffset.Value);
+        if (sqlSelectDefinition.Limit != null && sqlSelectDefinition.Limit.RowCount.Value > 0)
+            result = result.Take(sqlSelectDefinition.Limit.RowCount.Value);
+
+        return (processingState, result);
+    }
+
+    /// <summary>
+    /// Computes values for a named window function (ROW_NUMBER, RANK, DENSE_RANK, LAG, LEAD, etc.)
+    /// across all source rows.
+    /// </summary>
+    private object?[] ComputeNamedWindowFunctionValues(SqlFunction function, SqlWindowSpecification winSpec, List<DataRow> allRows)
+    {
+        var results = new object?[allRows.Count];
+        var partitions = PartitionRows(allRows, winSpec.PartitionBy);
+
+        foreach (var partition in partitions)
+        {
+            var sorted = SortPartition(partition, winSpec.OrderBy, allRows);
+
+            switch (function.WindowFunctionType)
+            {
+                case WindowFunctionType.RowNumber:
+                    for (int i = 0; i < sorted.Count; i++)
+                        results[sorted[i]] = i + 1;
+                    break;
+
+                case WindowFunctionType.Rank:
+                    ComputeRank(sorted, allRows, winSpec.OrderBy, results, withGaps: true);
+                    break;
+
+                case WindowFunctionType.DenseRank:
+                    ComputeRank(sorted, allRows, winSpec.OrderBy, results, withGaps: false);
+                    break;
+
+                case WindowFunctionType.Lag:
+                    ComputeLagLead(function, sorted, allRows, results, isLead: false);
+                    break;
+
+                case WindowFunctionType.Lead:
+                    ComputeLagLead(function, sorted, allRows, results, isLead: true);
+                    break;
+
+                default:
+                    throw new NotSupportedException($"Window function '{function.FunctionName}' is not yet supported.");
+            }
+        }
+
+        return results;
+    }
+
+    /// <summary>
+    /// Computes values for a window aggregate (SUM, COUNT, AVG, MIN, MAX with OVER clause).
+    /// Without ORDER BY in the window spec, the aggregate is computed over the entire partition.
+    /// With ORDER BY, the default frame is UNBOUNDED PRECEDING to CURRENT ROW.
+    /// </summary>
+    private object?[] ComputeWindowAggregateValues(SqlAggregate aggregate, SqlWindowSpecification winSpec, List<DataRow> allRows)
+    {
+        var results = new object?[allRows.Count];
+        var partitions = PartitionRows(allRows, winSpec.PartitionBy);
+
+        foreach (var partition in partitions)
+        {
+            var sorted = SortPartition(partition, winSpec.OrderBy, allRows);
+            bool hasOrderBy = winSpec.OrderBy.Count > 0;
+
+            for (int i = 0; i < sorted.Count; i++)
+            {
+                List<DataRow> frameRows;
+                if (hasOrderBy && winSpec.Frame == null)
+                {
+                    // Default frame with ORDER BY: UNBOUNDED PRECEDING to CURRENT ROW
+                    frameRows = sorted.Take(i + 1).Select(idx => allRows[idx]).ToList();
+                }
+                else if (winSpec.Frame != null)
+                {
+                    frameRows = GetFrameRows(sorted, i, winSpec.Frame, allRows);
+                }
+                else
+                {
+                    // No ORDER BY, no frame: entire partition
+                    frameRows = sorted.Select(idx => allRows[idx]).ToList();
+                }
+
+                results[sorted[i]] = ComputeAggregate(aggregate, frameRows);
+            }
+        }
+
+        return results;
+    }
+
+    /// <summary>
+    /// Partitions row indices by the PARTITION BY expressions.
+    /// Returns a list of partitions, where each partition is a list of original row indices.
+    /// </summary>
+    private static List<List<int>> PartitionRows(List<DataRow> rows, IList<SqlExpression> partitionBy)
+    {
+        if (partitionBy.Count == 0)
+            return new List<List<int>> { Enumerable.Range(0, rows.Count).ToList() };
+
+        var groups = new Dictionary<string, List<int>>();
+        var order = new List<string>(); // preserve partition order
+
+        for (int i = 0; i < rows.Count; i++)
+        {
+            var key = GetPartitionKey(rows[i], partitionBy);
+            if (!groups.TryGetValue(key, out var list))
+            {
+                list = new List<int>();
+                groups[key] = list;
+                order.Add(key);
+            }
+            list.Add(i);
+        }
+
+        return order.Select(k => groups[k]).ToList();
+    }
+
+    private static string GetPartitionKey(DataRow row, IList<SqlExpression> partitionBy)
+    {
+        var parts = new string[partitionBy.Count];
+        for (int i = 0; i < partitionBy.Count; i++)
+        {
+            var colName = GetExpressionColumnName(partitionBy[i]);
+            var value = row.Table.Columns.Contains(colName) ? row[colName] : DBNull.Value;
+            parts[i] = value == DBNull.Value ? "\x01NULL\x01" : value?.ToString() ?? "";
+        }
+        return string.Join("\0", parts);
+    }
+
+    private static string GetExpressionColumnName(SqlExpression expr)
+    {
+        if (expr.Column != null)
+            return GetColumnName(expr.Column.ColumnName);
+        if (expr.Value != null)
+            return expr.Value.Value?.ToString() ?? "";
+        throw new NotSupportedException("Window PARTITION BY expression must reference a column.");
+    }
+
+    /// <summary>
+    /// Sorts a partition's row indices by the ORDER BY columns.
+    /// </summary>
+    private static List<int> SortPartition(List<int> partitionIndices, IList<SqlOrderByColumn> orderBy, List<DataRow> allRows)
+    {
+        if (orderBy.Count == 0)
+            return partitionIndices;
+
+        return partitionIndices.OrderBy(idx => 0, Comparer<int>.Create((_, __) => 0))
+            .ThenBy(idx => idx, Comparer<int>.Create((a, b) =>
+            {
+                foreach (var col in orderBy)
+                {
+                    var colName = GetColumnName(col.ColumnName);
+                    var va = allRows[a].Table.Columns.Contains(colName) ? allRows[a][colName] : DBNull.Value;
+                    var vb = allRows[b].Table.Columns.Contains(colName) ? allRows[b][colName] : DBNull.Value;
+                    var cmp = CompareValues(va, vb);
+                    if (col.Descending) cmp = -cmp;
+                    if (cmp != 0) return cmp;
+                }
+                return 0;
+            })).ToList();
+    }
+
+    /// <summary>
+    /// Computes RANK or DENSE_RANK values for a sorted partition.
+    /// </summary>
+    private static void ComputeRank(List<int> sorted, List<DataRow> allRows, IList<SqlOrderByColumn> orderBy, object?[] results, bool withGaps)
+    {
+        if (sorted.Count == 0) return;
+
+        results[sorted[0]] = 1;
+        int currentRank = 1;
+
+        for (int i = 1; i < sorted.Count; i++)
+        {
+            bool tie = true;
+            foreach (var col in orderBy)
+            {
+                var colName = GetColumnName(col.ColumnName);
+                var prev = allRows[sorted[i - 1]].Table.Columns.Contains(colName) ? allRows[sorted[i - 1]][colName] : DBNull.Value;
+                var curr = allRows[sorted[i]].Table.Columns.Contains(colName) ? allRows[sorted[i]][colName] : DBNull.Value;
+                if (CompareValues(prev, curr) != 0)
+                {
+                    tie = false;
+                    break;
+                }
+            }
+
+            if (tie)
+            {
+                results[sorted[i]] = currentRank;
+            }
+            else
+            {
+                currentRank = withGaps ? i + 1 : currentRank + 1;
+                results[sorted[i]] = currentRank;
+            }
         }
     }
+
+    /// <summary>
+    /// Computes LAG or LEAD values for a sorted partition.
+    /// </summary>
+    private static void ComputeLagLead(SqlFunction function, List<int> sorted, List<DataRow> allRows, object?[] results, bool isLead)
+    {
+        // Determine offset (default 1) and default value (default null)
+        int offset = 1;
+        object? defaultValue = DBNull.Value;
+
+        if (function.Arguments.Count >= 2 && function.Arguments[1].Value != null)
+            offset = Convert.ToInt32(function.Arguments[1].Value.Value);
+        if (function.Arguments.Count >= 3 && function.Arguments[2].Value != null)
+            defaultValue = function.Arguments[2].Value.Value;
+
+        // Get the expression column to read from
+        string? argColName = null;
+        if (function.Arguments.Count >= 1 && function.Arguments[0].Column != null)
+            argColName = function.Arguments[0].Column.ColumnName;
+
+        for (int i = 0; i < sorted.Count; i++)
+        {
+            int targetIdx = isLead ? i + offset : i - offset;
+
+            if (targetIdx >= 0 && targetIdx < sorted.Count && argColName != null)
+            {
+                var targetRow = allRows[sorted[targetIdx]];
+                results[sorted[i]] = targetRow.Table.Columns.Contains(argColName)
+                    ? targetRow[argColName]
+                    : defaultValue;
+            }
+            else
+            {
+                results[sorted[i]] = defaultValue;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Gets the rows within the specified window frame for aggregate computation.
+    /// </summary>
+    private static List<DataRow> GetFrameRows(List<int> sorted, int currentIndex, SqlWindowFrame frame, List<DataRow> allRows)
+    {
+        int startIdx = GetFrameBoundIndex(currentIndex, frame.Start, sorted.Count);
+        int endIdx = frame.End != null
+            ? GetFrameBoundIndex(currentIndex, frame.End, sorted.Count)
+            : currentIndex; // Single-bound frame defaults to CURRENT ROW as end
+
+        startIdx = Math.Max(0, startIdx);
+        endIdx = Math.Min(sorted.Count - 1, endIdx);
+
+        var frameRows = new List<DataRow>();
+        for (int i = startIdx; i <= endIdx; i++)
+            frameRows.Add(allRows[sorted[i]]);
+        return frameRows;
+    }
+
+    private static int GetFrameBoundIndex(int currentIndex, SqlWindowFrameBound bound, int partitionSize)
+    {
+        return bound.Type switch
+        {
+            WindowFrameBoundType.UnboundedPreceding => 0,
+            WindowFrameBoundType.Preceding => currentIndex - (bound.Offset ?? 0),
+            WindowFrameBoundType.CurrentRow => currentIndex,
+            WindowFrameBoundType.Following => currentIndex + (bound.Offset ?? 0),
+            WindowFrameBoundType.UnboundedFollowing => partitionSize - 1,
+            _ => throw new ArgumentOutOfRangeException()
+        };
+    }
+
+    private static Type GetWindowFunctionOutputType(SqlFunction function)
+    {
+        return function.WindowFunctionType switch
+        {
+            WindowFunctionType.RowNumber or WindowFunctionType.Rank or
+            WindowFunctionType.DenseRank or WindowFunctionType.Ntile => typeof(int),
+            _ => typeof(object)
+        };
+    }
+
+    private static Type GetWindowAggregateOutputType(SqlAggregate aggregate, List<DataRow> allRows)
+    {
+        var aggName = aggregate.AggregateName.ToUpperInvariant();
+        if (aggName == "COUNT") return typeof(int);
+        if (aggName == "SUM" || aggName == "AVG") return typeof(decimal);
+        return typeof(object);
+    }
+
+    /// <summary>
+    /// Ensures columns referenced in a window spec's PARTITION BY and ORDER BY are projected.
+    /// </summary>
+    private void ProjectWindowSpecColumns(ProcessingState processingState, SqlWindowSpecification winSpec)
+    {
+        foreach (var partExpr in winSpec.PartitionBy)
+        {
+            if (partExpr.Column?.Column is SqlColumn partCol)
+            {
+                var tableRef = partCol.TableRef ?? sqlSelectDefinition.Table;
+                if (tableRef != null)
+                    AddColumn(processingState, partCol.ColumnName, null, partCol.ColumnType ?? typeof(object),
+                              false, partCol, tableRef, true);
+            }
+            else if (partExpr.Column != null)
+            {
+                // Column ref without resolved column — project by name from main table
+                ProjectHiddenColumnByName(processingState, partExpr.Column.ColumnName);
+            }
+        }
+
+        foreach (var orderCol in winSpec.OrderBy)
+        {
+            var colName = GetColumnName(orderCol.ColumnName);
+            ProjectHiddenColumnByName(processingState, colName);
+        }
+    }
+
+    /// <summary>
+    /// Adds a column to the source table projection so it's available in FROM rows.
+    /// </summary>
+    private void ProjectHiddenColumnByName(ProcessingState processingState, string columnName)
+    {
+        var table = sqlSelectDefinition.Table;
+        if (table == null) return;
+
+        if (!processingState.TablesProjections.TryGetValue(table, out DataTable? dataTable))
+        {
+            dataTable = new DataTable();
+            processingState.TablesProjections.Add(table, dataTable);
+        }
+
+        if (!dataTable.Columns.Cast<DataColumn>().Any(col => col.ColumnName == columnName))
+        {
+            dataTable.Columns.Add(new DataColumn(columnName, typeof(object)));
+        }
+    }
+
+    #endregion
 
     #region CTE (WITH clause) Execution
 

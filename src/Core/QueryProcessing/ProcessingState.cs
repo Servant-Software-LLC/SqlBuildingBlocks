@@ -30,6 +30,11 @@ internal class ProcessingState
     public bool HasAggregates { get; set; }
 
     /// <summary>
+    /// Whether the SELECT contains window functions or window aggregates (OVER clause).
+    /// </summary>
+    public bool HasWindowFunctions { get; set; }
+
+    /// <summary>
     /// For RIGHT/FULL OUTER JOIN: all rows from the join table, materialized for match tracking.
     /// </summary>
     public Dictionary<SqlTable, List<DataRow>> AllJoinTableRows = new();
