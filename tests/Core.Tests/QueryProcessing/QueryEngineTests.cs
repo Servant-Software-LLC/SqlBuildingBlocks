@@ -2561,54 +2561,344 @@ public class QueryEngineTests
         Assert.Equal(new[] { "Alice", "Carol" }, names);
     }
 
-    [Fact]
-    public void Query_WithWindowAggregate_ThrowsNotSupportedException()
-    {
-        const string databaseName = "MyDB";
+    #endregion
 
-        SqlSelectDefinition sqlSelect = new();
-        var agg = new SqlAggregate("SUM", new SqlExpression(new SqlColumnRef(null, null, "Salary")))
-        {
-            WindowSpecification = new SqlWindowSpecification()
-        };
-        sqlSelect.Columns.Add(agg);
-        sqlSelect.Table = new SqlTable(databaseName, "Employees");
-
-        DataSet dataSet = new(databaseName);
-        DataTable employees = new("Employees");
-        employees.Columns.Add("Salary", typeof(decimal));
-        employees.Rows.Add(50000m);
-        dataSet.Tables.Add(employees);
-
-        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
-
-        var ex = Assert.Throws<NotSupportedException>(() => queryEngine.QueryAsDataTable());
-        Assert.Contains("Window aggregate", ex.Message);
-    }
+    #region Window Function Execution Tests
 
     [Fact]
-    public void Query_WithWindowFunction_ThrowsNotSupportedException()
+    public void Query_RowNumber_Basic()
     {
+        // SELECT Name, ROW_NUMBER() OVER (ORDER BY Name) AS rn FROM Employees
         const string databaseName = "MyDB";
-
         SqlSelectDefinition sqlSelect = new();
-        var func = new SqlFunction("ROW_NUMBER")
+        SqlTable table = new(databaseName, "Employees");
+
+        SqlColumn nameCol = new(databaseName, "Employees", "Name") { ColumnType = typeof(string), TableRef = table };
+        sqlSelect.Columns.Add(nameCol);
+
+        var func = new SqlFunction("ROW_NUMBER") { ValueType = typeof(int) };
+        func.WindowSpecification = new SqlWindowSpecification
         {
-            WindowSpecification = new SqlWindowSpecification()
+            OrderBy = { new SqlOrderByColumn("Name") }
         };
-        sqlSelect.Columns.Add(new SqlFunctionColumn(func));
-        sqlSelect.Table = new SqlTable(databaseName, "Employees");
+        sqlSelect.Columns.Add(new SqlFunctionColumn(func) { ColumnAlias = "rn" });
+        sqlSelect.Table = table;
 
         DataSet dataSet = new(databaseName);
         DataTable employees = new("Employees");
         employees.Columns.Add("Name", typeof(string));
+        employees.Rows.Add("Charlie");
         employees.Rows.Add("Alice");
+        employees.Rows.Add("Bob");
         dataSet.Tables.Add(employees);
 
         QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var result = queryEngine.QueryAsDataTable();
 
-        var ex = Assert.Throws<NotSupportedException>(() => queryEngine.QueryAsDataTable());
-        Assert.Contains("Window function", ex.Message);
+        Assert.Equal(3, result.Rows.Count);
+        // Rows are in source order; rn is based on ORDER BY Name (alphabetical)
+        // Charlie→3, Alice→1, Bob→2
+        Assert.Equal(3, result.Rows[0]["rn"]); // Charlie
+        Assert.Equal(1, result.Rows[1]["rn"]); // Alice
+        Assert.Equal(2, result.Rows[2]["rn"]); // Bob
+    }
+
+    [Fact]
+    public void Query_RowNumber_WithPartitionBy()
+    {
+        // SELECT Dept, Name, ROW_NUMBER() OVER (PARTITION BY Dept ORDER BY Name) AS rn FROM Employees
+        const string databaseName = "MyDB";
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable table = new(databaseName, "Employees");
+
+        SqlColumn deptCol = new(databaseName, "Employees", "Dept") { ColumnType = typeof(string), TableRef = table };
+        SqlColumn nameCol = new(databaseName, "Employees", "Name") { ColumnType = typeof(string), TableRef = table };
+        sqlSelect.Columns.Add(deptCol);
+        sqlSelect.Columns.Add(nameCol);
+
+        var func = new SqlFunction("ROW_NUMBER") { ValueType = typeof(int) };
+        func.WindowSpecification = new SqlWindowSpecification
+        {
+            PartitionBy = { new SqlExpression(new SqlColumnRef(null, null, "Dept") { Column = deptCol }) },
+            OrderBy = { new SqlOrderByColumn("Name") }
+        };
+        sqlSelect.Columns.Add(new SqlFunctionColumn(func) { ColumnAlias = "rn" });
+        sqlSelect.Table = table;
+
+        DataSet dataSet = new(databaseName);
+        DataTable employees = new("Employees");
+        employees.Columns.Add("Dept", typeof(string));
+        employees.Columns.Add("Name", typeof(string));
+        employees.Rows.Add("Sales", "Charlie");
+        employees.Rows.Add("Eng", "Alice");
+        employees.Rows.Add("Eng", "Bob");
+        employees.Rows.Add("Sales", "Dave");
+        dataSet.Tables.Add(employees);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var result = queryEngine.QueryAsDataTable();
+
+        Assert.Equal(4, result.Rows.Count);
+        // Sales partition (Charlie, Dave): Charlie→1, Dave→2
+        // Eng partition (Alice, Bob): Alice→1, Bob→2
+        Assert.Equal(1, result.Rows[0]["rn"]); // Sales/Charlie
+        Assert.Equal(1, result.Rows[1]["rn"]); // Eng/Alice
+        Assert.Equal(2, result.Rows[2]["rn"]); // Eng/Bob
+        Assert.Equal(2, result.Rows[3]["rn"]); // Sales/Dave
+    }
+
+    [Fact]
+    public void Query_Rank_WithTies()
+    {
+        // SELECT Name, Score, RANK() OVER (ORDER BY Score DESC) AS rnk FROM Players
+        const string databaseName = "MyDB";
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable table = new(databaseName, "Players");
+
+        SqlColumn nameCol = new(databaseName, "Players", "Name") { ColumnType = typeof(string), TableRef = table };
+        SqlColumn scoreCol = new(databaseName, "Players", "Score") { ColumnType = typeof(int), TableRef = table };
+        sqlSelect.Columns.Add(nameCol);
+        sqlSelect.Columns.Add(scoreCol);
+
+        var func = new SqlFunction("RANK") { ValueType = typeof(int) };
+        func.WindowSpecification = new SqlWindowSpecification
+        {
+            OrderBy = { new SqlOrderByColumn("Score", descending: true) }
+        };
+        sqlSelect.Columns.Add(new SqlFunctionColumn(func) { ColumnAlias = "rnk" });
+        sqlSelect.Table = table;
+
+        DataSet dataSet = new(databaseName);
+        DataTable players = new("Players");
+        players.Columns.Add("Name", typeof(string));
+        players.Columns.Add("Score", typeof(int));
+        players.Rows.Add("Alice", 100);
+        players.Rows.Add("Bob", 90);
+        players.Rows.Add("Carol", 100);
+        players.Rows.Add("Dave", 80);
+        dataSet.Tables.Add(players);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var result = queryEngine.QueryAsDataTable();
+
+        Assert.Equal(4, result.Rows.Count);
+        // Score DESC: Alice(100)→1, Carol(100)→1, Bob(90)→3, Dave(80)→4
+        Assert.Equal(1, result.Rows[0]["rnk"]); // Alice 100
+        Assert.Equal(3, result.Rows[1]["rnk"]); // Bob 90
+        Assert.Equal(1, result.Rows[2]["rnk"]); // Carol 100
+        Assert.Equal(4, result.Rows[3]["rnk"]); // Dave 80
+    }
+
+    [Fact]
+    public void Query_DenseRank_WithTies()
+    {
+        // SELECT Name, Score, DENSE_RANK() OVER (ORDER BY Score DESC) AS drnk FROM Players
+        const string databaseName = "MyDB";
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable table = new(databaseName, "Players");
+
+        SqlColumn nameCol = new(databaseName, "Players", "Name") { ColumnType = typeof(string), TableRef = table };
+        SqlColumn scoreCol = new(databaseName, "Players", "Score") { ColumnType = typeof(int), TableRef = table };
+        sqlSelect.Columns.Add(nameCol);
+        sqlSelect.Columns.Add(scoreCol);
+
+        var func = new SqlFunction("DENSE_RANK") { ValueType = typeof(int) };
+        func.WindowSpecification = new SqlWindowSpecification
+        {
+            OrderBy = { new SqlOrderByColumn("Score", descending: true) }
+        };
+        sqlSelect.Columns.Add(new SqlFunctionColumn(func) { ColumnAlias = "drnk" });
+        sqlSelect.Table = table;
+
+        DataSet dataSet = new(databaseName);
+        DataTable players = new("Players");
+        players.Columns.Add("Name", typeof(string));
+        players.Columns.Add("Score", typeof(int));
+        players.Rows.Add("Alice", 100);
+        players.Rows.Add("Bob", 90);
+        players.Rows.Add("Carol", 100);
+        players.Rows.Add("Dave", 80);
+        dataSet.Tables.Add(players);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var result = queryEngine.QueryAsDataTable();
+
+        Assert.Equal(4, result.Rows.Count);
+        // Score DESC: Alice(100)→1, Carol(100)→1, Bob(90)→2, Dave(80)→3 (no gaps)
+        Assert.Equal(1, result.Rows[0]["drnk"]); // Alice 100
+        Assert.Equal(2, result.Rows[1]["drnk"]); // Bob 90
+        Assert.Equal(1, result.Rows[2]["drnk"]); // Carol 100
+        Assert.Equal(3, result.Rows[3]["drnk"]); // Dave 80
+    }
+
+    [Fact]
+    public void Query_Lag_Basic()
+    {
+        // SELECT Name, Salary, LAG(Salary) OVER (ORDER BY Salary) AS prev_salary FROM Employees
+        const string databaseName = "MyDB";
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable table = new(databaseName, "Employees");
+
+        SqlColumn nameCol = new(databaseName, "Employees", "Name") { ColumnType = typeof(string), TableRef = table };
+        SqlColumn salaryCol = new(databaseName, "Employees", "Salary") { ColumnType = typeof(int), TableRef = table };
+        sqlSelect.Columns.Add(nameCol);
+        sqlSelect.Columns.Add(salaryCol);
+
+        var func = new SqlFunction("LAG") { ValueType = typeof(object) };
+        func.Arguments.Add(new SqlExpression(new SqlColumnRef(null, null, "Salary") { Column = salaryCol }));
+        func.WindowSpecification = new SqlWindowSpecification
+        {
+            OrderBy = { new SqlOrderByColumn("Salary") }
+        };
+        sqlSelect.Columns.Add(new SqlFunctionColumn(func) { ColumnAlias = "prev_salary" });
+        sqlSelect.Table = table;
+
+        DataSet dataSet = new(databaseName);
+        DataTable employees = new("Employees");
+        employees.Columns.Add("Name", typeof(string));
+        employees.Columns.Add("Salary", typeof(int));
+        employees.Rows.Add("Alice", 50000);
+        employees.Rows.Add("Bob", 60000);
+        employees.Rows.Add("Carol", 70000);
+        dataSet.Tables.Add(employees);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var result = queryEngine.QueryAsDataTable();
+
+        Assert.Equal(3, result.Rows.Count);
+        // Sorted by Salary ASC: Alice(50k)→null, Bob(60k)→50k, Carol(70k)→60k
+        Assert.Equal(DBNull.Value, result.Rows[0]["prev_salary"]); // Alice — no prev
+        Assert.Equal(50000, result.Rows[1]["prev_salary"]); // Bob — prev is Alice's 50k
+        Assert.Equal(60000, result.Rows[2]["prev_salary"]); // Carol — prev is Bob's 60k
+    }
+
+    [Fact]
+    public void Query_Lead_Basic()
+    {
+        // SELECT Name, Salary, LEAD(Salary) OVER (ORDER BY Salary) AS next_salary FROM Employees
+        const string databaseName = "MyDB";
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable table = new(databaseName, "Employees");
+
+        SqlColumn nameCol = new(databaseName, "Employees", "Name") { ColumnType = typeof(string), TableRef = table };
+        SqlColumn salaryCol = new(databaseName, "Employees", "Salary") { ColumnType = typeof(int), TableRef = table };
+        sqlSelect.Columns.Add(nameCol);
+        sqlSelect.Columns.Add(salaryCol);
+
+        var func = new SqlFunction("LEAD") { ValueType = typeof(object) };
+        func.Arguments.Add(new SqlExpression(new SqlColumnRef(null, null, "Salary") { Column = salaryCol }));
+        func.WindowSpecification = new SqlWindowSpecification
+        {
+            OrderBy = { new SqlOrderByColumn("Salary") }
+        };
+        sqlSelect.Columns.Add(new SqlFunctionColumn(func) { ColumnAlias = "next_salary" });
+        sqlSelect.Table = table;
+
+        DataSet dataSet = new(databaseName);
+        DataTable employees = new("Employees");
+        employees.Columns.Add("Name", typeof(string));
+        employees.Columns.Add("Salary", typeof(int));
+        employees.Rows.Add("Alice", 50000);
+        employees.Rows.Add("Bob", 60000);
+        employees.Rows.Add("Carol", 70000);
+        dataSet.Tables.Add(employees);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var result = queryEngine.QueryAsDataTable();
+
+        Assert.Equal(3, result.Rows.Count);
+        // Sorted by Salary ASC: Alice(50k)→60k, Bob(60k)→70k, Carol(70k)→null
+        Assert.Equal(60000, result.Rows[0]["next_salary"]); // Alice — next is Bob's 60k
+        Assert.Equal(70000, result.Rows[1]["next_salary"]); // Bob — next is Carol's 70k
+        Assert.Equal(DBNull.Value, result.Rows[2]["next_salary"]); // Carol — no next
+    }
+
+    [Fact]
+    public void Query_WindowAggregate_SumOverPartition()
+    {
+        // SELECT Dept, Salary, SUM(Salary) OVER (PARTITION BY Dept) AS dept_total FROM Employees
+        const string databaseName = "MyDB";
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable table = new(databaseName, "Employees");
+
+        SqlColumn deptCol = new(databaseName, "Employees", "Dept") { ColumnType = typeof(string), TableRef = table };
+        SqlColumn salaryCol = new(databaseName, "Employees", "Salary") { ColumnType = typeof(decimal), TableRef = table };
+        sqlSelect.Columns.Add(deptCol);
+        sqlSelect.Columns.Add(salaryCol);
+
+        var agg = new SqlAggregate("SUM", new SqlExpression(new SqlColumnRef(null, null, "Salary") { Column = salaryCol }))
+        {
+            ColumnAlias = "dept_total",
+            WindowSpecification = new SqlWindowSpecification
+            {
+                PartitionBy = { new SqlExpression(new SqlColumnRef(null, null, "Dept") { Column = deptCol }) }
+            }
+        };
+        sqlSelect.Columns.Add(agg);
+        sqlSelect.Table = table;
+
+        DataSet dataSet = new(databaseName);
+        DataTable employees = new("Employees");
+        employees.Columns.Add("Dept", typeof(string));
+        employees.Columns.Add("Salary", typeof(decimal));
+        employees.Rows.Add("Eng", 100000m);
+        employees.Rows.Add("Sales", 80000m);
+        employees.Rows.Add("Eng", 120000m);
+        employees.Rows.Add("Sales", 90000m);
+        dataSet.Tables.Add(employees);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var result = queryEngine.QueryAsDataTable();
+
+        Assert.Equal(4, result.Rows.Count);
+        // Eng total: 220000, Sales total: 170000
+        Assert.Equal(220000m, result.Rows[0]["dept_total"]); // Eng
+        Assert.Equal(170000m, result.Rows[1]["dept_total"]); // Sales
+        Assert.Equal(220000m, result.Rows[2]["dept_total"]); // Eng
+        Assert.Equal(170000m, result.Rows[3]["dept_total"]); // Sales
+    }
+
+    [Fact]
+    public void Query_WindowAggregate_RunningSum()
+    {
+        // SELECT Name, Salary, SUM(Salary) OVER (ORDER BY Salary) AS running_sum FROM Employees
+        const string databaseName = "MyDB";
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable table = new(databaseName, "Employees");
+
+        SqlColumn nameCol = new(databaseName, "Employees", "Name") { ColumnType = typeof(string), TableRef = table };
+        SqlColumn salaryCol = new(databaseName, "Employees", "Salary") { ColumnType = typeof(decimal), TableRef = table };
+        sqlSelect.Columns.Add(nameCol);
+        sqlSelect.Columns.Add(salaryCol);
+
+        var agg = new SqlAggregate("SUM", new SqlExpression(new SqlColumnRef(null, null, "Salary") { Column = salaryCol }))
+        {
+            ColumnAlias = "running_sum",
+            WindowSpecification = new SqlWindowSpecification
+            {
+                OrderBy = { new SqlOrderByColumn("Salary") }
+            }
+        };
+        sqlSelect.Columns.Add(agg);
+        sqlSelect.Table = table;
+
+        DataSet dataSet = new(databaseName);
+        DataTable employees = new("Employees");
+        employees.Columns.Add("Name", typeof(string));
+        employees.Columns.Add("Salary", typeof(decimal));
+        employees.Rows.Add("Alice", 50000m);
+        employees.Rows.Add("Bob", 60000m);
+        employees.Rows.Add("Carol", 70000m);
+        dataSet.Tables.Add(employees);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var result = queryEngine.QueryAsDataTable();
+
+        Assert.Equal(3, result.Rows.Count);
+        // Running SUM with ORDER BY Salary: 50000, 110000, 180000
+        Assert.Equal(50000m, result.Rows[0]["running_sum"]);  // Alice
+        Assert.Equal(110000m, result.Rows[1]["running_sum"]); // Bob
+        Assert.Equal(180000m, result.Rows[2]["running_sum"]); // Carol
     }
 
     #endregion
