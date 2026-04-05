@@ -15,13 +15,15 @@ packages
 *.resources.dll
 *.metaproj
 *.metaproj.tmp
-.claude/
+# Ignore .claude but track skills and agents
+.claude/*
+!.claude/skills/
+!.claude/agents/
 
 
 
 # Gas Town (added by gt)
 .runtime/
-.claude/
 .logs/
 __pycache__/
 state.json
