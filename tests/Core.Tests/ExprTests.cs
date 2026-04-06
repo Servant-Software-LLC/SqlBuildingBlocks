@@ -459,7 +459,7 @@ public class ExprTests
 
         Assert.True(visitor.VisitedScalarSubqueryExpression);
     }
-  
+
     // ── NOT LIKE ──────────────────────────────────────────────────────────
 
     [Fact]
@@ -548,6 +548,7 @@ public class ExprTests
 
         Assert.Equal("binExpr", node.Term.Name);
     }
+
 
     // ── CAST ─────────────────────────────────────────────────────────────────
 
