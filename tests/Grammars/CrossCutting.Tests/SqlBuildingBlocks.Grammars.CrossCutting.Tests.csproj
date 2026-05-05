@@ -34,6 +34,7 @@
     <ProjectReference Include="..\..\..\src\Grammars\MySQL\SqlBuildingBlocks.Grammars.MySQL.csproj" />
     <ProjectReference Include="..\..\..\src\Grammars\PostgreSQL\SqlBuildingBlocks.Grammars.PostgreSQL.csproj" />
     <ProjectReference Include="..\..\..\src\Grammars\SQLServer\SqlBuildingBlocks.Grammars.SQLServer.csproj" />
+    <ProjectReference Include="..\..\Core.Tests\SqlBuildingBlocks.Core.Tests.csproj" />
   </ItemGroup>
 
 
