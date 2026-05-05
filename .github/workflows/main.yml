@@ -33,7 +33,13 @@ jobs:
       run: |
         $sdkVersion = (Get-Content global.json | ConvertFrom-Json).sdk.version
         $sdkMajorMinor = ($sdkVersion -split '\.')[0..1] -join '.'
-        $tfmRaw = ([xml](Get-Content Directory.Build.props)).Project.PropertyGroup.NetTFM.Trim()
+        $xml = [xml](Get-Content Directory.Build.props)
+        $tfmNode = $xml.SelectSingleNode('//PropertyGroup/NetTFM')
+        if ($null -eq $tfmNode) {
+          Write-Error "Directory.Build.props is missing a <NetTFM> element under any <PropertyGroup>."
+          exit 1
+        }
+        $tfmRaw = $tfmNode.InnerText.Trim()
         $tfm = $tfmRaw -replace '^net', ''
         Write-Host "global.json sdk.version: $sdkVersion (major.minor: $sdkMajorMinor)"
         Write-Host "Directory.Build.props NetTFM: $tfmRaw (major.minor: $tfm)"
