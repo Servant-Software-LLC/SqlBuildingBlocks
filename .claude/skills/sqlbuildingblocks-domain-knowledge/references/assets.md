@@ -42,6 +42,6 @@
 
 - Irony 1.5.3 (LR parser engine)
 - System.ValueTuple (netstandard2.0 compatibility)
-- xUnit + FluentAssertions + Moq (testing)
+- xUnit + Moq (testing)
 - BenchmarkDotNet (performance testing)
 - coverlet (code coverage)

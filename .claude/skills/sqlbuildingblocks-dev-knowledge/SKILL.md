@@ -42,7 +42,7 @@ tests/
 - **Source TFMs**: netstandard2.0
 - **Test TFMs**: net10.0
 - **Language**: C# 11 with nullable enabled, TreatWarningsAsErrors: true
-- **Package pins**: Packages.props centralizes versions (Irony 1.5.3, xUnit 2.9.3, FluentAssertions 6.11.0, Moq 4.20.72)
+- **Package pins**: Packages.props centralizes versions (Irony 1.5.3, xUnit 2.9.3, Moq 4.20.72)
 
 ### Running Tests
 ```powershell
@@ -272,8 +272,7 @@ public void ColumnAndIntLiteral_LessThan()
 ```
 
 ### Test Stack
-- **xUnit** for test framework
-- **FluentAssertions** for assertions
+- **xUnit** for test framework (assertions via `Assert.*`)
 - **Moq** for mocking schema/function providers
 - **coverlet** for code coverage
 - **BenchmarkDotNet** for performance testing

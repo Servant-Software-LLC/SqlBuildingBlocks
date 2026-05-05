@@ -39,7 +39,7 @@ description: |
 
 ### Test Stack
 - **Framework**: xUnit 2.9.3
-- **Assertions**: FluentAssertions 6.11.0
+- **Assertions**: xUnit built-in (`Assert.*`)
 - **Mocking**: Moq 4.20.72
 - **Coverage**: coverlet 8.0.1 (Codecov integration)
 - **Performance**: BenchmarkDotNet 0.13.4 (available, no published baselines)

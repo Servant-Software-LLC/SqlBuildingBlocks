@@ -60,7 +60,7 @@ SQL String → Irony LR Parser → ParseTree → NonTerminal.Create() → Logica
 
 - **Irony** (1.5.3) -- LR parser engine
 - **System.ValueTuple** -- Tuple support for netstandard2.0
-- **xUnit + FluentAssertions + Moq** -- Testing
+- **xUnit + Moq** -- Testing
 - **BenchmarkDotNet** -- Performance testing
 
 ## Strengths
