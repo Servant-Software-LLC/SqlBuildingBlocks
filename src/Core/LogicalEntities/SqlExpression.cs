@@ -1,4 +1,4 @@
-﻿using SqlBuildingBlocks.Interfaces;
+using SqlBuildingBlocks.Interfaces;
 using SqlBuildingBlocks.Visitors;
 using System.Data;
 using System.Linq.Expressions;
@@ -8,22 +8,115 @@ namespace SqlBuildingBlocks.LogicalEntities;
 
 public class SqlExpression
 {
-    public SqlExpression(SqlColumnRef column) => Column = column;
-    public SqlExpression(SqlParameter parameter) => Parameter = parameter;
-    public SqlExpression(SqlFunction function) => Function = function;
-    public SqlExpression(SqlLiteralValue value) => Value = value;
-    public SqlExpression(SqlBinaryExpression binExpr) => BinExpr = binExpr;
-    public SqlExpression(SqlBetweenExpression betweenExpr) => BetweenExpr = betweenExpr;
-    public SqlExpression(SqlCaseExpression caseExpr) => CaseExpr = caseExpr;
-    public SqlExpression(SqlExistsExpression existsExpr) => ExistsExpr = existsExpr;
-    public SqlExpression(SqlScalarSubqueryExpression scalarSubqueryExpr) => ScalarSubqueryExpr = scalarSubqueryExpr;
-    public SqlExpression(SqlInList inList) => InList = inList;
-    public SqlExpression(SqlCastExpression castExpr) => CastExpr = castExpr;
-    public SqlExpression(SqlArrayConstructor arrayConstructor) => ArrayConstructor = arrayConstructor;
-    public SqlExpression(SqlArraySubscript arraySubscript) => ArraySubscript = arraySubscript;
-    public SqlExpression(SqlJsonExpression jsonExpr) => JsonExpr = jsonExpr;
+    public SqlExpression(SqlColumnRef column)
+    {
+        Column = column;
+        Kind = SqlExpressionKind.Column;
+        AssertInvariant();
+    }
 
-    //Logic within this class should enforce that only one of these properties is ever set.
+    public SqlExpression(SqlParameter parameter)
+    {
+        Parameter = parameter;
+        Kind = SqlExpressionKind.Parameter;
+        AssertInvariant();
+    }
+
+    public SqlExpression(SqlFunction function)
+    {
+        Function = function;
+        Kind = SqlExpressionKind.Function;
+        AssertInvariant();
+    }
+
+    public SqlExpression(SqlLiteralValue value)
+    {
+        Value = value;
+        Kind = SqlExpressionKind.Value;
+        AssertInvariant();
+    }
+
+    public SqlExpression(SqlBinaryExpression binExpr)
+    {
+        BinExpr = binExpr;
+        Kind = SqlExpressionKind.BinExpr;
+        AssertInvariant();
+    }
+
+    public SqlExpression(SqlBetweenExpression betweenExpr)
+    {
+        BetweenExpr = betweenExpr;
+        Kind = SqlExpressionKind.BetweenExpr;
+        AssertInvariant();
+    }
+
+    public SqlExpression(SqlCaseExpression caseExpr)
+    {
+        CaseExpr = caseExpr;
+        Kind = SqlExpressionKind.CaseExpr;
+        AssertInvariant();
+    }
+
+    public SqlExpression(SqlExistsExpression existsExpr)
+    {
+        ExistsExpr = existsExpr;
+        Kind = SqlExpressionKind.ExistsExpr;
+        AssertInvariant();
+    }
+
+    public SqlExpression(SqlScalarSubqueryExpression scalarSubqueryExpr)
+    {
+        ScalarSubqueryExpr = scalarSubqueryExpr;
+        Kind = SqlExpressionKind.ScalarSubqueryExpr;
+        AssertInvariant();
+    }
+
+    public SqlExpression(SqlInList inList)
+    {
+        InList = inList;
+        Kind = SqlExpressionKind.InList;
+        AssertInvariant();
+    }
+
+    public SqlExpression(SqlCastExpression castExpr)
+    {
+        CastExpr = castExpr;
+        Kind = SqlExpressionKind.CastExpr;
+        AssertInvariant();
+    }
+
+    public SqlExpression(SqlArrayConstructor arrayConstructor)
+    {
+        ArrayConstructor = arrayConstructor;
+        Kind = SqlExpressionKind.ArrayConstructor;
+        AssertInvariant();
+    }
+
+    public SqlExpression(SqlArraySubscript arraySubscript)
+    {
+        ArraySubscript = arraySubscript;
+        Kind = SqlExpressionKind.ArraySubscript;
+        AssertInvariant();
+    }
+
+    public SqlExpression(SqlJsonExpression jsonExpr)
+    {
+        JsonExpr = jsonExpr;
+        Kind = SqlExpressionKind.JsonExpr;
+        AssertInvariant();
+    }
+
+    /// <summary>
+    /// Identifies which arm of this discriminated union is populated. Set once at construction time
+    /// (and re-set inside <c>AssumeExpressionLikeness</c>); always agrees with the single non-null arm.
+    /// Consumers may switch on this for explicit dispatch instead of null-checking each property.
+    /// </summary>
+    public SqlExpressionKind Kind { get; private set; }
+
+    //Logic within this class enforces that exactly one of these properties is non-null at any time.
+    //The active arm is reported by Kind. AssertInvariant() guards every constructor and the
+    //AssumeExpressionLikeness() rewrite path. Setters are private; AssumeExpressionLikeness is
+    //the only path inside the assembly that mutates these after construction.
     public SqlColumnRef? Column { get; private set; }
     public SqlParameter? Parameter { get; private set; }
     public SqlFunction? Function { get; private set; }
@@ -39,8 +132,8 @@ public class SqlExpression
     public SqlArraySubscript? ArraySubscript { get; private set; }
     public SqlJsonExpression? JsonExpr { get; private set; }
 
-    public Type Type 
-    { 
+    public Type Type
+    {
         get
         {
             if (Column != null)
@@ -59,13 +152,13 @@ public class SqlExpression
                 return ScalarSubqueryExpr.ValueType ?? typeof(object);
 
             throw new Exception($"Engine did not expect to have to get a {nameof(Type)} for {this}.");
-        } 
+        }
     }
 
     public void Accept(ISqlExpressionVisitor visitor)
     {
         //Give leaf nodes an opportunity to change this SqlExpression's likeness.
-            
+
         if (HandleLeafNode(Column, leaf => leaf?.Accept(visitor)!))
             return;
 
@@ -144,36 +237,50 @@ public class SqlExpression
 
     public Expression GetExpression(Dictionary<SqlTable, DataRow> substituteValues, SqlTable tableDataRow, ParameterExpression param, SqlExpression companionOfBinExpr)
     {
-        if (BinExpr != null)
-            return BinExpr.GetExpression(substituteValues, tableDataRow, param);
-
-        if (BetweenExpr != null)
-            return BetweenExpr.GetExpression(substituteValues, tableDataRow, param);
-
-        if (CaseExpr != null)
-            return CaseExpr.GetExpression(substituteValues, tableDataRow, param);
-
-        if (Value != null)
+        // Switch on Kind so the precedence is explicit instead of an implicit null-check ladder.
+        // Cases below preserve the historical precedence and behavior of the prior null-check chain.
+        switch (Kind)
         {
-            var valueExpression = Value.GetExpression(companionOfBinExpr);
+            case SqlExpressionKind.BinExpr:
+                return BinExpr!.GetExpression(substituteValues, tableDataRow, param);
 
-            if (Value.Value == null)
-                throw new Exception($"The {nameof(Value.Value)} property of {nameof(Value)} is null.  Unable to determine the type of the value.");
+            case SqlExpressionKind.BetweenExpr:
+                return BetweenExpr!.GetExpression(substituteValues, tableDataRow, param);
 
-            var castToType = CastToType(Value.Value.GetType(), companionOfBinExpr);
+            case SqlExpressionKind.CaseExpr:
+                return CaseExpr!.GetExpression(substituteValues, tableDataRow, param);
 
-            return Convert(valueExpression, Value.Value.GetType(), castToType);
+            case SqlExpressionKind.Value:
+            {
+                var valueExpression = Value!.GetExpression(companionOfBinExpr);
+
+                if (Value.Value == null)
+                    throw new Exception($"The {nameof(Value.Value)} property of {nameof(Value)} is null.  Unable to determine the type of the value.");
+
+                var castToType = CastToType(Value.Value.GetType(), companionOfBinExpr);
+
+                return Convert(valueExpression, Value.Value.GetType(), castToType);
+            }
+
+            case SqlExpressionKind.Function:
+                return GetBuiltInFunctionExpression(Function!, substituteValues, tableDataRow, param);
+
+            case SqlExpressionKind.Parameter:
+                throw new Exception($"Linq {typeof(Expression)} could not be created because there is an unresolved {typeof(SqlParameter)} within it.  Call the {nameof(Accept)} method on the {typeof(SqlExpression)} instance, providing it a {typeof(ResolveParametersVisitor)} instance.");
+
+            case SqlExpressionKind.ScalarSubqueryExpr:
+                throw new NotSupportedException("Scalar subqueries are not supported by LINQ expression generation.");
+
+            case SqlExpressionKind.Column:
+                return GetColumnExpression(substituteValues, tableDataRow, param, companionOfBinExpr);
+
+            default:
+                throw new NotSupportedException($"Generating a LINQ expression for a {nameof(SqlExpression)} of {nameof(Kind)}={Kind} is not supported.");
         }
+    }
 
-        if (Function != null)
-            return GetBuiltInFunctionExpression(Function, substituteValues, tableDataRow, param);
-
-        if (Parameter != null)
-            throw new Exception($"Linq {typeof(Expression)} could not be created because there is an unresolved {typeof(SqlParameter)} within it.  Call the {nameof(Accept)} method on the {typeof(SqlExpression)} instance, providing it a {typeof(ResolveParametersVisitor)} instance.");
-
-        if (ScalarSubqueryExpr != null)
-            throw new NotSupportedException("Scalar subqueries are not supported by LINQ expression generation.");
-
+    private Expression GetColumnExpression(Dictionary<SqlTable, DataRow> substituteValues, SqlTable tableDataRow, ParameterExpression param, SqlExpression companionOfBinExpr)
+    {
         if (Column == null)
             throw new Exception("Operand wasn't a Column as expected.");
 
@@ -280,7 +387,7 @@ public class SqlExpression
         var indexerProperty = typeof(DataRow).GetProperty("Item", new Type[] { typeof(string) });
 
         var valueExpression = Expression.MakeIndex(param, indexerProperty, new[] { columnNameExpression });
-        
+
         if (columnOfOperand.ColumnType is null)
             throw new Exception($"Expected the {columnOfOperand} column to have its {nameof(SqlColumn.ColumnType)} property set.");
 
@@ -309,7 +416,7 @@ public class SqlExpression
             if (companionType == typeof(string))
                 return typeof(string);
 
-            if (companionType == typeof(decimal)) 
+            if (companionType == typeof(decimal))
                 return typeof(decimal);
         }
 
@@ -355,34 +462,131 @@ public class SqlExpression
         ArraySubscript = null;
         JsonExpr = null;
 
+        // Copy the single populated arm AND mirror Kind from the source expression so the invariant
+        // holds at exit. The source has already been validated by its own constructor (or a prior
+        // AssumeExpressionLikeness call), so its Kind is the authoritative discriminator here.
         if (expression.Column != null)
+        {
             Column = expression.Column;
+            Kind = SqlExpressionKind.Column;
+        }
         else if (expression.Parameter != null)
+        {
             Parameter = expression.Parameter;
+            Kind = SqlExpressionKind.Parameter;
+        }
         else if (expression.Function != null)
+        {
             Function = expression.Function;
+            Kind = SqlExpressionKind.Function;
+        }
         else if (expression.Value != null)
+        {
             Value = expression.Value;
+            Kind = SqlExpressionKind.Value;
+        }
         else if (expression.BinExpr != null)
+        {
             BinExpr = expression.BinExpr;
+            Kind = SqlExpressionKind.BinExpr;
+        }
         else if (expression.BetweenExpr != null)
+        {
             BetweenExpr = expression.BetweenExpr;
+            Kind = SqlExpressionKind.BetweenExpr;
+        }
         else if (expression.CaseExpr != null)
+        {
             CaseExpr = expression.CaseExpr;
+            Kind = SqlExpressionKind.CaseExpr;
+        }
         else if (expression.ExistsExpr != null)
+        {
             ExistsExpr = expression.ExistsExpr;
+            Kind = SqlExpressionKind.ExistsExpr;
+        }
         else if (expression.ScalarSubqueryExpr != null)
+        {
             ScalarSubqueryExpr = expression.ScalarSubqueryExpr;
+            Kind = SqlExpressionKind.ScalarSubqueryExpr;
+        }
         else if (expression.InList != null)
+        {
             InList = expression.InList;
+            Kind = SqlExpressionKind.InList;
+        }
         else if (expression.CastExpr != null)
+        {
             CastExpr = expression.CastExpr;
+            Kind = SqlExpressionKind.CastExpr;
+        }
         else if (expression.ArrayConstructor != null)
+        {
             ArrayConstructor = expression.ArrayConstructor;
+            Kind = SqlExpressionKind.ArrayConstructor;
+        }
         else if (expression.ArraySubscript != null)
+        {
             ArraySubscript = expression.ArraySubscript;
+            Kind = SqlExpressionKind.ArraySubscript;
+        }
         else if (expression.JsonExpr != null)
+        {
             JsonExpr = expression.JsonExpr;
+            Kind = SqlExpressionKind.JsonExpr;
+        }
+        else
+        {
+            throw new InvalidOperationException(
+                $"{nameof(AssumeExpressionLikeness)} received a {nameof(SqlExpression)} with no populated arm; cannot adopt its likeness.");
+        }
+
+        AssertInvariant();
+    }
+
+    /// <summary>
+    /// Validates the discriminated-union invariant: exactly one arm is non-null AND that arm
+    /// matches <see cref="Kind"/>. Called at the end of every public constructor and at the end of
+    /// <see cref="AssumeExpressionLikeness"/>. Throws <see cref="InvalidOperationException"/>
+    /// with a diagnostic message naming the violation if anything is off.
+    /// </summary>
+    private void AssertInvariant()
+    {
+        // Build a set of the arms that are currently non-null. If the count is anything other
+        // than 1, the union shape is broken. If it is 1, that single arm must match Kind.
+        var populated = new List<SqlExpressionKind>();
+        if (Column != null) populated.Add(SqlExpressionKind.Column);
+        if (Parameter != null) populated.Add(SqlExpressionKind.Parameter);
+        if (Function != null) populated.Add(SqlExpressionKind.Function);
+        if (Value != null) populated.Add(SqlExpressionKind.Value);
+        if (BinExpr != null) populated.Add(SqlExpressionKind.BinExpr);
+        if (BetweenExpr != null) populated.Add(SqlExpressionKind.BetweenExpr);
+        if (CaseExpr != null) populated.Add(SqlExpressionKind.CaseExpr);
+        if (ExistsExpr != null) populated.Add(SqlExpressionKind.ExistsExpr);
+        if (ScalarSubqueryExpr != null) populated.Add(SqlExpressionKind.ScalarSubqueryExpr);
+        if (InList != null) populated.Add(SqlExpressionKind.InList);
+        if (CastExpr != null) populated.Add(SqlExpressionKind.CastExpr);
+        if (ArrayConstructor != null) populated.Add(SqlExpressionKind.ArrayConstructor);
+        if (ArraySubscript != null) populated.Add(SqlExpressionKind.ArraySubscript);
+        if (JsonExpr != null) populated.Add(SqlExpressionKind.JsonExpr);
+
+        if (populated.Count == 0)
+        {
+            throw new InvalidOperationException(
+                $"{nameof(SqlExpression)} invariant violated: no arm is populated. Expected exactly one arm matching {nameof(Kind)}={Kind}.");
+        }
+
+        if (populated.Count > 1)
+        {
+            throw new InvalidOperationException(
+                $"{nameof(SqlExpression)} invariant violated: {populated.Count} arms are populated ({string.Join(", ", populated)}). Exactly one arm must be non-null.");
+        }
+
+        if (populated[0] != Kind)
+        {
+            throw new InvalidOperationException(
+                $"{nameof(SqlExpression)} invariant violated: populated arm is {populated[0]} but {nameof(Kind)} is {Kind}. They must agree.");
+        }
     }
 
     public string ToExpressionString()
