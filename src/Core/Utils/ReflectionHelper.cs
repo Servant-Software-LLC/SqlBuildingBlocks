@@ -2,6 +2,12 @@
 
 namespace SqlBuildingBlocks.Utils;
 
+// #129: Reflection dispatch retained pending BenchmarkDotNet baseline.
+// The CallMethod<>/GetSpecializedMethod helpers are used by QueryEngine
+// for type-specialized dispatch (see QueryEngine.cs ~lines 674, 690, 736, 766).
+// Replacement (e.g. cached compiled delegates or generic interface dispatch)
+// is deferred until we have a measurable hot-path win to justify it.
+// See https://github.com/Servant-Software-LLC/SqlBuildingBlocks/issues/129
 public static class ReflectionHelper
 {
     public static TResult? CallMethod<TResult>(object instance, string methodName, Type typeParameter, params object?[] methodArguments) =>

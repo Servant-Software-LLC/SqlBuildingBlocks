@@ -16,6 +16,10 @@
     <DelaySign>false</DelaySign>
     <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- #159: Explicitly promote nullability warnings (CS86xx) to errors. Some SDK
+         versions exclude nullable diagnostics from TreatWarningsAsErrors=true by
+         default, so we list them here to ensure they fail the build. -->
+    <WarningsAsErrors>nullable</WarningsAsErrors>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(CI)' == 'true'">

@@ -229,8 +229,12 @@ public class SqlExpression
             case "ROUND":
                 var roundArgExpr = argExpr.Type == typeof(object) ? Expression.Convert(argExpr, typeof(double)) : argExpr;
                 int digits = 0;
-                if (function.Arguments.Count > 1 && function.Arguments[1].Value != null)
-                    digits = System.Convert.ToInt32(function.Arguments[1].Value.Value);
+                if (function.Arguments.Count > 1)
+                {
+                    var digitsLiteral = function.Arguments[1].Value;
+                    if (digitsLiteral != null)
+                        digits = System.Convert.ToInt32(digitsLiteral.Value);
+                }
                 return Expression.Call(typeof(Math), "Round", null,
                     Expression.Convert(roundArgExpr, typeof(double)),
                     Expression.Constant(digits));

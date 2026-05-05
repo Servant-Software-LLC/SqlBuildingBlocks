@@ -1,3 +1,4 @@
+using SqlBuildingBlocks.Exceptions;
 using SqlBuildingBlocks.Extensions;
 using SqlBuildingBlocks.Interfaces;
 using SqlBuildingBlocks.LogicalEntities;
@@ -322,8 +323,9 @@ public class QueryEngine : IQueryEngine
 
             // Fallback: try the default aggregate column name directly
             string candidateName;
-            if (func.Arguments.Count > 0 && func.Arguments[0].Column != null)
-                candidateName = $"{funcName}({func.Arguments[0].Column.ColumnName})";
+            var firstArgColumn = func.Arguments.Count > 0 ? func.Arguments[0].Column : null;
+            if (firstArgColumn != null)
+                candidateName = $"{funcName}({firstArgColumn.ColumnName})";
             else
                 candidateName = funcName;
 
@@ -578,7 +580,7 @@ public class QueryEngine : IQueryEngine
 
             // Collect all tables that should have NULL values (FROM table + all joins before this one)
             var nullTables = new HashSet<SqlTable>();
-            if (sqlSelectDefinition.Table != null)
+            if (sqlSelectDefinition.Table is not null)
                 nullTables.Add(sqlSelectDefinition.Table);
             foreach (var j in joins)
             {
@@ -603,11 +605,11 @@ public class QueryEngine : IQueryEngine
     /// <param name="processingState"></param>
     /// <param name="joinsToProcess"></param>
     /// <returns></returns>
-    /// <exception cref="Exception"></exception>
+    /// <exception cref="SqlExecutionException"></exception>
     private IEnumerable<DataRow> ResolveSelectColumns(ProcessingState processingState, SqlJoin[] joinsToProcess)
     {
         if (joinsToProcess.Length == 0)
-            throw new Exception("Expected a JOIN to process");
+            throw new SqlExecutionException("Expected a JOIN to process");
 
         var joinInProcessing = joinsToProcess[0];
         var joinKind = joinInProcessing.JoinKind;
@@ -920,7 +922,7 @@ public class QueryEngine : IQueryEngine
                 if (agg.Argument?.Column != null && agg.Argument.Column.Column is SqlColumn argSqlCol)
                 {
                     var tableRef = argSqlCol.TableRef ?? sqlSelectDefinition.Table;
-                    if (tableRef != null)
+                    if (tableRef is not null)
                     {
                         AddColumn(processingState, argSqlCol.ColumnName, null, argSqlCol.ColumnType ?? typeof(object),
                                   false, argSqlCol, tableRef, true);
@@ -943,7 +945,7 @@ public class QueryEngine : IQueryEngine
                     if (matchingCol != null)
                     {
                         var tableRef = matchingCol.TableRef ?? sqlSelectDefinition.Table;
-                        if (tableRef != null)
+                        if (tableRef is not null)
                         {
                             AddColumn(processingState, matchingCol.ColumnName, null, matchingCol.ColumnType ?? typeof(object),
                                       false, matchingCol, tableRef, true);
@@ -1043,7 +1045,7 @@ public class QueryEngine : IQueryEngine
                 {
                     var builtIn = TryCreateBuiltInFunction(processingState, functionColumn.Function);
                     if (builtIn == null)
-                        throw new Exception($"The {typeof(SqlFunction)} {functionColumn.Function} in the list of columns for this SQL statement, must either be calculated (i.e. replaced with a {nameof(SqlLiteralValue)}) before the {nameof(Query)} method is called, or it must have a lambda defined for its {nameof(SqlFunction.CalculateValue)} property which will calculate its value for each row of the resultset.");
+                        throw new SqlExecutionException($"The {typeof(SqlFunction)} {functionColumn.Function} in the list of columns for this SQL statement, must either be calculated (i.e. replaced with a {nameof(SqlLiteralValue)}) before the {nameof(Query)} method is called, or it must have a lambda defined for its {nameof(SqlFunction.CalculateValue)} property which will calculate its value for each row of the resultset.");
 
                     functionColumn.Function.CalculateValue = builtIn;
                 }
@@ -1069,7 +1071,7 @@ public class QueryEngine : IQueryEngine
                 var aggregate = iColumn as SqlAggregate;
 
                 if (aggregate == null)
-                    throw new Exception($"In trying to determine the Columns for SELECT output, there is no case that handles the type {iColumn.GetType().FullName}");
+                    throw new SqlExecutionException($"In trying to determine the Columns for SELECT output, there is no case that handles the type {iColumn.GetType().FullName}");
 
                 // Window aggregates: ensure argument and window spec columns are projected.
                 if (aggregate.IsWindowFunction)
@@ -1152,7 +1154,7 @@ public class QueryEngine : IQueryEngine
             if (arg.Column?.Column is SqlColumn argCol)
             {
                 var tableRef = argCol.TableRef ?? sqlSelectDefinition.Table;
-                if (tableRef != null)
+                if (tableRef is not null)
                 {
                     AddColumn(processingState, argCol.ColumnName, null, argCol.ColumnType ?? typeof(string),
                               false, argCol, tableRef, true);
@@ -1202,7 +1204,7 @@ public class QueryEngine : IQueryEngine
             return columnName;
 
         if (associatedTable is null)
-            throw new Exception($"Cannot create a resultset, there are multiple columns with the column name {columnName} and at least one of them does not have a table associated with it to prepend to the name of this result set column.");
+            throw new SqlExecutionException($"Cannot create a resultset, there are multiple columns with the column name {columnName} and at least one of them does not have a table associated with it to prepend to the name of this result set column.");
 
         return $"{associatedTable.TableName}.{columnName}";
     }
@@ -1557,15 +1559,27 @@ public class QueryEngine : IQueryEngine
         int offset = 1;
         object? defaultValue = DBNull.Value;
 
-        if (function.Arguments.Count >= 2 && function.Arguments[1].Value != null)
-            offset = Convert.ToInt32(function.Arguments[1].Value.Value);
-        if (function.Arguments.Count >= 3 && function.Arguments[2].Value != null)
-            defaultValue = function.Arguments[2].Value.Value;
+        if (function.Arguments.Count >= 2)
+        {
+            var offsetLiteral = function.Arguments[1].Value;
+            if (offsetLiteral != null)
+                offset = Convert.ToInt32(offsetLiteral.Value);
+        }
+        if (function.Arguments.Count >= 3)
+        {
+            var defaultLiteral = function.Arguments[2].Value;
+            if (defaultLiteral != null)
+                defaultValue = defaultLiteral.Value;
+        }
 
         // Get the expression column to read from
         string? argColName = null;
-        if (function.Arguments.Count >= 1 && function.Arguments[0].Column != null)
-            argColName = function.Arguments[0].Column.ColumnName;
+        if (function.Arguments.Count >= 1)
+        {
+            var firstArgColumn = function.Arguments[0].Column;
+            if (firstArgColumn != null)
+                argColName = firstArgColumn.ColumnName;
+        }
 
         for (int i = 0; i < sorted.Count; i++)
         {
@@ -1645,7 +1659,7 @@ public class QueryEngine : IQueryEngine
             if (partExpr.Column?.Column is SqlColumn partCol)
             {
                 var tableRef = partCol.TableRef ?? sqlSelectDefinition.Table;
-                if (tableRef != null)
+                if (tableRef is not null)
                     AddColumn(processingState, partCol.ColumnName, null, partCol.ColumnType ?? typeof(object),
                               false, partCol, tableRef, true);
             }
@@ -1669,7 +1683,7 @@ public class QueryEngine : IQueryEngine
     private void ProjectHiddenColumnByName(ProcessingState processingState, string columnName)
     {
         var table = sqlSelectDefinition.Table;
-        if (table == null) return;
+        if (table is null) return;
 
         if (!processingState.TablesProjections.TryGetValue(table, out DataTable? dataTable))
         {
