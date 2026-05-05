@@ -2902,4 +2902,535 @@ public class QueryEngineTests
     }
 
     #endregion
+
+    // ======================================================================
+    // Issue #160 — Regression tests for unexecuted-feature paths from
+    // commit b3d49ba (#149). Each test asserts NotSupportedException is
+    // thrown and that the exception message names the offending feature.
+    // ======================================================================
+    #region Issue #160 — NotSupportedException Regression Tests
+
+    [Fact]
+    public void Aggregate_UnknownAggregateName_ThrowsNotSupported_WithName()
+    {
+        // QueryEngine.cs:428 — ComputeAggregate default branch.
+        // Construct an unrecognized aggregate (e.g., "MEDIAN") and verify the
+        // engine throws NotSupportedException naming the aggregate.
+        const string databaseName = "MyDB";
+        const string unsupportedAggName = "MEDIAN";
+
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable nums = new(databaseName, "Nums");
+        sqlSelect.Table = nums;
+
+        SqlColumn valueCol = new(databaseName, "Nums", "Value")
+        {
+            ColumnType = typeof(int),
+            TableRef = nums
+        };
+        SqlColumnRef valueRef = new(null, null, "Value") { Column = valueCol };
+        SqlAggregate medianAgg = new(unsupportedAggName, new SqlExpression(valueRef));
+        sqlSelect.Columns.Add(medianAgg);
+
+        DataSet dataSet = new(databaseName);
+        DataTable t = new("Nums");
+        t.Columns.Add("Value", typeof(int));
+        t.Rows.Add(1);
+        t.Rows.Add(2);
+        t.Rows.Add(3);
+        dataSet.Tables.Add(t);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+
+        var ex = Assert.Throws<NotSupportedException>(() => queryEngine.QueryAsDataTable());
+        Assert.Contains(unsupportedAggName, ex.Message);
+        Assert.Contains("not supported", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Aggregate_NoArgument_ThrowsNotSupported_WithGuidanceMessage()
+    {
+        // QueryEngine.cs:470 — GetAggregateColumnName when aggregate has no column argument.
+        // SUM/MAX/MIN/AVG without an argument should throw with a message that
+        // suggests using COUNT(*) for counting all rows.
+        const string databaseName = "MyDB";
+        const string aggName = "SUM";
+
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable nums = new(databaseName, "Nums");
+        sqlSelect.Table = nums;
+
+        // Create a SUM with NO argument — Argument is null.
+        SqlAggregate sumAgg = new(aggName);
+        sqlSelect.Columns.Add(sumAgg);
+
+        DataSet dataSet = new(databaseName);
+        DataTable t = new("Nums");
+        t.Columns.Add("Value", typeof(int));
+        t.Rows.Add(1);
+        dataSet.Tables.Add(t);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+
+        var ex = Assert.Throws<NotSupportedException>(() => queryEngine.QueryAsDataTable());
+        Assert.Contains(aggName, ex.Message);
+        Assert.Contains("COUNT(*)", ex.Message);
+    }
+
+    [Fact]
+    public void Function_ArgumentNeitherColumnNorLiteral_ThrowsNotSupported()
+    {
+        // QueryEngine.cs:1145 — ResolveArgumentValue when arg is neither a column ref nor literal.
+        // We construct UPPER() with a binary-expression argument, which is not
+        // a column ref or a literal, then evaluate it.
+        const string databaseName = "MyDB";
+
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable people = new(databaseName, "People");
+        sqlSelect.Table = people;
+
+        SqlColumn nameCol = new(databaseName, "People", "Name")
+        {
+            ColumnType = typeof(string),
+            TableRef = people
+        };
+        sqlSelect.Columns.Add(nameCol);
+
+        // UPPER( 1 + 2 ) — argument is a binary expression, not a column or literal.
+        var bogusBinary = new SqlBinaryExpression(
+            new SqlExpression(new SqlLiteralValue(1)),
+            SqlBinaryOperator.Plus,
+            new SqlExpression(new SqlLiteralValue(2)));
+        var upper = new SqlFunction("UPPER") { ValueType = typeof(string) };
+        upper.Arguments.Add(new SqlExpression(bogusBinary));
+        sqlSelect.Columns.Add(new SqlFunctionColumn(upper) { ColumnAlias = "u" });
+
+        DataSet dataSet = new(databaseName);
+        DataTable t = new("People");
+        t.Columns.Add("Name", typeof(string));
+        t.Rows.Add("alice");
+        dataSet.Tables.Add(t);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+
+        var ex = Assert.Throws<NotSupportedException>(() => queryEngine.QueryAsDataTable());
+        Assert.Contains("Function argument", ex.Message);
+        Assert.Contains("column reference or literal value", ex.Message);
+    }
+
+    [Fact]
+    public void WindowFunction_NotSupportedKind_ThrowsNotSupported_WithName()
+    {
+        // QueryEngine.cs:1395 — ComputeNamedWindowFunctionValues default branch.
+        // NTILE / FIRST_VALUE / LAST_VALUE / NTH_VALUE are recognized window-function names
+        // (so DetermineColumns routes them through window-function evaluation), but the engine
+        // switch only implements RowNumber/Rank/DenseRank/Lag/Lead. The default branch throws.
+        const string databaseName = "MyDB";
+        const string unsupportedFn = "NTILE";
+
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable table = new(databaseName, "Employees");
+
+        SqlColumn nameCol = new(databaseName, "Employees", "Name")
+        {
+            ColumnType = typeof(string),
+            TableRef = table
+        };
+        sqlSelect.Columns.Add(nameCol);
+
+        var func = new SqlFunction(unsupportedFn) { ValueType = typeof(int) };
+        func.Arguments.Add(new SqlExpression(new SqlLiteralValue(4)));
+        func.WindowSpecification = new SqlWindowSpecification
+        {
+            OrderBy = { new SqlOrderByColumn("Name") }
+        };
+        sqlSelect.Columns.Add(new SqlFunctionColumn(func) { ColumnAlias = "bucket" });
+        sqlSelect.Table = table;
+
+        DataSet dataSet = new(databaseName);
+        DataTable employees = new("Employees");
+        employees.Columns.Add("Name", typeof(string));
+        employees.Rows.Add("Alice");
+        employees.Rows.Add("Bob");
+        dataSet.Tables.Add(employees);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+
+        var ex = Assert.Throws<NotSupportedException>(() => queryEngine.QueryAsDataTable());
+        Assert.Contains(unsupportedFn, ex.Message);
+        Assert.Contains("not yet supported", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void WindowPartitionBy_NonColumnExpression_ThrowsNotSupported()
+    {
+        // QueryEngine.cs:1487 — GetExpressionColumnName when the partition expression
+        // has neither a column reference nor a literal value.
+        const string databaseName = "MyDB";
+
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable table = new(databaseName, "Employees");
+
+        SqlColumn nameCol = new(databaseName, "Employees", "Name")
+        {
+            ColumnType = typeof(string),
+            TableRef = table
+        };
+        sqlSelect.Columns.Add(nameCol);
+
+        // Build a PARTITION BY whose expression is a binary expression — not a column ref,
+        // not a literal — to force GetExpressionColumnName to its throw branch.
+        var bogusBinary = new SqlBinaryExpression(
+            new SqlExpression(new SqlLiteralValue(1)),
+            SqlBinaryOperator.Plus,
+            new SqlExpression(new SqlLiteralValue(2)));
+
+        var func = new SqlFunction("ROW_NUMBER") { ValueType = typeof(int) };
+        func.WindowSpecification = new SqlWindowSpecification
+        {
+            PartitionBy = { new SqlExpression(bogusBinary) },
+            OrderBy = { new SqlOrderByColumn("Name") }
+        };
+        sqlSelect.Columns.Add(new SqlFunctionColumn(func) { ColumnAlias = "rn" });
+        sqlSelect.Table = table;
+
+        DataSet dataSet = new(databaseName);
+        DataTable employees = new("Employees");
+        employees.Columns.Add("Name", typeof(string));
+        employees.Rows.Add("Alice");
+        employees.Rows.Add("Bob");
+        dataSet.Tables.Add(employees);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+
+        var ex = Assert.Throws<NotSupportedException>(() => queryEngine.QueryAsDataTable());
+        Assert.Contains("PARTITION BY", ex.Message);
+        Assert.Contains("column", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void SetOperator_UndefinedEnumValue_ThrowsNotSupported_WithOperator()
+    {
+        // QueryEngine.cs:1814 — ApplySetOperations switch-expression default arm.
+        // SqlSetOperator is a regular enum, so an out-of-range cast value reaches
+        // the default arm and triggers the throw.
+        const string databaseName = "MyDB";
+        var bogusOp = (SqlSetOperator)999;
+
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable employees = new(databaseName, "Employees");
+        sqlSelect.Table = employees;
+        sqlSelect.Columns.Add(new SqlColumn(databaseName, "Employees", "Name") { TableRef = employees });
+
+        var rightSelect = new SqlSelectDefinition();
+        SqlTable contractors = new(databaseName, "Contractors");
+        rightSelect.Table = contractors;
+        rightSelect.Columns.Add(new SqlColumn(databaseName, "Contractors", "Name") { TableRef = contractors });
+        sqlSelect.SetOperations.Add(new SqlSetOperation(bogusOp, rightSelect));
+
+        DataSet dataSet = new(databaseName);
+        DataTable empT = new("Employees");
+        empT.Columns.Add("Name", typeof(string));
+        empT.Rows.Add("Alice");
+        dataSet.Tables.Add(empT);
+
+        DataTable conT = new("Contractors");
+        conT.Columns.Add("Name", typeof(string));
+        conT.Rows.Add("Bob");
+        dataSet.Tables.Add(conT);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+
+        var ex = Assert.Throws<NotSupportedException>(() => queryEngine.QueryAsDataTable());
+        Assert.Contains("Set operator", ex.Message);
+        Assert.Contains("not supported", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    #endregion
+
+    // ======================================================================
+    // Issue #164 — Recursive CTE execution tests.
+    // The parser sets SqlCteDefinition.IsRecursive (#125), but
+    // QueryEngine.ExecuteCte runs the CTE's SELECT once with no recursive
+    // expansion (no anchor + recursive-term iteration loop). The tests below
+    // exercise execution of a recursive CTE; if the engine does not yet
+    // implement recursive expansion, the tests are skipped with a FINDING.
+    // ======================================================================
+    #region Issue #164 — Recursive CTE Execution Tests
+
+    [Fact(Skip = "FINDING: QueryEngine.ExecuteCte does not implement recursive expansion. " +
+                  "It runs the CTE SELECT once and ignores SqlCteDefinition.IsRecursive. " +
+                  "A recursive CTE that walks an Employees->Manager hierarchy returns only the " +
+                  "anchor rows (the union arm cannot reference the CTE alias mid-build). " +
+                  "Tracking issue: recursive CTE execution is parsed but not executed.")]
+    public void Query_RecursiveCte_HierarchyTraversal_TraversesAllLevels()
+    {
+        // WITH RECURSIVE org(id, manager_id, level) AS (
+        //   SELECT id, manager_id, 1 FROM Employees WHERE manager_id IS NULL  -- anchor (CEO)
+        //   UNION ALL
+        //   SELECT e.id, e.manager_id, org.level + 1 FROM Employees e JOIN org ON e.manager_id = org.id
+        // )
+        // SELECT id, level FROM org
+        //
+        // Expected with proper recursion: every employee (5 rows) with their depth.
+        // Without recursion: only the anchor row(s).
+        Assert.True(true, "See Skip reason — gated on engine support.");
+    }
+
+    [Fact(Skip = "FINDING: QueryEngine.ExecuteCte does not implement recursive expansion. " +
+                  "Bounded recursion (e.g., counter <= N) cannot terminate properly because " +
+                  "the recursive arm is never iterated by the engine.")]
+    public void Query_RecursiveCte_BoundedRecursion_TerminatesAtBound()
+    {
+        // WITH RECURSIVE counter(n) AS (
+        //   SELECT 1
+        //   UNION ALL
+        //   SELECT n + 1 FROM counter WHERE n < 5
+        // )
+        // SELECT n FROM counter
+        // Expected: rows 1..5.
+        Assert.True(true, "See Skip reason — gated on engine support.");
+    }
+
+    [Fact(Skip = "FINDING: QueryEngine.ExecuteCte does not implement recursive expansion or " +
+                  "depth/cycle protection. A runaway-recursion guard is also missing — " +
+                  "no MAXRECURSION / cycle-detection clause is enforced. " +
+                  "When recursive execution lands, this test should assert that runaway " +
+                  "recursion (no terminating predicate, e.g., SELECT n+1 FROM counter with " +
+                  "no WHERE bound) raises a runtime error or stops at a configured depth limit.")]
+    public void Query_RecursiveCte_RunawayRecursion_Throws()
+    {
+        // WITH RECURSIVE counter(n) AS (
+        //   SELECT 1
+        //   UNION ALL
+        //   SELECT n + 1 FROM counter         -- no terminating predicate
+        // )
+        // SELECT n FROM counter
+        // Expected (when implemented): the engine should detect the lack of a
+        // terminating predicate / cycle and raise an error rather than loop forever.
+        Assert.True(true, "See Skip reason — gated on engine support.");
+    }
+
+    #endregion
+
+    // ======================================================================
+    // Issue #165 — Window-function frame and negative-context tests.
+    // Builds on the positive coverage at "Window Function Execution Tests"
+    // (commit 2227c78). Adds tests for explicit ROWS frames, RANGE INTERVAL,
+    // NTILE / FIRST_VALUE / LAST_VALUE, parser rejection of LAG()/LEAD()
+    // with no args, and SQL:2003 §7.11 rejection of window functions in
+    // WHERE/HAVING clauses.
+    // ======================================================================
+    #region Issue #165 — Window Function Frame & Negative-Context Tests
+
+    [Fact]
+    public void Query_WindowAggregate_RowsBetweenUnboundedPrecedingAndCurrentRow_RunningSum()
+    {
+        // SELECT Name, Salary, SUM(Salary) OVER (ORDER BY Salary
+        //   ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_sum FROM Employees
+        const string databaseName = "MyDB";
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable table = new(databaseName, "Employees");
+
+        SqlColumn nameCol = new(databaseName, "Employees", "Name") { ColumnType = typeof(string), TableRef = table };
+        SqlColumn salaryCol = new(databaseName, "Employees", "Salary") { ColumnType = typeof(decimal), TableRef = table };
+        sqlSelect.Columns.Add(nameCol);
+        sqlSelect.Columns.Add(salaryCol);
+
+        var frame = new SqlWindowFrame(
+            WindowFrameMode.Rows,
+            new SqlWindowFrameBound(WindowFrameBoundType.UnboundedPreceding),
+            new SqlWindowFrameBound(WindowFrameBoundType.CurrentRow));
+
+        var agg = new SqlAggregate("SUM", new SqlExpression(new SqlColumnRef(null, null, "Salary") { Column = salaryCol }))
+        {
+            ColumnAlias = "running_sum",
+            WindowSpecification = new SqlWindowSpecification
+            {
+                OrderBy = { new SqlOrderByColumn("Salary") },
+                Frame = frame
+            }
+        };
+        sqlSelect.Columns.Add(agg);
+        sqlSelect.Table = table;
+
+        DataSet dataSet = new(databaseName);
+        DataTable employees = new("Employees");
+        employees.Columns.Add("Name", typeof(string));
+        employees.Columns.Add("Salary", typeof(decimal));
+        employees.Rows.Add("Alice", 50000m);
+        employees.Rows.Add("Bob", 60000m);
+        employees.Rows.Add("Carol", 70000m);
+        dataSet.Tables.Add(employees);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var result = queryEngine.QueryAsDataTable();
+
+        Assert.Equal(3, result.Rows.Count);
+        // ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW with ORDER BY Salary ASC:
+        // 50000, 50000+60000=110000, 50000+60000+70000=180000
+        Assert.Equal(50000m, result.Rows[0]["running_sum"]);
+        Assert.Equal(110000m, result.Rows[1]["running_sum"]);
+        Assert.Equal(180000m, result.Rows[2]["running_sum"]);
+    }
+
+    [Fact(Skip = "FINDING: QueryEngine has no support for RANGE-mode frames with INTERVAL bounds. " +
+                  "WindowFrameMode.Range is defined and SqlWindowFrameBound carries an int? offset, " +
+                  "but neither the logical model nor GetFrameBoundIndex understands an INTERVAL " +
+                  "(e.g., '1' DAY) — the offset is treated as a row count regardless of mode. " +
+                  "When INTERVAL-bounded RANGE frames land, this test should pass; until then the " +
+                  "engine silently produces wrong results rather than raising NotSupportedException.")]
+    public void Query_WindowAggregate_RangeIntervalDayPreceding_ProducesWindowOverDateRange()
+    {
+        // SELECT EventDate, SUM(Amount) OVER (ORDER BY EventDate
+        //   RANGE BETWEEN INTERVAL '1' DAY PRECEDING AND CURRENT ROW) AS rolling FROM Events
+        // Once supported, rows within 1 day of the current row's EventDate should be summed.
+        Assert.True(true, "See Skip reason — gated on engine support for RANGE INTERVAL frames.");
+    }
+
+    [Fact]
+    public void Query_Ntile_ThrowsNotSupported()
+    {
+        // NTILE is recognized as a WindowFunctionType but not implemented in the
+        // QueryEngine switch — verify the engine throws NotSupportedException
+        // with the function name in the message.
+        const string databaseName = "MyDB";
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable table = new(databaseName, "Employees");
+
+        SqlColumn nameCol = new(databaseName, "Employees", "Name") { ColumnType = typeof(string), TableRef = table };
+        sqlSelect.Columns.Add(nameCol);
+
+        var func = new SqlFunction("NTILE") { ValueType = typeof(int) };
+        func.Arguments.Add(new SqlExpression(new SqlLiteralValue(4)));
+        func.WindowSpecification = new SqlWindowSpecification
+        {
+            OrderBy = { new SqlOrderByColumn("Name") }
+        };
+        sqlSelect.Columns.Add(new SqlFunctionColumn(func) { ColumnAlias = "bucket" });
+        sqlSelect.Table = table;
+
+        DataSet dataSet = new(databaseName);
+        DataTable employees = new("Employees");
+        employees.Columns.Add("Name", typeof(string));
+        employees.Rows.Add("Alice");
+        employees.Rows.Add("Bob");
+        employees.Rows.Add("Carol");
+        employees.Rows.Add("Dave");
+        dataSet.Tables.Add(employees);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var ex = Assert.Throws<NotSupportedException>(() => queryEngine.QueryAsDataTable());
+        Assert.Contains("NTILE", ex.Message);
+    }
+
+    [Fact]
+    public void Query_FirstValue_ThrowsNotSupported()
+    {
+        // FIRST_VALUE is recognized as a WindowFunctionType but not implemented.
+        const string databaseName = "MyDB";
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable table = new(databaseName, "Employees");
+
+        SqlColumn nameCol = new(databaseName, "Employees", "Name") { ColumnType = typeof(string), TableRef = table };
+        SqlColumn salaryCol = new(databaseName, "Employees", "Salary") { ColumnType = typeof(int), TableRef = table };
+        sqlSelect.Columns.Add(nameCol);
+        sqlSelect.Columns.Add(salaryCol);
+
+        var func = new SqlFunction("FIRST_VALUE") { ValueType = typeof(object) };
+        func.Arguments.Add(new SqlExpression(new SqlColumnRef(null, null, "Salary") { Column = salaryCol }));
+        func.WindowSpecification = new SqlWindowSpecification
+        {
+            OrderBy = { new SqlOrderByColumn("Salary") }
+        };
+        sqlSelect.Columns.Add(new SqlFunctionColumn(func) { ColumnAlias = "first_salary" });
+        sqlSelect.Table = table;
+
+        DataSet dataSet = new(databaseName);
+        DataTable employees = new("Employees");
+        employees.Columns.Add("Name", typeof(string));
+        employees.Columns.Add("Salary", typeof(int));
+        employees.Rows.Add("Alice", 50000);
+        employees.Rows.Add("Bob", 60000);
+        dataSet.Tables.Add(employees);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var ex = Assert.Throws<NotSupportedException>(() => queryEngine.QueryAsDataTable());
+        Assert.Contains("FIRST_VALUE", ex.Message);
+    }
+
+    [Fact]
+    public void Query_LastValue_ThrowsNotSupported()
+    {
+        // LAST_VALUE is recognized as a WindowFunctionType but not implemented.
+        const string databaseName = "MyDB";
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable table = new(databaseName, "Employees");
+
+        SqlColumn nameCol = new(databaseName, "Employees", "Name") { ColumnType = typeof(string), TableRef = table };
+        SqlColumn salaryCol = new(databaseName, "Employees", "Salary") { ColumnType = typeof(int), TableRef = table };
+        sqlSelect.Columns.Add(nameCol);
+        sqlSelect.Columns.Add(salaryCol);
+
+        var func = new SqlFunction("LAST_VALUE") { ValueType = typeof(object) };
+        func.Arguments.Add(new SqlExpression(new SqlColumnRef(null, null, "Salary") { Column = salaryCol }));
+        func.WindowSpecification = new SqlWindowSpecification
+        {
+            OrderBy = { new SqlOrderByColumn("Salary") }
+        };
+        sqlSelect.Columns.Add(new SqlFunctionColumn(func) { ColumnAlias = "last_salary" });
+        sqlSelect.Table = table;
+
+        DataSet dataSet = new(databaseName);
+        DataTable employees = new("Employees");
+        employees.Columns.Add("Name", typeof(string));
+        employees.Columns.Add("Salary", typeof(int));
+        employees.Rows.Add("Alice", 50000);
+        employees.Rows.Add("Bob", 60000);
+        dataSet.Tables.Add(employees);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var ex = Assert.Throws<NotSupportedException>(() => queryEngine.QueryAsDataTable());
+        Assert.Contains("LAST_VALUE", ex.Message);
+    }
+
+    [Fact(Skip = "FINDING: QueryEngine does not validate that LAG/LEAD have at least one argument. " +
+                  "Per SQL:2003, LAG()/LEAD() are invalid without an expression argument and the " +
+                  "parser should reject them. Currently the parser may accept LAG() and the engine " +
+                  "would then crash at runtime (IndexOutOfRange) when accessing function.Arguments[0] " +
+                  "rather than producing a clean parser-side error. This test should pass once a " +
+                  "validation step in the grammar or in QueryEngine rejects empty-arg LAG/LEAD with a " +
+                  "clear NotSupportedException.")]
+    public void Query_Lag_NoArguments_ParserOrEngineRejects()
+    {
+        // SELECT LAG() OVER (ORDER BY Name) FROM Employees
+        // Expected: clean validation error. Until then the call would either be
+        // accepted silently or fail with a non-deterministic exception type.
+        Assert.True(true, "See Skip reason — gated on validation support.");
+    }
+
+    [Fact(Skip = "FINDING: QueryEngine does not enforce SQL:2003 §7.11 — window functions are " +
+                  "permitted only in SELECT and ORDER BY, not in WHERE / HAVING / GROUP BY. " +
+                  "The engine currently builds the WHERE predicate via SqlBinaryExpression.BuildExpression " +
+                  "with no awareness of window-function context; placing ROW_NUMBER() OVER (...) inside " +
+                  "WHERE either silently misbehaves or throws a generic exception. This test should pass " +
+                  "once a semantic check raises NotSupportedException naming WHERE/HAVING.")]
+    public void Query_WindowFunctionInWhereClause_Rejected()
+    {
+        // SELECT Name FROM Employees WHERE ROW_NUMBER() OVER (ORDER BY Name) > 1
+        // Expected: clean rejection with a message identifying WHERE.
+        Assert.True(true, "See Skip reason — gated on validation support.");
+    }
+
+    [Fact(Skip = "FINDING: Window functions in HAVING are not rejected per SQL:2003 §7.11. " +
+                  "See companion test Query_WindowFunctionInWhereClause_Rejected.")]
+    public void Query_WindowFunctionInHavingClause_Rejected()
+    {
+        // SELECT Dept, COUNT(*) FROM Employees GROUP BY Dept
+        //   HAVING ROW_NUMBER() OVER (ORDER BY Dept) > 1
+        // Expected: clean rejection with a message identifying HAVING.
+        Assert.True(true, "See Skip reason — gated on validation support.");
+    }
+
+    #endregion
 }
