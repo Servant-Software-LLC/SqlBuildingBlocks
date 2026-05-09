@@ -77,18 +77,42 @@ public class SqlWindowFrame
 /// </summary>
 public class SqlWindowFrameBound
 {
+    /// <summary>
+    /// Constructs a window frame bound. For PRECEDING/FOLLOWING bounds, supply a numeric offset
+    /// (interpreted as a row count for ROWS-mode frames). For RANGE-mode INTERVAL bounds, use the
+    /// <see cref="SqlWindowFrameBound(WindowFrameBoundType, IntervalLiteral)"/> overload.
+    /// For UNBOUNDED PRECEDING / UNBOUNDED FOLLOWING / CURRENT ROW, omit the offset.
+    /// </summary>
     public SqlWindowFrameBound(WindowFrameBoundType type, int? offset = null)
     {
         Type = type;
-        Offset = offset;
+        Offset = offset is null ? null : new SqlWindowFrameBoundOffset(offset.Value);
+    }
+
+    /// <summary>
+    /// Constructs a window frame bound with an INTERVAL offset (e.g., <c>INTERVAL '1' DAY PRECEDING</c>).
+    /// Valid only with <see cref="WindowFrameBoundType.Preceding"/> or <see cref="WindowFrameBoundType.Following"/>.
+    /// </summary>
+    public SqlWindowFrameBound(WindowFrameBoundType type, IntervalLiteral interval)
+    {
+        if (interval is null) throw new ArgumentNullException(nameof(interval));
+        if (type != WindowFrameBoundType.Preceding && type != WindowFrameBoundType.Following)
+            throw new ArgumentException(
+                $"INTERVAL offsets are only valid on {nameof(WindowFrameBoundType.Preceding)}/{nameof(WindowFrameBoundType.Following)} bounds.",
+                nameof(type));
+
+        Type = type;
+        Offset = new SqlWindowFrameBoundOffset(interval);
     }
 
     public WindowFrameBoundType Type { get; }
 
     /// <summary>
-    /// The numeric offset for PRECEDING/FOLLOWING bounds. Null for UNBOUNDED and CURRENT ROW.
+    /// The offset for PRECEDING/FOLLOWING bounds. Null for UNBOUNDED and CURRENT ROW. The offset
+    /// is itself a discriminated union — numeric (row count) or INTERVAL — see
+    /// <see cref="SqlWindowFrameBoundOffset"/>.
     /// </summary>
-    public int? Offset { get; }
+    public SqlWindowFrameBoundOffset? Offset { get; }
 
     public override string ToString() => Type switch
     {

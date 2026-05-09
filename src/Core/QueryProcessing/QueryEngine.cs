@@ -1076,7 +1076,23 @@ public class QueryEngine : IQueryEngine
 
                 // Window aggregates: ensure argument and window spec columns are projected.
                 if (aggregate.IsWindowFunction)
+                {
+                    // Project the aggregate's source column (e.g., SUM(Amount) needs Amount in
+                    // the materialized rows) so ComputeAggregate can read it.
+                    if (aggregate.Argument?.Column?.Column is SqlColumn aggArgCol)
+                    {
+                        var tableRef = aggArgCol.TableRef ?? sqlSelectDefinition.Table;
+                        if (tableRef is not null)
+                            AddColumn(processingState, aggArgCol.ColumnName, null, aggArgCol.ColumnType ?? typeof(object),
+                                      false, aggArgCol, tableRef, true);
+                    }
+                    else if (aggregate.Argument?.Column != null)
+                    {
+                        ProjectHiddenColumnByName(processingState, aggregate.Argument.Column.ColumnName);
+                    }
+
                     ProjectWindowSpecColumns(processingState, aggregate.WindowSpecification!);
+                }
 
                 //Aggregates are handled in EvaluateAggregates (or EvaluateWindowFunctions for window aggs).
                 break;
@@ -1253,6 +1269,10 @@ public class QueryEngine : IQueryEngine
             if (sqlSelectDefinition.Top.WithTies)
                 throw new NotSupportedException("TOP ... WITH TIES is not supported by the QueryEngine.");
         }
+
+        // SQL:2003 §7.11 — window functions are permitted only in the SELECT list and ORDER BY,
+        // and must be rejected in WHERE / HAVING / JOIN ON / GROUP BY (issue #172).
+        WindowFunctionPositionValidator.Validate(sqlSelectDefinition);
     }
 
     /// <summary>
@@ -1522,9 +1542,9 @@ public class QueryEngine : IQueryEngine
             List<int> frameIndices;
             if (winSpec.Frame != null)
             {
-                int startIdx = GetFrameBoundIndex(i, winSpec.Frame.Start, sorted.Count);
+                int startIdx = GetFrameBoundIndex(i, winSpec.Frame.Start, sorted.Count, sorted, allRows, winSpec, isStart: true);
                 int endIdx = winSpec.Frame.End != null
-                    ? GetFrameBoundIndex(i, winSpec.Frame.End, sorted.Count)
+                    ? GetFrameBoundIndex(i, winSpec.Frame.End, sorted.Count, sorted, allRows, winSpec, isStart: false)
                     : i;
                 startIdx = Math.Max(0, startIdx);
                 endIdx = Math.Min(sorted.Count - 1, endIdx);
@@ -1597,7 +1617,7 @@ public class QueryEngine : IQueryEngine
                 }
                 else if (winSpec.Frame != null)
                 {
-                    frameRows = GetFrameRows(sorted, i, winSpec.Frame, allRows);
+                    frameRows = GetFrameRows(sorted, i, winSpec.Frame, allRows, winSpec);
                 }
                 else
                 {
@@ -1726,6 +1746,16 @@ public class QueryEngine : IQueryEngine
     /// </summary>
     private static void ComputeLagLead(SqlFunction function, List<int> sorted, List<DataRow> allRows, object?[] results, bool isLead)
     {
+        // SQL:2003 §6.10 — LAG()/LEAD() require at least one argument (the target expression).
+        // Reject empty-argument calls with a clear engine-side error rather than silently
+        // returning DBNull or crashing on Arguments[0].
+        if (function.Arguments.Count < 1)
+        {
+            string fnName = isLead ? "LEAD" : "LAG";
+            throw new NotSupportedException(
+                $"{fnName}() requires at least one argument (the target expression). See SQL:2003.");
+        }
+
         // Determine offset (default 1) and default value (default null)
         int offset = 1;
         object? defaultValue = DBNull.Value;
@@ -1773,11 +1803,11 @@ public class QueryEngine : IQueryEngine
     /// <summary>
     /// Gets the rows within the specified window frame for aggregate computation.
     /// </summary>
-    private static List<DataRow> GetFrameRows(List<int> sorted, int currentIndex, SqlWindowFrame frame, List<DataRow> allRows)
+    private static List<DataRow> GetFrameRows(List<int> sorted, int currentIndex, SqlWindowFrame frame, List<DataRow> allRows, SqlWindowSpecification winSpec)
     {
-        int startIdx = GetFrameBoundIndex(currentIndex, frame.Start, sorted.Count);
+        int startIdx = GetFrameBoundIndex(currentIndex, frame.Start, sorted.Count, sorted, allRows, winSpec, isStart: true);
         int endIdx = frame.End != null
-            ? GetFrameBoundIndex(currentIndex, frame.End, sorted.Count)
+            ? GetFrameBoundIndex(currentIndex, frame.End, sorted.Count, sorted, allRows, winSpec, isStart: false)
             : currentIndex; // Single-bound frame defaults to CURRENT ROW as end
 
         startIdx = Math.Max(0, startIdx);
@@ -1789,15 +1819,133 @@ public class QueryEngine : IQueryEngine
         return frameRows;
     }
 
-    private static int GetFrameBoundIndex(int currentIndex, SqlWindowFrameBound bound, int partitionSize)
+    /// <summary>
+    /// Resolves a frame bound to a row index within <paramref name="sorted"/>. For numeric
+    /// (row-count) offsets this is positional: <c>currentIndex ± offset</c>. For INTERVAL offsets
+    /// the bound is in the ORDER BY column's domain — the engine computes the boundary value as
+    /// <c>current.OrderByValue ± interval</c> and walks <paramref name="sorted"/> to find the
+    /// extreme row whose ORDER BY value lies within the bounded range.
+    /// </summary>
+    private static int GetFrameBoundIndex(
+        int currentIndex,
+        SqlWindowFrameBound bound,
+        int partitionSize,
+        List<int>? sorted = null,
+        List<DataRow>? allRows = null,
+        SqlWindowSpecification? winSpec = null,
+        bool isStart = true)
     {
-        return bound.Type switch
+        switch (bound.Type)
         {
-            WindowFrameBoundType.UnboundedPreceding => 0,
-            WindowFrameBoundType.Preceding => currentIndex - (bound.Offset ?? 0),
-            WindowFrameBoundType.CurrentRow => currentIndex,
-            WindowFrameBoundType.Following => currentIndex + (bound.Offset ?? 0),
-            WindowFrameBoundType.UnboundedFollowing => partitionSize - 1,
+            case WindowFrameBoundType.UnboundedPreceding:
+                return 0;
+            case WindowFrameBoundType.CurrentRow:
+                return currentIndex;
+            case WindowFrameBoundType.UnboundedFollowing:
+                return partitionSize - 1;
+            case WindowFrameBoundType.Preceding:
+            case WindowFrameBoundType.Following:
+                break;
+            default:
+                throw new ArgumentOutOfRangeException();
+        }
+
+        var offset = bound.Offset;
+        if (offset is null)
+            return currentIndex; // PRECEDING/FOLLOWING with null offset behaves like CURRENT ROW.
+
+        // Numeric (ROWS-mode) — positional offset.
+        if (offset.Kind == SqlWindowFrameBoundOffsetKind.Numeric)
+        {
+            int n = offset.RowCount ?? 0;
+            return bound.Type == WindowFrameBoundType.Preceding
+                ? currentIndex - n
+                : currentIndex + n;
+        }
+
+        // INTERVAL (RANGE-mode) — domain offset against the ORDER BY column.
+        if (sorted is null || allRows is null || winSpec is null)
+            throw new NotSupportedException(
+                "INTERVAL frame bounds require partition context (sorted indices, rows, and window spec). This call site has not been updated.");
+
+        if (winSpec.OrderBy.Count != 1)
+            throw new NotSupportedException(
+                "RANGE-mode INTERVAL frame bounds require exactly one ORDER BY column on the window specification.");
+
+        var orderByName = GetColumnName(winSpec.OrderBy[0].ColumnName);
+        var currentRow = allRows[sorted[currentIndex]];
+        var currentValue = currentRow.Table.Columns.Contains(orderByName) ? currentRow[orderByName] : DBNull.Value;
+        if (currentValue == DBNull.Value || currentValue is null)
+            return currentIndex; // NULL anchor — collapse to current row.
+
+        var interval = offset.Interval!;
+        bool isPreceding = bound.Type == WindowFrameBoundType.Preceding;
+
+        // Compute the boundary domain value: current ± interval.
+        var boundaryValue = AddInterval(currentValue, interval, subtract: isPreceding);
+        bool descending = winSpec.OrderBy[0].Descending;
+
+        // For PRECEDING: include rows whose ORDER BY value is between boundary and current
+        // (inclusive). For FOLLOWING: between current and boundary (inclusive).
+        // Sort direction matters for which scan direction yields the extreme index.
+        int extremeIdx = currentIndex;
+        if (isPreceding)
+        {
+            // Walk backward from current, accept while the value is within [boundary, current]
+            // (or [current, boundary] when descending).
+            for (int k = currentIndex - 1; k >= 0; k--)
+            {
+                var v = allRows[sorted[k]].Table.Columns.Contains(orderByName)
+                    ? allRows[sorted[k]][orderByName] : DBNull.Value;
+                if (v == DBNull.Value || v is null) break;
+                bool inRange = descending
+                    ? CompareValues(v, currentValue) >= 0 && CompareValues(v, boundaryValue) <= 0
+                    : CompareValues(v, currentValue) <= 0 && CompareValues(v, boundaryValue) >= 0;
+                if (!inRange) break;
+                extremeIdx = k;
+            }
+            return extremeIdx;
+        }
+        else
+        {
+            // FOLLOWING — walk forward from current.
+            for (int k = currentIndex + 1; k < sorted.Count; k++)
+            {
+                var v = allRows[sorted[k]].Table.Columns.Contains(orderByName)
+                    ? allRows[sorted[k]][orderByName] : DBNull.Value;
+                if (v == DBNull.Value || v is null) break;
+                bool inRange = descending
+                    ? CompareValues(v, currentValue) <= 0 && CompareValues(v, boundaryValue) >= 0
+                    : CompareValues(v, currentValue) >= 0 && CompareValues(v, boundaryValue) <= 0;
+                if (!inRange) break;
+                extremeIdx = k;
+            }
+            return extremeIdx;
+        }
+    }
+
+    /// <summary>
+    /// Adds (or subtracts) an <see cref="IntervalLiteral"/> to/from a domain value. Currently
+    /// supports <see cref="DateTime"/> anchors and the SQL:2003 single-field qualifiers
+    /// (Year/Month/Day/Hour/Minute/Second).
+    /// </summary>
+    private static object AddInterval(object value, IntervalLiteral interval, bool subtract)
+    {
+        if (value is not DateTime dt)
+            throw new NotSupportedException(
+                $"INTERVAL frame bounds currently support only DateTime ORDER BY columns; got {value.GetType()}.");
+
+        long sign = subtract ? -1 : 1;
+        long m = sign * interval.Magnitude;
+
+        return interval.Qualifier switch
+        {
+            IntervalQualifier.Year => dt.AddYears((int)m),
+            IntervalQualifier.Month => dt.AddMonths((int)m),
+            IntervalQualifier.Day => dt.AddDays(m),
+            IntervalQualifier.Hour => dt.AddHours(m),
+            IntervalQualifier.Minute => dt.AddMinutes(m),
+            IntervalQualifier.Second => dt.AddSeconds(m),
             _ => throw new ArgumentOutOfRangeException()
         };
     }

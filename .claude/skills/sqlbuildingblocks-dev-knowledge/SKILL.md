@@ -264,6 +264,12 @@ public class QueryEngine : IQueryEngine
 - `ISqlValueVisitor` -- Visit leaf value nodes
 - `ResolveFunctionsVisitor` -- Traverse and resolve function references
 - `ResolveParametersVisitor` -- Replace parameters with literal values
+- `WindowFunctionPositionValidator` (internal static) -- Enforces SQL:2003 §7.11; throws
+  `SqlExecutionException` if a window function appears at the immediate predicate level
+  of WHERE / HAVING / JOIN ON. Walks `SqlExpression` manually (does NOT use
+  `ISqlExpressionVisitor.Accept`) so it does not recurse into nested SELECT bodies --
+  scalar subqueries that themselves contain window functions in their SELECT list are
+  legal. Invoked by `QueryEngine.ThrowIfUnsupportedFeatures()`.
 
 ## Testing Patterns
 

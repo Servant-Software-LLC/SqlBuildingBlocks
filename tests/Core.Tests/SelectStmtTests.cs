@@ -1089,10 +1089,14 @@ public class SelectStmtTests
         Assert.NotNull(windowSpec!.Frame);
         Assert.Equal(WindowFrameMode.Rows, windowSpec.Frame!.Mode);
         Assert.Equal(WindowFrameBoundType.Preceding, windowSpec.Frame.Start.Type);
-        Assert.Equal(3, windowSpec.Frame.Start.Offset);
+        Assert.NotNull(windowSpec.Frame.Start.Offset);
+        Assert.Equal(SqlWindowFrameBoundOffsetKind.Numeric, windowSpec.Frame.Start.Offset!.Kind);
+        Assert.Equal(3, windowSpec.Frame.Start.Offset.RowCount);
         Assert.NotNull(windowSpec.Frame.End);
         Assert.Equal(WindowFrameBoundType.Following, windowSpec.Frame.End!.Type);
-        Assert.Equal(1, windowSpec.Frame.End.Offset);
+        Assert.NotNull(windowSpec.Frame.End.Offset);
+        Assert.Equal(SqlWindowFrameBoundOffsetKind.Numeric, windowSpec.Frame.End.Offset!.Kind);
+        Assert.Equal(1, windowSpec.Frame.End.Offset.RowCount);
     }
 
     [Fact]
