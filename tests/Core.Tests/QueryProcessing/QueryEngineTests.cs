@@ -1,4 +1,5 @@
 ﻿using SqlBuildingBlocks.Core.Tests.Utils;
+using SqlBuildingBlocks.Exceptions;
 using SqlBuildingBlocks.Interfaces;
 using SqlBuildingBlocks.LogicalEntities;
 using SqlBuildingBlocks.QueryProcessing;
@@ -3360,18 +3361,64 @@ public class QueryEngineTests
         Assert.Equal(180000m, result.Rows[2]["running_sum"]);
     }
 
-    [Fact(Skip = "FINDING: QueryEngine has no support for RANGE-mode frames with INTERVAL bounds. " +
-                  "WindowFrameMode.Range is defined and SqlWindowFrameBound carries an int? offset, " +
-                  "but neither the logical model nor GetFrameBoundIndex understands an INTERVAL " +
-                  "(e.g., '1' DAY) — the offset is treated as a row count regardless of mode. " +
-                  "When INTERVAL-bounded RANGE frames land, this test should pass; until then the " +
-                  "engine silently produces wrong results rather than raising NotSupportedException.")]
+    [Fact]
     public void Query_WindowAggregate_RangeIntervalDayPreceding_ProducesWindowOverDateRange()
     {
-        // SELECT EventDate, SUM(Amount) OVER (ORDER BY EventDate
-        //   RANGE BETWEEN INTERVAL '1' DAY PRECEDING AND CURRENT ROW) AS rolling FROM Events
-        // Once supported, rows within 1 day of the current row's EventDate should be summed.
-        Assert.True(true, "See Skip reason — gated on engine support for RANGE INTERVAL frames.");
+        // Issue #170: RANGE BETWEEN INTERVAL '1' DAY PRECEDING AND CURRENT ROW.
+        // The engine handles INTERVAL bounds; grammar-side parsing of
+        // `RANGE BETWEEN INTERVAL...` is a follow-up issue, so this test constructs the
+        // SqlSelectDefinition and SqlWindowSpecification programmatically.
+        const string databaseName = "MyDB";
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable table = new(databaseName, "Events");
+
+        SqlColumn dateCol = new(databaseName, "Events", "EventDate") { ColumnType = typeof(DateTime), TableRef = table };
+        SqlColumn amountCol = new(databaseName, "Events", "Amount") { ColumnType = typeof(int), TableRef = table };
+        sqlSelect.Columns.Add(dateCol);
+
+        var agg = new SqlAggregate("SUM", new SqlExpression(new SqlColumnRef(null, null, "Amount") { Column = amountCol }))
+        {
+            ColumnAlias = "rolling",
+            WindowSpecification = new SqlWindowSpecification
+            {
+                OrderBy = { new SqlOrderByColumn("EventDate") },
+                Frame = new SqlWindowFrame(
+                    WindowFrameMode.Range,
+                    new SqlWindowFrameBound(WindowFrameBoundType.Preceding, new IntervalLiteral(1, IntervalQualifier.Day)),
+                    new SqlWindowFrameBound(WindowFrameBoundType.CurrentRow))
+            }
+        };
+        sqlSelect.Columns.Add(agg);
+        sqlSelect.Table = table;
+
+        DataSet dataSet = new(databaseName);
+        DataTable events = new("Events");
+        events.Columns.Add("EventDate", typeof(DateTime));
+        events.Columns.Add("Amount", typeof(int));
+        // Rows spaced exactly 1 day apart. RANGE BETWEEN INTERVAL '1' DAY PRECEDING AND CURRENT ROW
+        // includes rows whose EventDate >= current - 1 day. So the window is at most prev + current.
+        events.Rows.Add(new DateTime(2026, 1, 1), 10);
+        events.Rows.Add(new DateTime(2026, 1, 2), 20);
+        events.Rows.Add(new DateTime(2026, 1, 3), 30);
+        // Boundary check: skip a day, so this row's window is just itself (no prior within 1 day).
+        events.Rows.Add(new DateTime(2026, 1, 5), 40);
+        events.Rows.Add(new DateTime(2026, 1, 6), 50);
+        dataSet.Tables.Add(events);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var result = queryEngine.QueryAsDataTable();
+
+        Assert.Equal(5, result.Rows.Count);
+        // Row 0 (Jan 1):  only itself                                         → 10.
+        // Row 1 (Jan 2):  prev (10) + current (20)                            → 30.
+        // Row 2 (Jan 3):  prev (20) + current (30)                            → 50.
+        // Row 3 (Jan 5):  Jan 4 missing; only itself                          → 40.
+        // Row 4 (Jan 6):  prev (40) + current (50)                            → 90.
+        Assert.Equal(10, Convert.ToInt32(result.Rows[0]["rolling"]));
+        Assert.Equal(30, Convert.ToInt32(result.Rows[1]["rolling"]));
+        Assert.Equal(50, Convert.ToInt32(result.Rows[2]["rolling"]));
+        Assert.Equal(40, Convert.ToInt32(result.Rows[3]["rolling"]));
+        Assert.Equal(90, Convert.ToInt32(result.Rows[4]["rolling"]));
     }
 
     [Fact]
@@ -3776,42 +3823,238 @@ public class QueryEngineTests
         Assert.Equal(DBNull.Value, result.Rows[1]["fifth_salary"]);
     }
 
-    [Fact(Skip = "FINDING: QueryEngine does not validate that LAG/LEAD have at least one argument. " +
-                  "Per SQL:2003, LAG()/LEAD() are invalid without an expression argument and the " +
-                  "parser should reject them. Currently the parser may accept LAG() and the engine " +
-                  "would then crash at runtime (IndexOutOfRange) when accessing function.Arguments[0] " +
-                  "rather than producing a clean parser-side error. This test should pass once a " +
-                  "validation step in the grammar or in QueryEngine rejects empty-arg LAG/LEAD with a " +
-                  "clear NotSupportedException.")]
+    [Fact]
     public void Query_Lag_NoArguments_ParserOrEngineRejects()
     {
-        // SELECT LAG() OVER (ORDER BY Name) FROM Employees
-        // Expected: clean validation error. Until then the call would either be
-        // accepted silently or fail with a non-deterministic exception type.
-        Assert.True(true, "See Skip reason — gated on validation support.");
+        // Issue #171: LAG() with no arguments must produce a clean engine-side error,
+        // not IndexOutOfRangeException or silent DBNull.
+        const string databaseName = "MyDB";
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable table = new(databaseName, "Employees");
+
+        SqlColumn nameCol = new(databaseName, "Employees", "Name") { ColumnType = typeof(string), TableRef = table };
+        sqlSelect.Columns.Add(nameCol);
+
+        var lag = new SqlFunction("LAG") { ValueType = typeof(string) };
+        // Intentionally no arguments.
+        lag.WindowSpecification = new SqlWindowSpecification
+        {
+            OrderBy = { new SqlOrderByColumn("Name") }
+        };
+        sqlSelect.Columns.Add(new SqlFunctionColumn(lag) { ColumnAlias = "prev_name" });
+        sqlSelect.Table = table;
+
+        DataSet dataSet = new(databaseName);
+        DataTable employees = new("Employees");
+        employees.Columns.Add("Name", typeof(string));
+        employees.Rows.Add("Alice");
+        employees.Rows.Add("Bob");
+        dataSet.Tables.Add(employees);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+
+        var ex = Assert.Throws<NotSupportedException>(() => queryEngine.QueryAsDataTable());
+        Assert.Contains("LAG", ex.Message);
+        Assert.Contains("at least one argument", ex.Message);
     }
 
-    [Fact(Skip = "FINDING: QueryEngine does not enforce SQL:2003 §7.11 — window functions are " +
-                  "permitted only in SELECT and ORDER BY, not in WHERE / HAVING / GROUP BY. " +
-                  "The engine currently builds the WHERE predicate via SqlBinaryExpression.BuildExpression " +
-                  "with no awareness of window-function context; placing ROW_NUMBER() OVER (...) inside " +
-                  "WHERE either silently misbehaves or throws a generic exception. This test should pass " +
-                  "once a semantic check raises NotSupportedException naming WHERE/HAVING.")]
+    [Fact]
+    public void Query_Lead_NoArguments_ParserOrEngineRejects()
+    {
+        // Issue #171: symmetric coverage for LEAD — same validation must apply.
+        const string databaseName = "MyDB";
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable table = new(databaseName, "Employees");
+
+        SqlColumn nameCol = new(databaseName, "Employees", "Name") { ColumnType = typeof(string), TableRef = table };
+        sqlSelect.Columns.Add(nameCol);
+
+        var lead = new SqlFunction("LEAD") { ValueType = typeof(string) };
+        // Intentionally no arguments.
+        lead.WindowSpecification = new SqlWindowSpecification
+        {
+            OrderBy = { new SqlOrderByColumn("Name") }
+        };
+        sqlSelect.Columns.Add(new SqlFunctionColumn(lead) { ColumnAlias = "next_name" });
+        sqlSelect.Table = table;
+
+        DataSet dataSet = new(databaseName);
+        DataTable employees = new("Employees");
+        employees.Columns.Add("Name", typeof(string));
+        employees.Rows.Add("Alice");
+        employees.Rows.Add("Bob");
+        dataSet.Tables.Add(employees);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+
+        var ex = Assert.Throws<NotSupportedException>(() => queryEngine.QueryAsDataTable());
+        Assert.Contains("LEAD", ex.Message);
+        Assert.Contains("at least one argument", ex.Message);
+    }
+
+    [Fact]
     public void Query_WindowFunctionInWhereClause_Rejected()
     {
+        // Issue #172 / SQL:2003 §7.11 — window functions are illegal in WHERE.
         // SELECT Name FROM Employees WHERE ROW_NUMBER() OVER (ORDER BY Name) > 1
-        // Expected: clean rejection with a message identifying WHERE.
-        Assert.True(true, "See Skip reason — gated on validation support.");
+        const string databaseName = "MyDB";
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable table = new(databaseName, "Employees");
+        SqlColumn nameCol = new(databaseName, "Employees", "Name") { ColumnType = typeof(string), TableRef = table };
+        sqlSelect.Columns.Add(nameCol);
+        sqlSelect.Table = table;
+
+        var rowNumberFunc = new SqlFunction("ROW_NUMBER") { ValueType = typeof(int) };
+        rowNumberFunc.WindowSpecification = new SqlWindowSpecification
+        {
+            OrderBy = { new SqlOrderByColumn("Name") }
+        };
+
+        var whereExpr = new SqlBinaryExpression(
+            new SqlExpression(rowNumberFunc),
+            SqlBinaryOperator.GreaterThan,
+            new SqlExpression(new SqlLiteralValue(1)));
+        sqlSelect.WhereClause = new SqlExpression(whereExpr);
+
+        DataSet dataSet = new(databaseName);
+        DataTable employees = new("Employees");
+        employees.Columns.Add("Name", typeof(string));
+        employees.Rows.Add("Alice");
+        dataSet.Tables.Add(employees);
+
+        QueryEngine engine = new(new DataSet[] { dataSet }, sqlSelect);
+        var ex = Assert.Throws<SqlExecutionException>(() => engine.QueryAsDataTable());
+        Assert.Contains("WHERE", ex.Message);
+        Assert.Contains("SQL:2003 §7.11", ex.Message);
     }
 
-    [Fact(Skip = "FINDING: Window functions in HAVING are not rejected per SQL:2003 §7.11. " +
-                  "See companion test Query_WindowFunctionInWhereClause_Rejected.")]
+    [Fact]
     public void Query_WindowFunctionInHavingClause_Rejected()
     {
+        // Issue #172 / SQL:2003 §7.11 — window functions are illegal in HAVING.
         // SELECT Dept, COUNT(*) FROM Employees GROUP BY Dept
         //   HAVING ROW_NUMBER() OVER (ORDER BY Dept) > 1
-        // Expected: clean rejection with a message identifying HAVING.
-        Assert.True(true, "See Skip reason — gated on validation support.");
+        const string databaseName = "MyDB";
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable table = new(databaseName, "Employees");
+        SqlColumn deptCol = new(databaseName, "Employees", "Dept") { ColumnType = typeof(string), TableRef = table };
+        sqlSelect.Columns.Add(deptCol);
+        sqlSelect.Columns.Add(new SqlAggregate("COUNT") { ColumnAlias = "cnt" });
+        sqlSelect.Table = table;
+        sqlSelect.GroupBy = new SqlGroupByClause();
+        sqlSelect.GroupBy.Columns.Add("Dept");
+
+        var rowNumberFunc = new SqlFunction("ROW_NUMBER") { ValueType = typeof(int) };
+        rowNumberFunc.WindowSpecification = new SqlWindowSpecification
+        {
+            OrderBy = { new SqlOrderByColumn("Dept") }
+        };
+
+        var havingExpr = new SqlBinaryExpression(
+            new SqlExpression(rowNumberFunc),
+            SqlBinaryOperator.GreaterThan,
+            new SqlExpression(new SqlLiteralValue(1)));
+        sqlSelect.HavingClause = new SqlExpression(havingExpr);
+
+        DataSet dataSet = new(databaseName);
+        DataTable employees = new("Employees");
+        employees.Columns.Add("Dept", typeof(string));
+        employees.Rows.Add("Engineering");
+        dataSet.Tables.Add(employees);
+
+        QueryEngine engine = new(new DataSet[] { dataSet }, sqlSelect);
+        var ex = Assert.Throws<SqlExecutionException>(() => engine.QueryAsDataTable());
+        Assert.Contains("HAVING", ex.Message);
+        Assert.Contains("SQL:2003 §7.11", ex.Message);
+    }
+
+    [Fact]
+    public void Query_WindowFunctionInJoinOnPredicate_Rejected()
+    {
+        // Issue #172 / SQL:2003 §7.11 — window functions are illegal in JOIN ON predicates.
+        // SELECT a.id FROM A a INNER JOIN B b ON a.id = ROW_NUMBER() OVER (ORDER BY b.id)
+        const string databaseName = "MyDB";
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable aTable = new(databaseName, "A") { TableAlias = "a" };
+        SqlTable bTable = new(databaseName, "B") { TableAlias = "b" };
+        SqlColumn idCol = new(databaseName, "a", "id") { ColumnType = typeof(int), TableRef = aTable };
+        sqlSelect.Columns.Add(idCol);
+        sqlSelect.Table = aTable;
+
+        var rowNumberFunc = new SqlFunction("ROW_NUMBER") { ValueType = typeof(int) };
+        rowNumberFunc.WindowSpecification = new SqlWindowSpecification
+        {
+            OrderBy = { new SqlOrderByColumn("id") }
+        };
+
+        SqlColumnRef aIdRef = new(null, "a", "id") { Column = new SqlColumn(databaseName, "a", "id") { ColumnType = typeof(int), TableRef = aTable } };
+        var joinCondition = new SqlBinaryExpression(
+            new SqlExpression(aIdRef),
+            SqlBinaryOperator.Equal,
+            new SqlExpression(rowNumberFunc));
+        sqlSelect.Joins.Add(new SqlJoin(bTable, joinCondition));
+
+        DataSet dataSet = new(databaseName);
+        DataTable a = new("A"); a.Columns.Add("id", typeof(int)); a.Rows.Add(1);
+        DataTable b = new("B"); b.Columns.Add("id", typeof(int)); b.Rows.Add(1);
+        dataSet.Tables.Add(a);
+        dataSet.Tables.Add(b);
+
+        QueryEngine engine = new(new DataSet[] { dataSet }, sqlSelect);
+        var ex = Assert.Throws<SqlExecutionException>(() => engine.QueryAsDataTable());
+        Assert.Contains("JOIN ON", ex.Message);
+        Assert.Contains("SQL:2003 §7.11", ex.Message);
+    }
+
+    [Fact]
+    public void Query_ScalarSubqueryContainingWindowFunction_NotRejectedByPositionValidator()
+    {
+        // Issue #172 — A scalar subquery in WHERE whose SELECT list contains a window function
+        // is legal per SQL:2003. The position validator must NOT recurse into nested SELECT
+        // bodies and must not throw the §7.11 error here.
+        //
+        // SELECT Name FROM Employees WHERE id = (SELECT ROW_NUMBER() OVER (ORDER BY Name) FROM Employees)
+        const string databaseName = "MyDB";
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable table = new(databaseName, "Employees");
+        SqlColumn nameCol = new(databaseName, "Employees", "Name") { ColumnType = typeof(string), TableRef = table };
+        sqlSelect.Columns.Add(nameCol);
+        sqlSelect.Table = table;
+
+        // Build the inner SELECT that legally contains a window function in its SELECT list.
+        SqlSelectDefinition innerSelect = new();
+        SqlTable innerTable = new(databaseName, "Employees");
+        var innerWindow = new SqlFunction("ROW_NUMBER") { ValueType = typeof(int) };
+        innerWindow.WindowSpecification = new SqlWindowSpecification
+        {
+            OrderBy = { new SqlOrderByColumn("Name") }
+        };
+        innerSelect.Columns.Add(new SqlFunctionColumn(innerWindow) { ColumnAlias = "rn" });
+        innerSelect.Table = innerTable;
+
+        // Outer WHERE: id = (inner scalar subquery).
+        SqlColumnRef idRef = new(databaseName, "Employees", "id") { Column = new SqlColumn(databaseName, "Employees", "id") { ColumnType = typeof(int), TableRef = table } };
+        var whereExpr = new SqlBinaryExpression(
+            new SqlExpression(idRef),
+            SqlBinaryOperator.Equal,
+            new SqlExpression(new SqlScalarSubqueryExpression(innerSelect)));
+        sqlSelect.WhereClause = new SqlExpression(whereExpr);
+
+        DataSet dataSet = new(databaseName);
+        DataTable employees = new("Employees");
+        employees.Columns.Add("id", typeof(int));
+        employees.Columns.Add("Name", typeof(string));
+        employees.Rows.Add(1, "Alice");
+        dataSet.Tables.Add(employees);
+
+        QueryEngine engine = new(new DataSet[] { dataSet }, sqlSelect);
+        // The engine itself does not support scalar subquery LINQ generation and may throw
+        // NotSupportedException — but it must NOT throw the §7.11 SqlExecutionException.
+        var ex = Record.Exception(() => engine.QueryAsDataTable());
+        if (ex is SqlExecutionException sqlEx)
+        {
+            Assert.DoesNotContain("SQL:2003 §7.11", sqlEx.Message);
+        }
     }
 
     #endregion
