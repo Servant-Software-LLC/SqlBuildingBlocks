@@ -3236,66 +3236,361 @@ public class QueryEngineTests
     #endregion
 
     // ======================================================================
-    // Issue #164 — Recursive CTE execution tests.
-    // The parser sets SqlCteDefinition.IsRecursive (#125), but
-    // QueryEngine.ExecuteCte runs the CTE's SELECT once with no recursive
-    // expansion (no anchor + recursive-term iteration loop). The tests below
-    // exercise execution of a recursive CTE; if the engine does not yet
-    // implement recursive expansion, the tests are skipped with a FINDING.
+    // Issue #168 — Recursive CTE execution tests.
+    // QueryEngine.ExecuteCte now dispatches to ExecuteRecursiveCte when
+    // SqlCteDefinition.IsRecursive is true. The executor runs the anchor body
+    // once, then iterates the recursive term (UNION ALL right side) against
+    // the working set until the working set is empty (natural termination)
+    // or QueryEngineOptions.MaxRecursionDepth is exceeded (typed
+    // SqlExecutionException). UNION (deduplicating) is rejected.
+    //
+    // The hand-built ASTs below mirror the existing CTE-test pattern at
+    // Query_WithCte_ReturnsCteDerivedRows: explicit TableRef wiring, no
+    // ResolveReferences() call, anchor body in cte.SelectDefinition + recursive
+    // term in cte.SelectDefinition.SetOperations[0].Right.
     // ======================================================================
-    #region Issue #164 — Recursive CTE Execution Tests
+    #region Issue #168 — Recursive CTE Execution Tests
 
-    [Fact(Skip = "FINDING: QueryEngine.ExecuteCte does not implement recursive expansion. " +
-                  "It runs the CTE SELECT once and ignores SqlCteDefinition.IsRecursive. " +
-                  "A recursive CTE that walks an Employees->Manager hierarchy returns only the " +
-                  "anchor rows (the union arm cannot reference the CTE alias mid-build). " +
-                  "Tracking issue: recursive CTE execution is parsed but not executed.")]
+    /// <summary>
+    /// Builds a hand-built recursive CTE: anchor selects the root row (parent_id=0),
+    /// recursive term joins Hierarchy.parent_id = org.id to walk descendants. The id
+    /// column is returned at top level. Expected: full transitive closure (5 rows for
+    /// the tree {1, (2,3)→1, (4,5)→2}).
+    /// </summary>
+    /// <remarks>
+    /// We use parent_id=0 as a "no-parent" sentinel (instead of NULL) because the
+    /// engine's expression-builder cannot promote DBNull to int in JOIN equality
+    /// predicates — so any DBNull in a join column would crash before the recursive
+    /// loop completes. This restriction is unrelated to the recursive-CTE work.
+    /// </remarks>
+    [Fact]
     public void Query_RecursiveCte_HierarchyTraversal_TraversesAllLevels()
     {
-        // WITH RECURSIVE org(id, manager_id, level) AS (
-        //   SELECT id, manager_id, 1 FROM Employees WHERE manager_id IS NULL  -- anchor (CEO)
-        //   UNION ALL
-        //   SELECT e.id, e.manager_id, org.level + 1 FROM Employees e JOIN org ON e.manager_id = org.id
-        // )
-        // SELECT id, level FROM org
-        //
-        // Expected with proper recursion: every employee (5 rows) with their depth.
-        // Without recursion: only the anchor row(s).
-        Assert.True(true, "See Skip reason — gated on engine support.");
+        const string databaseName = "MyDB";
+        const string cteName = "org";
+
+        // ── Anchor: SELECT id, parent_id FROM Hierarchy WHERE parent_id = 0 ──
+        var anchorSelect = new SqlSelectDefinition();
+        var anchorTable = new SqlTable(databaseName, "Hierarchy");
+        anchorSelect.Table = anchorTable;
+        var anchorIdCol = new SqlColumn(databaseName, "Hierarchy", "id") { ColumnType = typeof(int), TableRef = anchorTable };
+        var anchorParentCol = new SqlColumn(databaseName, "Hierarchy", "parent_id") { ColumnType = typeof(int), TableRef = anchorTable };
+        anchorSelect.Columns.Add(anchorIdCol);
+        anchorSelect.Columns.Add(anchorParentCol);
+        // WHERE parent_id = 0
+        var anchorWhereCol = new SqlColumn(databaseName, "Hierarchy", "parent_id") { ColumnType = typeof(int), TableRef = anchorTable };
+        var anchorWhereRef = new SqlColumnRef(null, "Hierarchy", "parent_id") { Column = anchorWhereCol };
+        anchorSelect.WhereClause = new SqlExpression(
+            new SqlBinaryExpression(
+                new SqlExpression(anchorWhereRef),
+                SqlBinaryOperator.Equal,
+                new SqlExpression(new SqlLiteralValue(0))));
+
+        // ── Recursive term: SELECT h.id, h.parent_id FROM Hierarchy h JOIN org ON h.parent_id = org.id ──
+        var recursiveSelect = new SqlSelectDefinition();
+        var hierarchyAliased = new SqlTable(databaseName, "Hierarchy") { TableAlias = "h" };
+        // The CTE table — not a SqlCteTable; the engine looks up by name in CteTableDataProvider.
+        var orgTable = new SqlTable(databaseName, cteName);
+        recursiveSelect.Table = hierarchyAliased;
+
+        var recIdCol = new SqlColumn(databaseName, "Hierarchy", "id") { ColumnType = typeof(int), TableRef = hierarchyAliased };
+        var recParentCol = new SqlColumn(databaseName, "Hierarchy", "parent_id") { ColumnType = typeof(int), TableRef = hierarchyAliased };
+        recursiveSelect.Columns.Add(recIdCol);
+        recursiveSelect.Columns.Add(recParentCol);
+
+        // ON h.parent_id = org.id
+        var leftJoinCol = new SqlColumn(databaseName, "Hierarchy", "parent_id") { ColumnType = typeof(int), TableRef = hierarchyAliased };
+        var leftJoinRef = new SqlColumnRef(null, "h", "parent_id") { Column = leftJoinCol };
+        var rightJoinCol = new SqlColumn(databaseName, cteName, "id") { ColumnType = typeof(int), TableRef = orgTable };
+        var rightJoinRef = new SqlColumnRef(null, cteName, "id") { Column = rightJoinCol };
+        var joinCond = new SqlBinaryExpression(new SqlExpression(leftJoinRef), SqlBinaryOperator.Equal, new SqlExpression(rightJoinRef));
+        recursiveSelect.Joins.Add(new SqlJoin(orgTable, joinCond));
+
+        // ── Wire UNION ALL on the CTE body: anchorSelect + (UNION ALL recursiveSelect) ──
+        anchorSelect.SetOperations.Add(new SqlSetOperation(SqlSetOperator.UnionAll, recursiveSelect));
+
+        // ── Main query: SELECT id FROM org ──
+        var sqlSelect = new SqlSelectDefinition();
+        var mainOrgTable = new SqlTable(databaseName, cteName);
+        sqlSelect.Table = mainOrgTable;
+        sqlSelect.Columns.Add(new SqlColumn(databaseName, cteName, "id") { ColumnType = typeof(int), TableRef = mainOrgTable });
+        sqlSelect.Ctes.Add(new SqlCteDefinition(cteName, anchorSelect, isRecursive: true));
+
+        // ── Data: tree {1=root (parent=0), 2,3 → 1, 4,5 → 2} ──
+        DataSet dataSet = new(databaseName);
+        DataTable hierarchy = new("Hierarchy");
+        hierarchy.Columns.Add("id", typeof(int));
+        hierarchy.Columns.Add("parent_id", typeof(int));
+        hierarchy.Rows.Add(1, 0); // root sentinel
+        hierarchy.Rows.Add(2, 1);
+        hierarchy.Rows.Add(3, 1);
+        hierarchy.Rows.Add(4, 2);
+        hierarchy.Rows.Add(5, 2);
+        dataSet.Tables.Add(hierarchy);
+
+        var queryEngine = new QueryEngine(new[] { dataSet }, sqlSelect);
+        var result = queryEngine.QueryAsDataTable();
+
+        // All 5 employees in the tree should be returned.
+        Assert.Equal(5, result.Rows.Count);
+        var ids = result.Rows.Cast<DataRow>().Select(r => Convert.ToInt32(r["id"])).OrderBy(i => i).ToArray();
+        Assert.Equal(new[] { 1, 2, 3, 4, 5 }, ids);
     }
 
-    [Fact(Skip = "FINDING: QueryEngine.ExecuteCte does not implement recursive expansion. " +
-                  "Bounded recursion (e.g., counter <= N) cannot terminate properly because " +
-                  "the recursive arm is never iterated by the engine.")]
+    /// <summary>
+    /// Bounded recursion via natural termination: a recursive CTE whose recursive term
+    /// produces empty rows after a finite number of iterations because the JOIN
+    /// stops finding matches. Asserts the executor terminates without raising the
+    /// depth-limit guard.
+    /// </summary>
+    [Fact]
     public void Query_RecursiveCte_BoundedRecursion_TerminatesAtBound()
     {
-        // WITH RECURSIVE counter(n) AS (
-        //   SELECT 1
-        //   UNION ALL
-        //   SELECT n + 1 FROM counter WHERE n < 5
-        // )
-        // SELECT n FROM counter
-        // Expected: rows 1..5.
-        Assert.True(true, "See Skip reason — gated on engine support.");
+        const string databaseName = "MyDB";
+        const string cteName = "chain_cte";
+
+        // ── Anchor: SELECT id, next_id FROM Chain WHERE id = 1 ──
+        var anchorSelect = new SqlSelectDefinition();
+        var anchorTable = new SqlTable(databaseName, "Chain");
+        anchorSelect.Table = anchorTable;
+        anchorSelect.Columns.Add(new SqlColumn(databaseName, "Chain", "id") { ColumnType = typeof(int), TableRef = anchorTable });
+        anchorSelect.Columns.Add(new SqlColumn(databaseName, "Chain", "next_id") { ColumnType = typeof(int), TableRef = anchorTable });
+
+        var anchorWhereCol = new SqlColumn(databaseName, "Chain", "id") { ColumnType = typeof(int), TableRef = anchorTable };
+        var anchorWhereRef = new SqlColumnRef(null, "Chain", "id") { Column = anchorWhereCol };
+        anchorSelect.WhereClause = new SqlExpression(
+            new SqlBinaryExpression(
+                new SqlExpression(anchorWhereRef),
+                SqlBinaryOperator.Equal,
+                new SqlExpression(new SqlLiteralValue(1))));
+
+        // ── Recursive term: SELECT c.id, c.next_id FROM Chain c JOIN chain ON c.id = chain.next_id ──
+        var recursiveSelect = new SqlSelectDefinition();
+        var chainAliased = new SqlTable(databaseName, "Chain") { TableAlias = "c" };
+        var cteRef = new SqlTable(databaseName, cteName);
+        recursiveSelect.Table = chainAliased;
+        recursiveSelect.Columns.Add(new SqlColumn(databaseName, "Chain", "id") { ColumnType = typeof(int), TableRef = chainAliased });
+        recursiveSelect.Columns.Add(new SqlColumn(databaseName, "Chain", "next_id") { ColumnType = typeof(int), TableRef = chainAliased });
+
+        var leftJoinCol = new SqlColumn(databaseName, "Chain", "id") { ColumnType = typeof(int), TableRef = chainAliased };
+        var leftJoinRef = new SqlColumnRef(null, "c", "id") { Column = leftJoinCol };
+        var rightJoinCol = new SqlColumn(databaseName, cteName, "next_id") { ColumnType = typeof(int), TableRef = cteRef };
+        var rightJoinRef = new SqlColumnRef(null, cteName, "next_id") { Column = rightJoinCol };
+        var joinCond = new SqlBinaryExpression(new SqlExpression(leftJoinRef), SqlBinaryOperator.Equal, new SqlExpression(rightJoinRef));
+        recursiveSelect.Joins.Add(new SqlJoin(cteRef, joinCond));
+
+        anchorSelect.SetOperations.Add(new SqlSetOperation(SqlSetOperator.UnionAll, recursiveSelect));
+
+        // ── Main: SELECT id FROM chain ──
+        var sqlSelect = new SqlSelectDefinition();
+        var mainCteTable = new SqlTable(databaseName, cteName);
+        sqlSelect.Table = mainCteTable;
+        sqlSelect.Columns.Add(new SqlColumn(databaseName, cteName, "id") { ColumnType = typeof(int), TableRef = mainCteTable });
+        sqlSelect.Ctes.Add(new SqlCteDefinition(cteName, anchorSelect, isRecursive: true));
+
+        // ── Data: 1 → 2 → 3 → 99 (no row 99 exists, so the chain terminates by JOIN miss). ──
+        // We use a sentinel non-existent next_id rather than DBNull because the engine's
+        // expression-builder doesn't promote DBNull to int in the JOIN equality predicate.
+        DataSet dataSet = new(databaseName);
+        DataTable chain = new("Chain");
+        chain.Columns.Add("id", typeof(int));
+        chain.Columns.Add("next_id", typeof(int));
+        chain.Rows.Add(1, 2);
+        chain.Rows.Add(2, 3);
+        chain.Rows.Add(3, 99); // 99 has no matching id, so the recursive JOIN finds zero rows.
+        dataSet.Tables.Add(chain);
+
+        var queryEngine = new QueryEngine(new[] { dataSet }, sqlSelect);
+        var result = queryEngine.QueryAsDataTable();
+
+        // 3 nodes, terminates naturally — well below the default depth limit of 100.
+        Assert.Equal(3, result.Rows.Count);
+        var ids = result.Rows.Cast<DataRow>().Select(r => Convert.ToInt32(r["id"])).OrderBy(i => i).ToArray();
+        Assert.Equal(new[] { 1, 2, 3 }, ids);
     }
 
-    [Fact(Skip = "FINDING: QueryEngine.ExecuteCte does not implement recursive expansion or " +
-                  "depth/cycle protection. A runaway-recursion guard is also missing — " +
-                  "no MAXRECURSION / cycle-detection clause is enforced. " +
-                  "When recursive execution lands, this test should assert that runaway " +
-                  "recursion (no terminating predicate, e.g., SELECT n+1 FROM counter with " +
-                  "no WHERE bound) raises a runtime error or stops at a configured depth limit.")]
+    /// <summary>
+    /// Runaway recursion: the recursive term's JOIN always matches because the data
+    /// contains a self-loop, so each iteration produces a non-empty working set. The
+    /// engine must abort with <see cref="SqlExecutionException"/> when the depth
+    /// counter reaches <see cref="QueryEngineOptions.MaxRecursionDepth"/>. The error
+    /// message must name the CTE and the depth limit per the ADR.
+    /// </summary>
+    [Fact]
     public void Query_RecursiveCte_RunawayRecursion_Throws()
     {
-        // WITH RECURSIVE counter(n) AS (
-        //   SELECT 1
-        //   UNION ALL
-        //   SELECT n + 1 FROM counter         -- no terminating predicate
-        // )
-        // SELECT n FROM counter
-        // Expected (when implemented): the engine should detect the lack of a
-        // terminating predicate / cycle and raise an error rather than loop forever.
-        Assert.True(true, "See Skip reason — gated on engine support.");
+        const string databaseName = "MyDB";
+        const string cteName = "loop_cte";
+
+        // ── Anchor: SELECT id, next_id FROM SelfLoop WHERE id = 1 ──
+        var anchorSelect = new SqlSelectDefinition();
+        var anchorTable = new SqlTable(databaseName, "SelfLoop");
+        anchorSelect.Table = anchorTable;
+        anchorSelect.Columns.Add(new SqlColumn(databaseName, "SelfLoop", "id") { ColumnType = typeof(int), TableRef = anchorTable });
+        anchorSelect.Columns.Add(new SqlColumn(databaseName, "SelfLoop", "next_id") { ColumnType = typeof(int), TableRef = anchorTable });
+        var anchorWhereCol = new SqlColumn(databaseName, "SelfLoop", "id") { ColumnType = typeof(int), TableRef = anchorTable };
+        var anchorWhereRef = new SqlColumnRef(null, "SelfLoop", "id") { Column = anchorWhereCol };
+        anchorSelect.WhereClause = new SqlExpression(
+            new SqlBinaryExpression(
+                new SqlExpression(anchorWhereRef),
+                SqlBinaryOperator.Equal,
+                new SqlExpression(new SqlLiteralValue(1))));
+
+        // ── Recursive term: SELECT s.id, s.next_id FROM SelfLoop s JOIN loop_cte ON s.id = loop_cte.next_id ──
+        var recursiveSelect = new SqlSelectDefinition();
+        var loopAliased = new SqlTable(databaseName, "SelfLoop") { TableAlias = "s" };
+        var cteRef = new SqlTable(databaseName, cteName);
+        recursiveSelect.Table = loopAliased;
+        recursiveSelect.Columns.Add(new SqlColumn(databaseName, "SelfLoop", "id") { ColumnType = typeof(int), TableRef = loopAliased });
+        recursiveSelect.Columns.Add(new SqlColumn(databaseName, "SelfLoop", "next_id") { ColumnType = typeof(int), TableRef = loopAliased });
+
+        var leftJoinCol = new SqlColumn(databaseName, "SelfLoop", "id") { ColumnType = typeof(int), TableRef = loopAliased };
+        var leftJoinRef = new SqlColumnRef(null, "s", "id") { Column = leftJoinCol };
+        var rightJoinCol = new SqlColumn(databaseName, cteName, "next_id") { ColumnType = typeof(int), TableRef = cteRef };
+        var rightJoinRef = new SqlColumnRef(null, cteName, "next_id") { Column = rightJoinCol };
+        var joinCond = new SqlBinaryExpression(new SqlExpression(leftJoinRef), SqlBinaryOperator.Equal, new SqlExpression(rightJoinRef));
+        recursiveSelect.Joins.Add(new SqlJoin(cteRef, joinCond));
+
+        anchorSelect.SetOperations.Add(new SqlSetOperation(SqlSetOperator.UnionAll, recursiveSelect));
+
+        var sqlSelect = new SqlSelectDefinition();
+        var mainCteTable = new SqlTable(databaseName, cteName);
+        sqlSelect.Table = mainCteTable;
+        sqlSelect.Columns.Add(new SqlColumn(databaseName, cteName, "id") { ColumnType = typeof(int), TableRef = mainCteTable });
+        sqlSelect.Ctes.Add(new SqlCteDefinition(cteName, anchorSelect, isRecursive: true));
+
+        // ── Data: 1 → 2 → 1 → 2 → ... infinite loop ──
+        DataSet dataSet = new(databaseName);
+        DataTable selfLoop = new("SelfLoop");
+        selfLoop.Columns.Add("id", typeof(int));
+        selfLoop.Columns.Add("next_id", typeof(int));
+        selfLoop.Rows.Add(1, 2);
+        selfLoop.Rows.Add(2, 1);
+        dataSet.Tables.Add(selfLoop);
+
+        var queryEngine = new QueryEngine(new[] { dataSet }, sqlSelect);
+
+        var ex = Assert.Throws<SqlExecutionException>(() => queryEngine.QueryAsDataTable());
+        Assert.Contains(cteName, ex.Message);
+        Assert.Contains("100", ex.Message); // default depth limit per ADR
+        Assert.Contains("recursion depth", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Configurable depth limit: override <see cref="QueryEngineOptions.MaxRecursionDepth"/>
+    /// to a small value and assert the depth-limit guard fires at exactly that value.
+    /// Reuses the runaway data shape (self-loop) so iteration is unbounded by data.
+    /// </summary>
+    [Fact]
+    public void Query_RecursiveCte_CustomDepthLimit_FiresAtConfiguredLimit()
+    {
+        const string databaseName = "MyDB";
+        const string cteName = "small_loop";
+        const int customDepth = 5;
+
+        var anchorSelect = new SqlSelectDefinition();
+        var anchorTable = new SqlTable(databaseName, "Loop2");
+        anchorSelect.Table = anchorTable;
+        anchorSelect.Columns.Add(new SqlColumn(databaseName, "Loop2", "id") { ColumnType = typeof(int), TableRef = anchorTable });
+        anchorSelect.Columns.Add(new SqlColumn(databaseName, "Loop2", "next_id") { ColumnType = typeof(int), TableRef = anchorTable });
+        var anchorWhereCol = new SqlColumn(databaseName, "Loop2", "id") { ColumnType = typeof(int), TableRef = anchorTable };
+        var anchorWhereRef = new SqlColumnRef(null, "Loop2", "id") { Column = anchorWhereCol };
+        anchorSelect.WhereClause = new SqlExpression(
+            new SqlBinaryExpression(
+                new SqlExpression(anchorWhereRef),
+                SqlBinaryOperator.Equal,
+                new SqlExpression(new SqlLiteralValue(1))));
+
+        var recursiveSelect = new SqlSelectDefinition();
+        var loopAliased = new SqlTable(databaseName, "Loop2") { TableAlias = "l" };
+        var cteRef = new SqlTable(databaseName, cteName);
+        recursiveSelect.Table = loopAliased;
+        recursiveSelect.Columns.Add(new SqlColumn(databaseName, "Loop2", "id") { ColumnType = typeof(int), TableRef = loopAliased });
+        recursiveSelect.Columns.Add(new SqlColumn(databaseName, "Loop2", "next_id") { ColumnType = typeof(int), TableRef = loopAliased });
+        var leftJoinCol = new SqlColumn(databaseName, "Loop2", "id") { ColumnType = typeof(int), TableRef = loopAliased };
+        var leftJoinRef = new SqlColumnRef(null, "l", "id") { Column = leftJoinCol };
+        var rightJoinCol = new SqlColumn(databaseName, cteName, "next_id") { ColumnType = typeof(int), TableRef = cteRef };
+        var rightJoinRef = new SqlColumnRef(null, cteName, "next_id") { Column = rightJoinCol };
+        var joinCond = new SqlBinaryExpression(new SqlExpression(leftJoinRef), SqlBinaryOperator.Equal, new SqlExpression(rightJoinRef));
+        recursiveSelect.Joins.Add(new SqlJoin(cteRef, joinCond));
+
+        anchorSelect.SetOperations.Add(new SqlSetOperation(SqlSetOperator.UnionAll, recursiveSelect));
+
+        var sqlSelect = new SqlSelectDefinition();
+        var mainCteTable = new SqlTable(databaseName, cteName);
+        sqlSelect.Table = mainCteTable;
+        sqlSelect.Columns.Add(new SqlColumn(databaseName, cteName, "id") { ColumnType = typeof(int), TableRef = mainCteTable });
+        sqlSelect.Ctes.Add(new SqlCteDefinition(cteName, anchorSelect, isRecursive: true));
+
+        DataSet dataSet = new(databaseName);
+        DataTable loop = new("Loop2");
+        loop.Columns.Add("id", typeof(int));
+        loop.Columns.Add("next_id", typeof(int));
+        loop.Rows.Add(1, 2);
+        loop.Rows.Add(2, 1);
+        dataSet.Tables.Add(loop);
+
+        var options = new QueryEngineOptions { MaxRecursionDepth = customDepth };
+        var queryEngine = new QueryEngine(new[] { dataSet }, sqlSelect, options);
+
+        var ex = Assert.Throws<SqlExecutionException>(() => queryEngine.QueryAsDataTable());
+        Assert.Contains(cteName, ex.Message);
+        Assert.Contains(customDepth.ToString(), ex.Message);
+        Assert.DoesNotContain("100", ex.Message); // shouldn't mention the default
+    }
+
+    /// <summary>
+    /// UNION (deduplicating) in the recursive term is rejected per ADR v1 scope.
+    /// Only UNION ALL is supported.
+    /// </summary>
+    [Fact]
+    public void Query_RecursiveCte_UnionInRecursiveTerm_ThrowsNotSupported()
+    {
+        const string databaseName = "MyDB";
+        const string cteName = "union_cte";
+
+        var anchorSelect = new SqlSelectDefinition();
+        var anchorTable = new SqlTable(databaseName, "Items");
+        anchorSelect.Table = anchorTable;
+        anchorSelect.Columns.Add(new SqlColumn(databaseName, "Items", "id") { ColumnType = typeof(int), TableRef = anchorTable });
+
+        var recursiveSelect = new SqlSelectDefinition();
+        var cteRef = new SqlTable(databaseName, cteName);
+        recursiveSelect.Table = cteRef;
+        recursiveSelect.Columns.Add(new SqlColumn(databaseName, cteName, "id") { ColumnType = typeof(int), TableRef = cteRef });
+
+        // UNION (not UNION ALL) — must be rejected.
+        anchorSelect.SetOperations.Add(new SqlSetOperation(SqlSetOperator.Union, recursiveSelect));
+
+        var sqlSelect = new SqlSelectDefinition();
+        var mainCteTable = new SqlTable(databaseName, cteName);
+        sqlSelect.Table = mainCteTable;
+        sqlSelect.Columns.Add(new SqlColumn(databaseName, cteName, "id") { ColumnType = typeof(int), TableRef = mainCteTable });
+        sqlSelect.Ctes.Add(new SqlCteDefinition(cteName, anchorSelect, isRecursive: true));
+
+        DataSet dataSet = new(databaseName);
+        DataTable items = new("Items");
+        items.Columns.Add("id", typeof(int));
+        items.Rows.Add(1);
+        dataSet.Tables.Add(items);
+
+        var queryEngine = new QueryEngine(new[] { dataSet }, sqlSelect);
+
+        var ex = Assert.Throws<NotSupportedException>(() => queryEngine.QueryAsDataTable());
+        Assert.Contains(cteName, ex.Message);
+        Assert.Contains("UNION", ex.Message);
+        Assert.Contains("UNION ALL", ex.Message);
+    }
+
+    /// <summary>
+    /// QueryEngineOptions validation: MaxRecursionDepth below 1 is rejected at
+    /// construction time with ArgumentOutOfRangeException.
+    /// </summary>
+    [Fact]
+    public void QueryEngineOptions_MaxRecursionDepthBelowOne_ThrowsArgumentOutOfRange()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => new QueryEngineOptions { MaxRecursionDepth = 0 });
+        Assert.Throws<ArgumentOutOfRangeException>(() => new QueryEngineOptions { MaxRecursionDepth = -1 });
     }
 
     #endregion

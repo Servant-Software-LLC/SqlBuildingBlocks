@@ -249,12 +249,12 @@ In-memory SQL execution engine:
 ```csharp
 public class QueryEngine : IQueryEngine
 {
-    // Accepts ITableDataProvider + SqlSelectDefinition
+    // Accepts ITableDataProvider + SqlSelectDefinition (+ optional QueryEngineOptions)
     // Returns VirtualDataTable (streaming results)
     
     // Execution order:
     // 1. Validate features (throw on unsupported)
-    // 2. Handle CTEs
+    // 2. Handle CTEs (non-recursive: ExecuteCte; recursive: ExecuteRecursiveCte)
     // 3. Determine columns
     // 4. Get FROM table rows
     // 5. Apply WHERE filtering
@@ -264,6 +264,35 @@ public class QueryEngine : IQueryEngine
     // 9. Apply LIMIT/OFFSET
 }
 ```
+
+### Recursive CTE execution (issue #168)
+
+`QueryEngine.ExecuteCte` dispatches to `ExecuteRecursiveCte` when
+`SqlCteDefinition.IsRecursive` is true:
+- Runs the anchor (the CTE body excluding its `SetOperations` tail) once.
+- Loops: replaces `CteTableDataProvider`'s entry for the CTE name with the previous
+  iteration's working set, runs the recursive term (`SetOperations[0].Right`),
+  appends new rows to a cumulative result, sets the working set to the new rows.
+- Terminates when the working set is empty (natural termination) or when the
+  iteration counter exceeds `QueryEngineOptions.MaxRecursionDepth` (typed
+  `SqlExecutionException` whose message names the CTE and the depth).
+- Rejects `UNION` (deduplicating) in the recursive term with `NotSupportedException`
+  per the recursive-CTE-semantics ADR; only `UNION ALL` is supported in v1.
+
+### `QueryEngineOptions`
+
+Public, additive options class (issue #168). One knob today:
+`MaxRecursionDepth` (validated `>= 1`, default 100, no unlimited sentinel).
+All `QueryEngine` constructors accept an optional `QueryEngineOptions`; the
+parameterless overloads continue to work for existing consumers.
+
+### CTE name case-sensitivity caveat
+
+`CteTableDataProvider.GetTableData` matches CTE names case-insensitively
+(`StringComparer.OrdinalIgnoreCase`), so a CTE named `chain` shadows a base
+table named `Chain` during execution. Hand-built tests must use a CTE name
+that does not collide case-insensitively with any FROM/JOIN table name in
+the recursive term.
 
 ### Key Interfaces for Query Engine
 

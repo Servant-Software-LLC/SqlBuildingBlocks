@@ -67,4 +67,70 @@ public class MySqlScenarioTests
         var ids = result.Rows.Cast<DataRow>().Select(r => Convert.ToInt32(r["ID"])).ToList();
         Assert.Equal(new[] { 3, 4, 5, 6 }, ids);
     }
+
+    [Fact]
+    public void Scenario_RecursiveCte_HierarchyTraversal_ExecutesEndToEnd()
+    {
+        // Cross-dialect parity for issue #168 — WITH RECURSIVE through the MySQL grammar.
+        // MySQL natively supports `WITH RECURSIVE` so this exercises the full parse → resolve
+        // → execute pipeline against the dialect grammar.
+        // Uses parent_id=0 as the "no-parent" sentinel — the engine's expression-builder
+        // cannot promote DBNull to int in JOIN equality predicates.
+        var db = new InMemoryDatabase("Hr");
+        var hierarchy = db.AddTable("Hierarchy",
+            ("id", typeof(int)),
+            ("parent_id", typeof(int)));
+        hierarchy.Rows.Add(1, 0);
+        hierarchy.Rows.Add(2, 1);
+        hierarchy.Rows.Add(3, 1);
+        hierarchy.Rows.Add(4, 2);
+
+        var result = Run(
+            "WITH RECURSIVE descendants AS (" +
+            "SELECT id, parent_id FROM Hierarchy WHERE parent_id = 0 " +
+            "UNION ALL " +
+            "SELECT h.id, h.parent_id FROM Hierarchy h JOIN descendants d ON h.parent_id = d.id) " +
+            "SELECT id FROM descendants",
+            db);
+
+        Assert.Equal(4, result.Rows.Count);
+        var ids = result.Rows.Cast<DataRow>().Select(r => Convert.ToInt32(r["id"])).OrderBy(i => i).ToArray();
+        Assert.Equal(new[] { 1, 2, 3, 4 }, ids);
+    }
+
+    [Fact]
+    public void Scenario_RecursiveCte_JoinedWithOuterTable_ExecutesEndToEnd()
+    {
+        // Multi-level scenario: the recursive CTE result is joined against a non-CTE base
+        // table in the outer SELECT. Exercises that the recursive CTE's projection schema
+        // is correctly visible to the outer JOIN.
+        var db = new InMemoryDatabase("Hr");
+        var hierarchy = db.AddTable("Hierarchy",
+            ("id", typeof(int)),
+            ("parent_id", typeof(int)));
+        hierarchy.Rows.Add(1, 0);
+        hierarchy.Rows.Add(2, 1);
+        hierarchy.Rows.Add(3, 1);
+
+        var details = db.AddTable("Details",
+            ("id", typeof(int)),
+            ("name", typeof(string)));
+        details.Rows.Add(1, "Root");
+        details.Rows.Add(2, "Left");
+        details.Rows.Add(3, "Right");
+
+        var result = Run(
+            "WITH RECURSIVE descendants AS (" +
+            "SELECT id, parent_id FROM Hierarchy WHERE parent_id = 0 " +
+            "UNION ALL " +
+            "SELECT h.id, h.parent_id FROM Hierarchy h JOIN descendants d ON h.parent_id = d.id) " +
+            "SELECT d.id, det.name FROM descendants d JOIN Details det ON d.id = det.id",
+            db);
+
+        Assert.Equal(3, result.Rows.Count);
+        var byId = result.Rows.Cast<DataRow>().ToDictionary(r => Convert.ToInt32(r["id"]), r => (string)r["name"]);
+        Assert.Equal("Root", byId[1]);
+        Assert.Equal("Left", byId[2]);
+        Assert.Equal("Right", byId[3]);
+    }
 }
