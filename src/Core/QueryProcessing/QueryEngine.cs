@@ -128,6 +128,7 @@ public class QueryEngine : IQueryEngine
             selectRows = selectRows.Skip(sqlSelectDefinition.Limit.RowOffset.Value);
         if (sqlSelectDefinition.Limit != null && sqlSelectDefinition.Limit.RowCount.Value > 0)
             selectRows = selectRows.Take(sqlSelectDefinition.Limit.RowCount.Value);
+        selectRows = ApplyTop(selectRows);
 
         return (processingState, selectRows);
     }
@@ -1243,6 +1244,29 @@ public class QueryEngine : IQueryEngine
         // CTEs (WITH clause) are now supported — guard removed.
         // Set operations (UNION, INTERSECT, EXCEPT) are now supported — guard removed.
         // Window functions (OVER clause) are now supported — guard removed.
+
+        // SQL Server TOP — base TOP N is supported; PERCENT and WITH TIES are not.
+        if (sqlSelectDefinition.Top != null)
+        {
+            if (sqlSelectDefinition.Top.Percent)
+                throw new NotSupportedException("TOP PERCENT is not supported by the QueryEngine.");
+            if (sqlSelectDefinition.Top.WithTies)
+                throw new NotSupportedException("TOP ... WITH TIES is not supported by the QueryEngine.");
+        }
+    }
+
+    /// <summary>
+    /// Applies the SqlServer TOP N row limit to the result, if present.
+    /// PERCENT and WITH TIES are rejected up front in <see cref="ThrowIfUnsupportedFeatures"/>.
+    /// </summary>
+    private IEnumerable<DataRow> ApplyTop(IEnumerable<DataRow> rows)
+    {
+        if (sqlSelectDefinition.Top == null)
+            return rows;
+        var count = sqlSelectDefinition.Top.Count.Value;
+        if (count <= 0)
+            return rows;
+        return rows.Take(count);
     }
 
     #region Window Function Execution
@@ -1353,6 +1377,7 @@ public class QueryEngine : IQueryEngine
             result = result.Skip(sqlSelectDefinition.Limit.RowOffset.Value);
         if (sqlSelectDefinition.Limit != null && sqlSelectDefinition.Limit.RowCount.Value > 0)
             result = result.Take(sqlSelectDefinition.Limit.RowCount.Value);
+        result = ApplyTop(result);
 
         return (processingState, result);
     }
@@ -1393,12 +1418,158 @@ public class QueryEngine : IQueryEngine
                     ComputeLagLead(function, sorted, allRows, results, isLead: true);
                     break;
 
+                case WindowFunctionType.Ntile:
+                    ComputeNtile(function, sorted, results);
+                    break;
+
+                case WindowFunctionType.FirstValue:
+                    ComputeNthFromFrame(function, sorted, allRows, winSpec, results, position: NthFramePosition.First);
+                    break;
+
+                case WindowFunctionType.LastValue:
+                    ComputeNthFromFrame(function, sorted, allRows, winSpec, results, position: NthFramePosition.Last);
+                    break;
+
+                case WindowFunctionType.NthValue:
+                    ComputeNthFromFrame(function, sorted, allRows, winSpec, results, position: NthFramePosition.Nth);
+                    break;
+
                 default:
                     throw new NotSupportedException($"Window function '{function.FunctionName}' is not yet supported.");
             }
         }
 
         return results;
+    }
+
+    private enum NthFramePosition { First, Last, Nth }
+
+    /// <summary>
+    /// Computes NTILE(n) — partitions a sorted sequence into n approximately-equal buckets and
+    /// emits the 1-based bucket index for each row. When the partition does not divide evenly,
+    /// the earlier buckets receive the extra row(s).
+    /// </summary>
+    private static void ComputeNtile(SqlFunction function, List<int> sorted, object?[] results)
+    {
+        if (sorted.Count == 0) return;
+
+        // NTILE requires a positive integer literal as its first argument.
+        if (function.Arguments.Count < 1 || function.Arguments[0].Value == null)
+            throw new NotSupportedException("NTILE requires a positive integer argument (e.g., NTILE(4)).");
+        var bucketCount = Convert.ToInt32(function.Arguments[0].Value!.Value);
+        if (bucketCount <= 0)
+            throw new NotSupportedException("NTILE requires a positive integer argument (e.g., NTILE(4)).");
+
+        var rowCount = sorted.Count;
+
+        // If buckets exceed rows, each row gets its own bucket starting at 1; trailing buckets are unused.
+        if (bucketCount >= rowCount)
+        {
+            for (int i = 0; i < rowCount; i++)
+                results[sorted[i]] = i + 1;
+            return;
+        }
+
+        // Standard distribution: the first (rowCount % bucketCount) buckets are larger by one.
+        int baseSize = rowCount / bucketCount;
+        int remainder = rowCount % bucketCount;
+
+        int rowIdx = 0;
+        for (int bucket = 1; bucket <= bucketCount; bucket++)
+        {
+            int sizeThisBucket = baseSize + (bucket <= remainder ? 1 : 0);
+            for (int j = 0; j < sizeThisBucket; j++)
+            {
+                results[sorted[rowIdx]] = bucket;
+                rowIdx++;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Computes FIRST_VALUE / LAST_VALUE / NTH_VALUE over each row's frame.
+    /// Frame defaults follow ANSI semantics:
+    ///   * If an explicit frame is set on the window spec, it is honored.
+    ///   * If ORDER BY is set without a frame, the implicit frame is
+    ///     UNBOUNDED PRECEDING TO CURRENT ROW (this is the well-known LAST_VALUE trap —
+    ///     LAST_VALUE then returns the current row's value).
+    ///   * If no ORDER BY and no frame, the frame is the entire partition.
+    /// </summary>
+    private static void ComputeNthFromFrame(SqlFunction function, List<int> sorted, List<DataRow> allRows,
+        SqlWindowSpecification winSpec, object?[] results, NthFramePosition position)
+    {
+        // Resolve the column to read from the first argument.
+        string? argColName = null;
+        if (function.Arguments.Count >= 1 && function.Arguments[0].Column != null)
+            argColName = function.Arguments[0].Column!.ColumnName;
+
+        // NTH_VALUE requires a second integer argument: the 1-based position within the frame.
+        int nthN = 1;
+        if (position == NthFramePosition.Nth)
+        {
+            if (function.Arguments.Count < 2 || function.Arguments[1].Value == null)
+                throw new NotSupportedException("NTH_VALUE requires a positive integer second argument (e.g., NTH_VALUE(col, 2)).");
+            nthN = Convert.ToInt32(function.Arguments[1].Value!.Value);
+            if (nthN <= 0)
+                throw new NotSupportedException("NTH_VALUE requires a positive integer second argument (e.g., NTH_VALUE(col, 2)).");
+        }
+
+        bool hasOrderBy = winSpec.OrderBy.Count > 0;
+
+        for (int i = 0; i < sorted.Count; i++)
+        {
+            // Determine the frame for the current row.
+            List<int> frameIndices;
+            if (winSpec.Frame != null)
+            {
+                int startIdx = GetFrameBoundIndex(i, winSpec.Frame.Start, sorted.Count);
+                int endIdx = winSpec.Frame.End != null
+                    ? GetFrameBoundIndex(i, winSpec.Frame.End, sorted.Count)
+                    : i;
+                startIdx = Math.Max(0, startIdx);
+                endIdx = Math.Min(sorted.Count - 1, endIdx);
+
+                frameIndices = new List<int>();
+                for (int k = startIdx; k <= endIdx; k++)
+                    frameIndices.Add(sorted[k]);
+            }
+            else if (hasOrderBy)
+            {
+                // Default frame with ORDER BY: UNBOUNDED PRECEDING TO CURRENT ROW.
+                frameIndices = sorted.Take(i + 1).ToList();
+            }
+            else
+            {
+                // No ORDER BY, no frame: entire partition.
+                frameIndices = new List<int>(sorted);
+            }
+
+            results[sorted[i]] = ResolveNthFromFrame(frameIndices, allRows, argColName, position, nthN);
+        }
+    }
+
+    private static object? ResolveNthFromFrame(List<int> frameIndices, List<DataRow> allRows, string? argColName,
+        NthFramePosition position, int nthN)
+    {
+        if (frameIndices.Count == 0 || argColName == null)
+            return DBNull.Value;
+
+        int targetIdxInFrame = position switch
+        {
+            NthFramePosition.First => 0,
+            NthFramePosition.Last => frameIndices.Count - 1,
+            NthFramePosition.Nth => nthN - 1,
+            _ => throw new ArgumentOutOfRangeException(nameof(position))
+        };
+
+        // NTH_VALUE returns NULL when N exceeds the frame size.
+        if (targetIdxInFrame < 0 || targetIdxInFrame >= frameIndices.Count)
+            return DBNull.Value;
+
+        var targetRow = allRows[frameIndices[targetIdxInFrame]];
+        return targetRow.Table.Columns.Contains(argColName)
+            ? targetRow[argColName]
+            : DBNull.Value;
     }
 
     /// <summary>

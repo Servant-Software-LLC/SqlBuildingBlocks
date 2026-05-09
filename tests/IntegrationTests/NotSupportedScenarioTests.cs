@@ -13,12 +13,10 @@ namespace SqlBuildingBlocks.IntegrationTests;
 public class NotSupportedScenarioTests
 {
     [Fact]
-    public void Scenario_NtileWindowFunction_ThrowsNotSupported()
+    public void Scenario_NtileWindowFunction_BucketsRowsCorrectly()
     {
-        // Scenario 10: hits a Wave 2 throw site end-to-end.
-        // QueryEngine knows NTILE as WindowFunctionType.Ntile but its window-function
-        // execution switch only implements ROW_NUMBER, RANK, DENSE_RANK, LAG, LEAD —
-        // NTILE falls through to a NotSupportedException with a clear message.
+        // Issue #169: NTILE(N) is now executed by the QueryEngine. End-to-end scenario:
+        // four rows ordered by Salary, NTILE(2) buckets them into {1,1,2,2}.
         var db = new InMemoryDatabase("Sales");
         var employees = db.AddTable("Employees",
             ("Name", typeof(string)),
@@ -36,9 +34,14 @@ public class NotSupportedScenarioTests
 
         var allTableProvider = new AllTableDataProvider(new[] { (SqlBuildingBlocks.Interfaces.ITableDataProvider)db });
         var engine = new QueryEngine(allTableProvider, selectDefinition);
+        var result = engine.QueryAsDataTable();
 
-        var ex = Assert.Throws<NotSupportedException>(() => engine.QueryAsDataTable());
-        Assert.Contains("NTILE", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(4, result.Rows.Count);
+        var byName = result.Rows.Cast<System.Data.DataRow>().ToDictionary(r => (string)r["Name"]);
+        Assert.Equal(1, byName["Alice"]["bucket"]);
+        Assert.Equal(1, byName["Bob"]["bucket"]);
+        Assert.Equal(2, byName["Carol"]["bucket"]);
+        Assert.Equal(2, byName["Dan"]["bucket"]);
     }
 
     [Fact(Skip = "FINDING: QueryEngine.ExecuteCte does not implement recursive expansion. " +
