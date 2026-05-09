@@ -14,26 +14,40 @@ public class QueryEngine : IQueryEngine
     private readonly ITableDataProvider tableDataProvider;
     private readonly SqlSelectDefinition sqlSelectDefinition;
     private readonly bool dataRowType = false;
+    private readonly QueryEngineOptions options;
     private readonly Lazy<DataTable> emptyDataTable = new Lazy<DataTable>(() => new DataTable());
 
     public QueryEngine(IAllTableDataProvider tableDataProvider, SqlSelectDefinition sqlSelectDefinition)
+        : this(tableDataProvider, sqlSelectDefinition, options: null)
+    {
+    }
+
+    public QueryEngine(IAllTableDataProvider tableDataProvider, SqlSelectDefinition sqlSelectDefinition, QueryEngineOptions? options)
     {
         this.tableDataProvider = tableDataProvider ?? throw new ArgumentNullException(nameof(tableDataProvider));
         this.sqlSelectDefinition = sqlSelectDefinition ?? throw new ArgumentNullException(nameof(sqlSelectDefinition));
+        this.options = options ?? new QueryEngineOptions();
     }
 
     public QueryEngine(IEnumerable<DataSet> dataSets, SqlSelectDefinition sqlSelectDefinition)
+        : this(dataSets, sqlSelectDefinition, options: null)
+    {
+    }
+
+    public QueryEngine(IEnumerable<DataSet> dataSets, SqlSelectDefinition sqlSelectDefinition, QueryEngineOptions? options)
     {
         tableDataProvider = new TableDataProviderAdaptor(dataSets);
         this.sqlSelectDefinition = sqlSelectDefinition ?? throw new ArgumentNullException(nameof(sqlSelectDefinition));
         dataRowType = true;
+        this.options = options ?? new QueryEngineOptions();
     }
 
-    private QueryEngine(ITableDataProvider tableDataProvider, SqlSelectDefinition sqlSelectDefinition, bool dataRowType)
+    private QueryEngine(ITableDataProvider tableDataProvider, SqlSelectDefinition sqlSelectDefinition, bool dataRowType, QueryEngineOptions options)
     {
         this.tableDataProvider = tableDataProvider;
         this.sqlSelectDefinition = sqlSelectDefinition;
         this.dataRowType = dataRowType;
+        this.options = options;
     }
 
     /// <summary>
@@ -2040,18 +2054,141 @@ public class QueryEngine : IQueryEngine
         var mainSelect = CloneSelectDefinitionWithoutCtes(sqlSelectDefinition);
 
         // Run the main query using the CTE-aware provider.
-        var mainEngine = new QueryEngine(cteProvider, mainSelect, dataRowType);
+        var mainEngine = new QueryEngine(cteProvider, mainSelect, dataRowType, options);
         return mainEngine.QueryInternal();
     }
 
     /// <summary>
     /// Executes a single CTE's subquery and returns the result as a DataTable.
+    /// Recursive CTEs are dispatched to <see cref="ExecuteRecursiveCte"/>; non-recursive
+    /// CTEs run the SELECT body once.
     /// </summary>
     private DataTable ExecuteCte(SqlCteDefinition cte, CteTableDataProvider cteProvider)
     {
-        var cteEngine = new QueryEngine(cteProvider, cte.SelectDefinition, dataRowType);
+        if (cte.IsRecursive)
+            return ExecuteRecursiveCte(cte, cteProvider);
+
+        var cteEngine = new QueryEngine(cteProvider, cte.SelectDefinition, dataRowType, options);
         var cteVirtualTable = cteEngine.Query();
         return cteVirtualTable.ToDataTable();
+    }
+
+    /// <summary>
+    /// Executes a recursive CTE per the recursive-CTE-semantics ADR (default depth 100).
+    /// Runs the anchor (the CTE's main SELECT body) once, then iterates the recursive
+    /// term — the right side of the CTE body's first <see cref="SqlSetOperator.UnionAll"/>
+    /// — against the previous iteration's working set, accumulating rows until the working
+    /// set is empty (natural termination) or <see cref="QueryEngineOptions.MaxRecursionDepth"/>
+    /// is reached (typed <see cref="SqlExecutionException"/>). UNION (deduplicating) in the
+    /// recursive term is rejected with <see cref="NotSupportedException"/> per ADR v1 scope.
+    /// </summary>
+    private DataTable ExecuteRecursiveCte(SqlCteDefinition cte, CteTableDataProvider cteProvider)
+    {
+        var body = cte.SelectDefinition;
+
+        if (body.SetOperations.Count == 0)
+        {
+            throw new SqlExecutionException(
+                $"Recursive CTE '{cte.Name}' is missing its recursive term. A WITH RECURSIVE CTE must contain UNION ALL between an anchor query and a recursive query that references the CTE.");
+        }
+
+        var firstSetOp = body.SetOperations[0];
+        if (firstSetOp.Operator == SqlSetOperator.Union)
+        {
+            // ADR v1 — UNION (deduplicating) in the recursive term is out of scope.
+            throw new NotSupportedException(
+                $"Recursive CTE '{cte.Name}' uses UNION; only UNION ALL is supported in the recursive term in this version. Use UNION ALL or remove duplicates explicitly.");
+        }
+
+        if (firstSetOp.Operator != SqlSetOperator.UnionAll)
+        {
+            throw new SqlExecutionException(
+                $"Recursive CTE '{cte.Name}' must use UNION ALL between its anchor and recursive terms; found '{firstSetOp.Operator}'.");
+        }
+
+        // The anchor is the CTE body excluding its set-operation tail. We clone it so
+        // execution of the anchor doesn't re-enter set-operation processing.
+        var anchorOnly = CloneSelectDefinitionForAnchor(body);
+        var anchorEngine = new QueryEngine(cteProvider, anchorOnly, dataRowType, options);
+        var anchorTable = anchorEngine.Query().ToDataTable();
+
+        // Cumulative result — what the outer SELECT sees for `cte`.
+        // Working set — the rows the next iteration's recursive term sees as the CTE's contents.
+        var cumulative = anchorTable.Clone(); // schema only
+        foreach (DataRow row in anchorTable.Rows)
+            cumulative.ImportRow(row);
+
+        var workingSet = anchorTable;
+        int iteration = 0;
+        int maxDepth = options.MaxRecursionDepth;
+
+        // The recursive term is the right side of the first UNION ALL.
+        var recursiveTerm = firstSetOp.Right;
+
+        while (workingSet.Rows.Count > 0)
+        {
+            iteration++;
+
+            if (iteration > maxDepth)
+            {
+                throw new SqlExecutionException(
+                    $"Recursive CTE '{cte.Name}' exceeded the maximum recursion depth of {maxDepth} iterations. " +
+                    $"This usually indicates an unbounded recursion or a cycle in the underlying data. " +
+                    $"Increase QueryEngineOptions.MaxRecursionDepth or add a termination predicate to the recursive term.");
+            }
+
+            // Make the working set visible as the CTE's contents for this iteration.
+            // CteTableDataProvider.AddCteResult overwrites the entry by name.
+            cteProvider.AddCteResult(cte.Name, workingSet);
+
+            var recursiveEngine = new QueryEngine(cteProvider, recursiveTerm, dataRowType, options);
+            var nextTable = recursiveEngine.Query().ToDataTable();
+
+            if (nextTable.Rows.Count == 0)
+                break;
+
+            // Append new rows to the cumulative result; the next iteration sees only
+            // these new rows (standard recursive-CTE semantics, not the cumulative set).
+            foreach (DataRow row in nextTable.Rows)
+                cumulative.ImportRow(row);
+
+            workingSet = nextTable;
+        }
+
+        // Restore the cumulative result so the outer SELECT (and any later CTE in the
+        // same WITH) sees the full materialized recursion.
+        cteProvider.AddCteResult(cte.Name, cumulative);
+        return cumulative;
+    }
+
+    /// <summary>
+    /// Returns a shallow copy of <paramref name="original"/> with its <see cref="SqlSelectDefinition.SetOperations"/>
+    /// cleared so the anchor of a recursive CTE can be executed in isolation. CTEs are also
+    /// cleared because the body is itself a nested SELECT (CTEs declared in the outer WITH
+    /// are visible via the shared <see cref="CteTableDataProvider"/>, not by re-running them).
+    /// </summary>
+    private static SqlSelectDefinition CloneSelectDefinitionForAnchor(SqlSelectDefinition original)
+    {
+        var clone = new SqlSelectDefinition
+        {
+            IsDistinct = original.IsDistinct,
+            Table = original.Table,
+            Joins = original.Joins,
+            // SetOperations intentionally cleared — the anchor runs alone.
+            WhereClause = original.WhereClause,
+            GroupBy = original.GroupBy,
+            HavingClause = original.HavingClause,
+            OrderBy = original.OrderBy,
+            Limit = original.Limit,
+            Top = original.Top,
+            QueryHints = original.QueryHints,
+            InvalidReferenceReason = original.InvalidReferenceReason,
+        };
+
+        foreach (var col in original.Columns)
+            clone.Columns.Add(col);
+
+        return clone;
     }
 
     /// <summary>
@@ -2153,7 +2290,7 @@ public class QueryEngine : IQueryEngine
 
     private IEnumerable<DataRow> ExecuteSubSelect(SqlSelectDefinition subSelect, VirtualDataTable outputSchema)
     {
-        var subEngine = new QueryEngine(tableDataProvider, subSelect, dataRowType);
+        var subEngine = new QueryEngine(tableDataProvider, subSelect, dataRowType, options);
         var subResult = subEngine.Query();
 
         return MapRowsToSchema(subResult, outputSchema);

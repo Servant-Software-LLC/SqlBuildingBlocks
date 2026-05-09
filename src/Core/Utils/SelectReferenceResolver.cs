@@ -458,6 +458,13 @@ class SelectReferenceResolver
     /// same WITH clause are visible to later CTEs (per SQL semantics) and to the main
     /// SELECT's subqueries via <see cref="outerTablesInScope"/>.
     /// </summary>
+    /// <remarks>
+    /// For recursive CTEs (<see cref="SqlCteDefinition.IsRecursive"/> = true), the anchor
+    /// body is resolved first to obtain a projection schema, the CTE is then registered
+    /// as a <see cref="SqlCteTable"/>, and finally each recursive-term <see cref="SqlSetOperation"/>
+    /// is resolved with the CTE itself in scope — enabling the recursive term to reference
+    /// the CTE name in its FROM/JOIN.
+    /// </remarks>
     private void ResolveCtes()
     {
         if (sqlSelectDefinition.Ctes.Count == 0)
@@ -473,8 +480,11 @@ class SelectReferenceResolver
             // WITH clause should bind to that CTE rather than to a database table.
             RewriteCteReferences(cte.SelectDefinition, cteTables);
 
-            // Resolve the CTE body against the running outer scope plus prior CTEs so
-            // subqueries inside the body can also reference earlier CTEs.
+            // Resolve the anchor body against the running outer scope plus prior CTEs so
+            // subqueries inside the body can also reference earlier CTEs. (The body's
+            // SetOperations are not resolved here; for non-recursive CTEs the resolver
+            // treats them as not-yet-resolved set operations; for recursive CTEs we
+            // resolve them below with the CTE itself in scope.)
             var innerOuterScope = outerTablesInScope.Concat(cteTables.Values).ToList();
             cte.SelectDefinition.ResolveReferences(databaseConnectionProvider, tableSchemaProvider, functionProvider, innerOuterScope);
 
@@ -485,7 +495,19 @@ class SelectReferenceResolver
             }
 
             // Surface this CTE so subsequent CTEs and the main SELECT can resolve to it.
-            cteTables[cte.Name] = new SqlCteTable(cte.Name, cte.SelectDefinition);
+            var cteTable = new SqlCteTable(cte.Name, cte.SelectDefinition);
+            cteTables[cte.Name] = cteTable;
+
+            // Recursive CTE — now that the anchor's projection schema is known and the CTE
+            // is registered, resolve the recursive-term right side(s) against a scope that
+            // includes the CTE itself. The recursive term references the CTE by name in its
+            // FROM/JOIN, which RewriteCteReferences then rewrites to the SqlCteTable.
+            if (cte.IsRecursive)
+            {
+                ResolveRecursiveTerms(cte, cteTables, innerOuterScope);
+                if (sqlSelectDefinition.InvalidReferences)
+                    return;
+            }
         }
 
         // Rewrite the main SELECT's FROM/JOIN tables so any reference to a CTE name
@@ -497,6 +519,31 @@ class SelectReferenceResolver
         foreach (var cteTable in cteTables.Values)
         {
             outerTablesInScope.Add(cteTable);
+        }
+    }
+
+    /// <summary>
+    /// Resolves each <see cref="SqlSetOperation"/> on a recursive CTE's body against a
+    /// scope that includes the CTE itself, so the recursive term can reference the CTE
+    /// name in its FROM/JOIN.
+    /// </summary>
+    private void ResolveRecursiveTerms(SqlCteDefinition cte, IDictionary<string, SqlCteTable> cteTables, List<SqlTable> outerScopeWithPriorCtes)
+    {
+        // Outer scope that the recursive term sees: the existing outer scope (which already
+        // includes prior CTEs) plus this CTE itself (registered above by the caller).
+        // cteTables already contains this CTE's entry, so no extra concat is needed.
+        var recursiveOuterScope = outerTablesInScope.Concat(cteTables.Values).ToList();
+
+        foreach (var setOp in cte.SelectDefinition.SetOperations)
+        {
+            RewriteCteReferences(setOp.Right, cteTables);
+            setOp.Right.ResolveReferences(databaseConnectionProvider, tableSchemaProvider, functionProvider, recursiveOuterScope);
+
+            if (setOp.Right.InvalidReferences)
+            {
+                sqlSelectDefinition.InvalidReferenceReason = setOp.Right.InvalidReferenceReason;
+                return;
+            }
         }
     }
 
