@@ -41,6 +41,21 @@ public class SqlServerScenarioTests
     }
 
     [Fact]
+    public void Scenario_NonRecursiveCte_ExecutesEndToEnd()
+    {
+        // Cross-dialect parity: non-recursive CTE works through the SQL Server grammar.
+        var db = BuildSampleDatabase();
+
+        var result = Run(
+            "WITH HighIdProducts AS (SELECT ID, Name, Price FROM Products WHERE ID > 4) " +
+            "SELECT Name FROM HighIdProducts",
+            db);
+
+        // Products with ID > 4 are: Egg, Flour, Grape → 3 rows.
+        Assert.Equal(3, result.Rows.Count);
+    }
+
+    [Fact]
     public void Scenario_Top_ParsesToSqlTopClause()
     {
         // Scenario 8a: SQL Server TOP — parse-side integration.

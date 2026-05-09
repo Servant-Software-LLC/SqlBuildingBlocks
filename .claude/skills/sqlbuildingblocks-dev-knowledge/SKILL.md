@@ -92,7 +92,7 @@ live in `Docs/Benchmarks/README.md`.
 1. **Grammar definition**: SqlGrammar subclass registers terminals (keywords, literals, identifiers) and builds NonTerminal rules using Irony's BNF operators (`|`, `+`)
 2. **Parsing**: Irony's Parser executes LR parsing, producing a ParseTree
 3. **AST construction**: Each NonTerminal class implements `Create(ParseTreeNode)` that recursively builds logical entity objects
-4. **Reference resolution** (optional): `ResolveReferences()` validates column references, infers types, resolves aliases using IDatabaseConnectionProvider, ITableSchemaProvider, IFunctionProvider
+4. **Reference resolution** (optional): `ResolveReferences()` validates column references, infers types, resolves aliases using IDatabaseConnectionProvider, ITableSchemaProvider, IFunctionProvider. CTEs are pre-resolved in declaration order by `SelectReferenceResolver.ResolveCtes()`: each CTE body resolves against prior CTEs (surfaced as `SqlCteTable` instances in `outerTablesInScope`), and main-SELECT FROM/JOIN tables whose names match a CTE are rewritten in place to `SqlCteTable` so the rest of the resolver treats them like derived tables.
 
 ## NonTerminal Hierarchy (Grammar Building Blocks)
 
@@ -191,6 +191,8 @@ These represent the semantic meaning of parsed SQL:
 - `SqlColumnRef` -- Column reference with lazy resolution
 - `SqlAllColumns` -- SELECT * or SELECT table.*
 - `SqlTable` -- Table with database, name, optional alias
+- `SqlDerivedTable` -- Inline subquery in FROM/JOIN position (`SqlTable` subclass carrying a `SqlSelectDefinition`)
+- `SqlCteTable` -- CTE reference in FROM/JOIN position (`SqlTable` subclass carrying the resolved CTE's `SqlSelectDefinition`); created by `SelectReferenceResolver` during the CTE pre-pass, not at parse time
 - `SqlDataType` -- SQL type specification
 
 ### Function Entities

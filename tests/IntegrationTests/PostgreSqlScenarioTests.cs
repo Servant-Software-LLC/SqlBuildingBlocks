@@ -41,6 +41,26 @@ public class PostgreSqlScenarioTests
     }
 
     [Fact]
+    public void Scenario_NonRecursiveCte_ExecutesEndToEnd()
+    {
+        // Cross-dialect parity: non-recursive CTE works through the PostgreSQL grammar.
+        var db = BuildSampleDatabase();
+        var grammar = new PostgreSqlSelectGrammar();
+        var node = ParseHelper.Parse(grammar,
+            "WITH NorthUsers AS (SELECT id, name FROM users WHERE region = 'North') SELECT id FROM NorthUsers");
+        var selectDefinition = grammar.CreateSelect(node, db, db);
+        Assert.False(selectDefinition.InvalidReferences,
+            $"Reference resolution failed: {selectDefinition.InvalidReferenceReason}");
+
+        var allTableProvider = new AllTableDataProvider(new[] { (SqlBuildingBlocks.Interfaces.ITableDataProvider)db });
+        var engine = new QueryEngine(allTableProvider, selectDefinition);
+        var result = engine.QueryAsDataTable();
+
+        // North region has Alice and Carol → 2 rows.
+        Assert.Equal(2, result.Rows.Count);
+    }
+
+    [Fact]
     public void Scenario_InsertReturning_ParsesEndToEnd()
     {
         // Scenario 7: PostgreSQL RETURNING — INSERT ... RETURNING.

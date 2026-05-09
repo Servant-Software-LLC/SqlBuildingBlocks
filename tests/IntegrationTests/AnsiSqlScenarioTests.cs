@@ -123,32 +123,128 @@ public class AnsiSqlScenarioTests
     {
         // Scenario 5a: AnsiSQL CTE (non-recursive) — parse-side integration.
         // The grammar parses WITH ... AS (...) into SqlSelectDefinition.Ctes correctly.
-        // End-to-end execution through the QueryEngine for parsed (rather than hand-built)
-        // CTEs trips a binding mismatch (FINDING below). This test stays parse-only so the
-        // consumer-visible parse surface is locked in for AST-only tooling.
-        // Reference-resolution is intentionally skipped here because the CTE name is not a
-        // schema-provider-registered table; ResolveReferences would fault on lookup.
+        // Wave 10 (#174) made SelectReferenceResolver CTE-aware, so reference resolution
+        // now succeeds when the CTE name is supplied via WITH; pass db, db so this test
+        // exercises the full parse + resolve pipeline.
+        var db = BuildSampleDatabase();
         var grammar = new AnsiSqlGrammar();
         var node = ParseHelper.Parse(grammar,
             "WITH AllOrders AS (SELECT ID, Amount FROM Orders) SELECT ID FROM AllOrders");
-        var selectDefinition = grammar.CreateSelect(node);
+        var selectDefinition = grammar.CreateSelect(node, db, db);
 
+        Assert.False(selectDefinition.InvalidReferences,
+            $"Reference resolution failed: {selectDefinition.InvalidReferenceReason}");
         Assert.Single(selectDefinition.Ctes);
         Assert.Equal("AllOrders", selectDefinition.Ctes[0].Name);
         Assert.NotNull(selectDefinition.Ctes[0].SelectDefinition);
         Assert.Equal("Orders", selectDefinition.Ctes[0].SelectDefinition!.Table!.TableName);
+        // Main SELECT's FROM table is rewritten to a SqlCteTable carrying the CTE projection.
+        Assert.IsType<SqlCteTable>(selectDefinition.Table);
+        Assert.Equal("AllOrders", selectDefinition.Table!.TableName);
     }
 
-    [Fact(Skip = "FINDING (Wave 5): End-to-end execution of a parsed (rather than hand-built) " +
-                  "non-recursive CTE trips QueryEngine.ResolveSelectColumnsFromTable with " +
-                  "'Column ID does not belong to table .' — the row's DataTable is unbound when " +
-                  "the CTE is materialized through QueryAsDataTable. The hand-built CTE engine " +
-                  "tests pass because they configure SqlColumn.TableRef directly. Until the " +
-                  "parse + ResolveReferences pipeline sets equivalent table references on CTE-derived " +
-                  "rows, parse->execute round-trips for CTEs are blocked at the integration layer.")]
-    public void Scenario_NonRecursiveCte_ExecutesEndToEnd_NotImplemented()
+    [Fact]
+    public void Scenario_NonRecursiveCte_ExecutesEndToEnd()
     {
-        // Placeholder for end-to-end CTE execution via parsed SQL. Marked Skip per FINDING above.
+        // Scenario 5b: end-to-end execution of a parsed (rather than hand-built) non-recursive CTE.
+        // Wave 10 (#174) — SelectReferenceResolver now pre-resolves each CTE and surfaces it as a
+        // SqlCteTable so QueryEngine.ExecuteWithCtes can run the main SELECT against the materialized
+        // CTE result. There are 6 rows in Orders so AllOrders projects 6 IDs.
+        var db = BuildSampleDatabase();
+
+        var result = Run(
+            "WITH AllOrders AS (SELECT ID, Amount FROM Orders) SELECT ID FROM AllOrders",
+            db);
+
+        Assert.Single(result.Columns);
+        Assert.Equal(6, result.Rows.Count);
+        var ids = result.Rows.Cast<DataRow>().Select(r => Convert.ToInt32(r["ID"])).OrderBy(i => i).ToList();
+        Assert.Equal(new[] { 100, 101, 102, 103, 104, 105 }, ids);
+    }
+
+    [Fact]
+    public void Scenario_ChainedCtes_BReferencesA()
+    {
+        // Scenario 5c: chained CTEs — CTE b references CTE a declared earlier in the same WITH.
+        // Validates that prior CTEs are surfaced into the next CTE's outerTablesInScope.
+        var db = BuildSampleDatabase();
+
+        var result = Run(
+            "WITH a AS (SELECT ID, Amount FROM Orders), b AS (SELECT ID FROM a) SELECT ID FROM b",
+            db);
+
+        Assert.Single(result.Columns);
+        Assert.Equal(6, result.Rows.Count);
+    }
+
+    [Fact]
+    public void Scenario_TwoCtesJoined_ExecutesEndToEnd()
+    {
+        // Scenario 5d: two distinct CTEs used in the main query — one as FROM, one as JOIN.
+        // Each rewrites independently so the JOIN evaluates between the two CTE projections.
+        var db = BuildSampleDatabase();
+
+        var result = Run(
+            "WITH OrderInfo AS (SELECT ID, CustomerID FROM Orders), " +
+            "     CustomerInfo AS (SELECT ID, CustomerName FROM Customers) " +
+            "SELECT CustomerInfo.CustomerName, OrderInfo.ID " +
+            "FROM OrderInfo INNER JOIN CustomerInfo ON OrderInfo.CustomerID = CustomerInfo.ID",
+            db);
+
+        Assert.Equal(2, result.Columns.Count);
+        // 6 orders, all customer IDs (1, 2, 3) exist → 6 joined rows.
+        Assert.Equal(6, result.Rows.Count);
+    }
+
+    [Fact]
+    public void Scenario_CteWithWhereInBody_ExecutesEndToEnd()
+    {
+        // Scenario 5e: CTE body has a non-trivial WHERE clause that filters Orders before the main SELECT.
+        // CustomerID = 1 has 2 orders (IDs 100, 101).
+        var db = BuildSampleDatabase();
+
+        var result = Run(
+            "WITH BigOrders AS (SELECT ID, Amount FROM Orders WHERE Amount > 25) SELECT ID FROM BigOrders",
+            db);
+
+        // Orders > 25 are: 50 (ID 100), 75 (ID 102), 30 (ID 104), 40 (ID 105) → 4 rows.
+        Assert.Equal(4, result.Rows.Count);
+        var ids = result.Rows.Cast<DataRow>().Select(r => Convert.ToInt32(r["ID"])).OrderBy(i => i).ToList();
+        Assert.Equal(new[] { 100, 102, 104, 105 }, ids);
+    }
+
+    [Fact]
+    public void Scenario_CteWithJoinInBody_ExecutesEndToEnd()
+    {
+        // Scenario 5f: CTE body has a JOIN. The CTE itself becomes a flat projection over
+        // the joined result, then the main SELECT projects from the CTE.
+        var db = BuildSampleDatabase();
+
+        var result = Run(
+            "WITH CustomerOrders AS (" +
+            "  SELECT c.CustomerName, o.Amount FROM Customers c INNER JOIN Orders o ON c.ID = o.CustomerID" +
+            ") SELECT CustomerName, Amount FROM CustomerOrders",
+            db);
+
+        Assert.Equal(2, result.Columns.Count);
+        Assert.Equal(6, result.Rows.Count); // same row count as the inner JOIN
+    }
+
+    [Fact]
+    public void Scenario_CteJoinedWithBaseTable_ExecutesEndToEnd()
+    {
+        // Scenario 5g: CTE is one side of a JOIN against a regular database table.
+        // Validates that JOIN-side rewriting works (not just FROM-side).
+        var db = BuildSampleDatabase();
+
+        var result = Run(
+            "WITH Big AS (SELECT ID, CustomerID FROM Orders WHERE Amount > 25) " +
+            "SELECT c.CustomerName, b.ID FROM Customers c INNER JOIN Big b ON c.ID = b.CustomerID",
+            db);
+
+        Assert.Equal(2, result.Columns.Count);
+        // 4 big orders → 4 joined rows (each CustomerID maps to a Customer).
+        Assert.Equal(4, result.Rows.Count);
     }
 
     [Fact]

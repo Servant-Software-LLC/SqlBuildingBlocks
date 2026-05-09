@@ -11,6 +11,9 @@ internal static class SelectDefinitionColumns
         if (table is SqlDerivedTable derivedTable)
             return GetColumns(derivedTable.SelectDefinition);
 
+        if (table is SqlCteTable cteTable)
+            return GetColumns(cteTable.SelectDefinition);
+
         return tableSchemaProvider.GetColumns(table);
     }
 
