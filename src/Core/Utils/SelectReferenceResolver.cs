@@ -29,6 +29,12 @@ class SelectReferenceResolver
     /// </summary>
     public void ResolveTablesDatabase()
     {
+        // Pre-resolve CTE bodies and rewrite FROM/JOIN tables that name a CTE so the
+        // rest of the resolver pipeline sees the CTE as a known table-shaped scope
+        // (mirroring SqlDerivedTable). Done first so ResolveTablesDatabase and column
+        // resolution both see the rewritten tables.
+        ResolveCtes();
+
         if (sqlSelectDefinition.Table is null)
             return;
 
@@ -48,6 +54,9 @@ class SelectReferenceResolver
     public void ResolveReferences()
     {
         var tablesInSelect = sqlSelectDefinition.TablesInSelect;
+        // The main SELECT can reference any CTE declared in its WITH clause from inside
+        // subqueries (EXISTS / scalar subquery / etc.), so add the resolved CTE tables
+        // to the visible-from-outer scope alongside any pre-existing outer tables.
         var visibleTables = tablesInSelect.Concat(outerTablesInScope).ToList();
 
         TableFinder selectColumnTables = new(tablesInSelect, tableSchemaProvider);
@@ -67,6 +76,10 @@ class SelectReferenceResolver
     private void ResolveTablesDatabase(SqlTable sqlTable, IDatabaseConnectionProvider databaseConnectionProvider)
     {
         if (sqlTable is SqlDerivedTable)
+            return;
+
+        // CTE-backed tables have no database — their schema is the CTE's projection.
+        if (sqlTable is SqlCteTable)
             return;
 
         if (string.IsNullOrEmpty(sqlTable.DatabaseName))
@@ -436,6 +449,105 @@ class SelectReferenceResolver
         {
             table.SelectDefinition.ResolveReferences(databaseConnectionProvider, tableSchemaProvider, functionProvider);
         }
+    }
+
+    /// <summary>
+    /// Pre-resolves each CTE in declaration order, then rewrites the main SELECT's
+    /// FROM/JOIN tables that reference a CTE to <see cref="SqlCteTable"/> so the rest
+    /// of the resolver treats them like derived tables. CTEs declared earlier in the
+    /// same WITH clause are visible to later CTEs (per SQL semantics) and to the main
+    /// SELECT's subqueries via <see cref="outerTablesInScope"/>.
+    /// </summary>
+    private void ResolveCtes()
+    {
+        if (sqlSelectDefinition.Ctes.Count == 0)
+            return;
+
+        var caseInsensitive = databaseConnectionProvider.CaseInsensitive;
+        var nameComparer = caseInsensitive ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+        var cteTables = new Dictionary<string, SqlCteTable>(nameComparer);
+
+        foreach (var cte in sqlSelectDefinition.Ctes)
+        {
+            // Inside the CTE body, a name matching a previously-declared CTE in this same
+            // WITH clause should bind to that CTE rather than to a database table.
+            RewriteCteReferences(cte.SelectDefinition, cteTables);
+
+            // Resolve the CTE body against the running outer scope plus prior CTEs so
+            // subqueries inside the body can also reference earlier CTEs.
+            var innerOuterScope = outerTablesInScope.Concat(cteTables.Values).ToList();
+            cte.SelectDefinition.ResolveReferences(databaseConnectionProvider, tableSchemaProvider, functionProvider, innerOuterScope);
+
+            if (cte.SelectDefinition.InvalidReferences)
+            {
+                sqlSelectDefinition.InvalidReferenceReason = cte.SelectDefinition.InvalidReferenceReason;
+                return;
+            }
+
+            // Surface this CTE so subsequent CTEs and the main SELECT can resolve to it.
+            cteTables[cte.Name] = new SqlCteTable(cte.Name, cte.SelectDefinition);
+        }
+
+        // Rewrite the main SELECT's FROM/JOIN tables so any reference to a CTE name
+        // becomes a SqlCteTable carrying the resolved CTE projection.
+        RewriteCteReferences(sqlSelectDefinition, cteTables);
+
+        // Surface CTEs to subqueries inside the main SELECT (EXISTS / scalar subquery)
+        // by augmenting the outer-scope list used by the rest of this resolver.
+        foreach (var cteTable in cteTables.Values)
+        {
+            outerTablesInScope.Add(cteTable);
+        }
+    }
+
+    /// <summary>
+    /// Replaces any <see cref="SqlTable"/> in <paramref name="select"/>'s FROM or JOIN
+    /// position whose <see cref="SqlTable.TableName"/> matches a registered CTE with a
+    /// <see cref="SqlCteTable"/> carrying the CTE's resolved <see cref="SqlSelectDefinition"/>.
+    /// Already-rewritten <see cref="SqlCteTable"/> instances and <see cref="SqlDerivedTable"/>
+    /// instances are left alone.
+    /// </summary>
+    private static void RewriteCteReferences(SqlSelectDefinition select, IDictionary<string, SqlCteTable> cteTables)
+    {
+        if (cteTables.Count == 0)
+            return;
+
+        if (select.Table is not null && select.Table is not SqlDerivedTable && select.Table is not SqlCteTable)
+        {
+            if (cteTables.TryGetValue(select.Table.TableName, out var cteTable))
+            {
+                select.Table = WrapCteTable(cteTable, select.Table);
+            }
+        }
+
+        if (select.Joins is not null)
+        {
+            foreach (var join in select.Joins)
+            {
+                if (join.Table is SqlDerivedTable || join.Table is SqlCteTable)
+                    continue;
+
+                if (cteTables.TryGetValue(join.Table.TableName, out var cteTable))
+                {
+                    join.Table = WrapCteTable(cteTable, join.Table);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Constructs a per-occurrence <see cref="SqlCteTable"/> that references the same
+    /// resolved <see cref="SqlSelectDefinition"/> as the registered CTE but preserves
+    /// this occurrence's <see cref="SqlTable.TableAlias"/>. Building a new instance
+    /// (rather than reusing the registry instance) avoids alias-stomping when the same
+    /// CTE is referenced multiple times with different aliases (e.g. self-joins).
+    /// </summary>
+    private static SqlCteTable WrapCteTable(SqlCteTable registered, SqlTable original)
+    {
+        return new SqlCteTable(registered.TableName, registered.SelectDefinition)
+        {
+            TableAlias = original.TableAlias,
+        };
     }
 
     private void ResolveExistsExpression(SqlExistsExpression existsExpression, IEnumerable<SqlTable> visibleTables)

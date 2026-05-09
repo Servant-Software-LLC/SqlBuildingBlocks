@@ -51,4 +51,20 @@ public class MySqlScenarioTests
         Assert.Equal(3, Convert.ToInt32(result.Rows[0]["ID"]));
         Assert.Equal(4, Convert.ToInt32(result.Rows[1]["ID"]));
     }
+
+    [Fact]
+    public void Scenario_NonRecursiveCte_ExecutesEndToEnd()
+    {
+        // Cross-dialect parity: non-recursive CTE works through the MySQL grammar too.
+        var db = BuildSampleDatabase();
+
+        var result = Run(
+            "WITH BigOrders AS (SELECT ID, Amount FROM Orders WHERE Amount > 250) SELECT ID FROM BigOrders ORDER BY ID",
+            db);
+
+        // Amounts > 250 are 300, 400, 500, 600 → IDs 3, 4, 5, 6.
+        Assert.Equal(4, result.Rows.Count);
+        var ids = result.Rows.Cast<DataRow>().Select(r => Convert.ToInt32(r["ID"])).ToList();
+        Assert.Equal(new[] { 3, 4, 5, 6 }, ids);
+    }
 }
