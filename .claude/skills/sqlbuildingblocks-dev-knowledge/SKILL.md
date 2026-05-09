@@ -34,6 +34,14 @@ tests/
     PostgreSQL.Tests/           -- PostgreSQL-specific tests
     SQLServer.Tests/            -- SQL Server-specific tests
     CrossCutting.Tests/         -- Cross-grammar tests
+  IntegrationTests/             -- End-to-end synthetic ITableDataProvider scenarios
+
+benchmarks/
+  SqlBuildingBlocks.Benchmarks/ -- BenchmarkDotNet suite (parser + QueryEngine hot paths)
+
+Docs/
+  Architectural/                -- Recorded architectural decisions
+  Benchmarks/                   -- Captured baselines + run/compare instructions
 ```
 
 ## Build & SDK
@@ -41,8 +49,9 @@ tests/
 - **SDK**: .NET 10.0.100 (see global.json, rollForward: latestFeature) with MSBuild Traversal 3.0.2
 - **Source TFMs**: netstandard2.0
 - **Test TFMs**: net10.0
+- **Benchmarks TFM**: net10.0 (uses `$(NetTFM)`)
 - **Language**: C# 11 with nullable enabled, TreatWarningsAsErrors: true
-- **Package pins**: Packages.props centralizes versions (Irony 1.5.3, xUnit 2.9.3, Moq 4.20.72)
+- **Package pins**: Packages.props centralizes versions (Irony 1.5.3, xUnit 2.9.3, Moq 4.20.72, BenchmarkDotNet 0.13.4)
 
 ### Running Tests
 ```powershell
@@ -51,7 +60,14 @@ dotnet build --configuration Release
 
 # All tests
 dotnet test --configuration Release
+
+# Benchmarks (ShortRun for local dev, omit --job for full statistical run)
+dotnet run --configuration Release --project benchmarks/SqlBuildingBlocks.Benchmarks -- --filter "*" --job short
 ```
+
+The benchmark project is excluded from `dotnet test` (it contains no xUnit tests).
+Captured baselines and the regression-threshold rule (10% mean / 20% allocated bytes)
+live in `Docs/Benchmarks/README.md`.
 
 ## How SQL Parsing Works
 
@@ -281,6 +297,21 @@ public class QueryEngine : IQueryEngine
 | `TableSchemaProvider` | Mock ITableSchemaProvider with hardcoded test schemas |
 | `FakeDatabaseConnectionProvider` | Mock IDatabaseConnectionProvider |
 | `FakeFunctionProvider` | Mock IFunctionProvider |
+| `AstComparer` | Structural AST equality with diff-style failure reports — emits `path / expected / actual / reason` so a divergence points at a specific property. Used by `RoundTripTests`. |
+
+### Round-trip Tests (`tests/Core.Tests/RoundTripTests.cs`)
+
+Issue #176 safety net for the P0 concern "incorrect AST construction that produces wrong
+SQL on round-trip" (AGENTS.md). Two oracles in one file:
+
+- **Expression round-trip** (full): `parse → ToExpressionString → re-parse → AST equality`.
+  Uses the existing partial expression renderer.
+- **Statement round-trip** (degraded): `parse → re-parse → AST equality`. No statement-level
+  renderer exists yet, so this catches grammar non-determinism only.
+
+When you add a new NonTerminal or modify expression rendering, add a round-trip test for
+the new construct in this file. When a statement-level renderer is added, swap the
+degraded oracle for the full one in `AssertStmtRoundTrip`.
 
 ### Standard Test Pattern
 ```csharp

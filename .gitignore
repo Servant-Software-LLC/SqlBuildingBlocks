@@ -27,3 +27,6 @@ packages
 .logs/
 __pycache__/
 state.json
+
+# BenchmarkDotNet output (preserved baselines live in Docs/Benchmarks/)
+BenchmarkDotNet.Artifacts/

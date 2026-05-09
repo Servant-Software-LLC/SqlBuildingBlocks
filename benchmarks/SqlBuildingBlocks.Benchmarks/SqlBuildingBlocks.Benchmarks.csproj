@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>$(NetTFM)</TargetFramework>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <!-- BenchmarkDotNet recommends Release builds; flag any debug-only attributes. -->
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
+    <RootNamespace>SqlBuildingBlocks.Benchmarks</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BenchmarkDotNet" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Core\SqlBuildingBlocks.Core.csproj" />
+    <ProjectReference Include="..\..\src\Grammars\AnsiSQL\SqlBuildingBlocks.Grammars.AnsiSQL.csproj" />
+    <ProjectReference Include="..\..\src\Grammars\MySQL\SqlBuildingBlocks.Grammars.MySQL.csproj" />
+  </ItemGroup>
+
+</Project>

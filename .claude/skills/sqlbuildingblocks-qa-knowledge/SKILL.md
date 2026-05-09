@@ -36,13 +36,32 @@ description: |
 | `TableSchemaProvider` | Mock schema with hardcoded test tables (Customers, Orders, Products) |
 | `FakeDatabaseConnectionProvider` | Mock table-to-database mapping |
 | `FakeFunctionProvider` | Mock function resolution |
+| `AstComparer` | Structural AST equality with diff-style failure reports (path / expected / actual / reason). Used by `RoundTripTests`. |
+
+### Round-trip Test Suite (`tests/Core.Tests/RoundTripTests.cs`)
+
+Issue #176 safety net for "incorrect AST construction that produces wrong SQL on round-trip"
+(P0 in AGENTS.md). The suite has two oracles:
+
+1. **Expression round-trip (full)** — `parse → ToExpressionString → re-parse → AST equality`.
+   Uses the existing partial expression renderer (`SqlExpression.ToExpressionString()` and
+   peers on `SqlBinaryExpression`, `SqlBetweenExpression`, `SqlCaseExpression`, `SqlCastExpression`,
+   `SqlInList`, …). Catches expression-level render bugs.
+2. **Statement round-trip (degraded)** — `parse → re-parse → AST equality` (parse the same
+   SQL twice, compare ASTs). No statement-level renderer exists today, so this oracle
+   catches grammar non-determinism / hidden mutable state in AST construction but NOT
+   statement-level render bugs. A statement-level renderer is a future enhancement.
+
+Coverage at v1: SELECT (4 tests including JOIN/GROUP BY/ORDER BY), INSERT, UPDATE, DELETE,
+CREATE TABLE, mixed-precedence expressions, CASE, CAST. CI hookup is recommended in the
+test file's docstring but not yet wired in `.github/workflows/`.
 
 ### Test Stack
 - **Framework**: xUnit 2.9.3
 - **Assertions**: xUnit built-in (`Assert.*`)
 - **Mocking**: Moq 4.20.72
 - **Coverage**: coverlet 8.0.1 (Codecov integration)
-- **Performance**: BenchmarkDotNet 0.13.4 (available, no published baselines)
+- **Performance**: BenchmarkDotNet 0.13.4 — baseline captured 2026-05-09 in `Docs/Benchmarks/` (parse + QueryEngine hot paths; regression threshold 10% mean / 20% allocated)
 
 ### Running Tests
 ```powershell
@@ -152,6 +171,13 @@ against every grammar dialect that claims to support it.
    - Test: Feed known-bad SQL, verify ParseTree.HasErrors() returns true
    - Test: Incomplete statements (missing WHERE value, unclosed parentheses)
    - Test: SQL with syntax errors in various positions
+   - **Issue #175 (Wave 9, 2026-05-09)**: each dialect's `NegativeTests.cs` now
+     carries ≥86 asserting cases organised by category (StatementLevel,
+     SelectClause, FromAndJoin, Expressions, IdentifiersAndLiterals, DmlErrors,
+     SubqueriesAndSets, DialectSpecific). Audit doc at
+     `Docs/Audit/silent-accept-corpus-2026.md`. **Future maintenance rule**: any
+     new NonTerminal or grammar rule must be paired with at least one negative
+     case in the matching category for every affected dialect.
 
 3. **Infinite loops or stack overflows in recursion**
    - Deeply nested expressions: `((((((a + b) + c) + d) ...)))`
@@ -290,8 +316,8 @@ against every grammar dialect that claims to support it.
 1. **PostgreSQL grammar** -- Stub with minimal tests; major gap for consumers
 2. **SQL Server grammar** -- Stub with minimal tests; major gap for MockDB TDS protocol
 3. **Query engine** -- Limited feature coverage; many SQL operations throw NotImplementedException
-4. **Negative testing** -- Insufficient tests for malformed/invalid SQL rejection
-5. **Performance baselines** -- BenchmarkDotNet available but no published results
+4. **Negative testing** -- ~~Insufficient~~ **Closed by #175 (Wave 9)**: each dialect now has ≥86 asserting negative cases organised by category. See `Docs/Audit/silent-accept-corpus-2026.md`.
+5. **Performance baselines** -- ~~No published results~~ **Closed by #179 (Wave 9)**: parse + QueryEngine hot paths benchmarked, baseline at `Docs/Benchmarks/baseline-2026-05-09-*.json`. CI workflow is a follow-up issue.
 6. **Fuzz testing** -- No randomized/generative SQL testing for parser robustness
 7. **Round-trip verification** -- No tests that parse SQL, reconstruct it, and re-parse
 8. **Error message quality** -- No tests verifying parse error messages are useful
