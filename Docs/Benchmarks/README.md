@@ -1,0 +1,158 @@
+# SqlBuildingBlocks Benchmarks
+
+This directory holds the captured baseline output from
+`benchmarks/SqlBuildingBlocks.Benchmarks` along with run/compare instructions and the
+threshold rule used to evaluate regressions.
+
+The benchmark project provides BenchmarkDotNet-driven measurements of the parser hot
+paths and the QueryEngine execution path. It exists so future optimization work
+(notably issue #129 — reflection-based generic dispatch in QueryEngine) has a
+quantitative target instead of subjective claims.
+
+## How to run
+
+From the repository root:
+
+```powershell
+# Quick run with the ShortRun job (3 warmups, 3 iterations) — useful during local development.
+dotnet run --configuration Release --project benchmarks/SqlBuildingBlocks.Benchmarks -- --filter "*" --job short
+
+# Full statistical run (default job — slower, but produces stable confidence intervals).
+dotnet run --configuration Release --project benchmarks/SqlBuildingBlocks.Benchmarks -- --filter "*"
+
+# Single benchmark class.
+dotnet run --configuration Release --project benchmarks/SqlBuildingBlocks.Benchmarks -- --filter "*ParseBenchmarks*"
+
+# Emit JSON artifacts for diffing against a baseline.
+dotnet run --configuration Release --project benchmarks/SqlBuildingBlocks.Benchmarks -- --filter "*" --exporters json
+```
+
+Artifacts land in
+`benchmarks/SqlBuildingBlocks.Benchmarks/BenchmarkDotNet.Artifacts/results/` —
+markdown summaries, CSV, HTML, and (with `--exporters json`) full JSON.
+
+## How to compare against the baseline
+
+BenchmarkDotNet can take a baseline JSON for delta reporting, but the simplest
+workflow is the GitHub-style markdown report committed alongside this README:
+
+1. Run a fresh benchmark with the same `--job` flag used for the baseline (`short`
+   for the file dated 2026-05-09).
+2. Open the markdown report in `benchmarks/SqlBuildingBlocks.Benchmarks/BenchmarkDotNet.Artifacts/results/*-report-github.md`
+   and diff each row against the corresponding baseline file in this folder.
+3. Apply the regression rule below.
+
+For automated comparison, BenchmarkDotNet's `[BaselineColumn]` attribute on a method
+in the same class produces `Ratio` columns. Cross-class baselines require an external
+tool (the BenchmarkDotNet `--baseline` flag is for *job-vs-job* within a single run,
+not against a stored baseline file).
+
+## Regression threshold
+
+A change to a benchmarked method should be flagged for review when, for the same
+machine class:
+
+- **Mean is more than 10 percent slower than the baseline**, OR
+- **Allocated bytes are more than 20 percent higher than the baseline**.
+
+Rationale: parse cost dominates downstream consumer latency in MockDB and
+FileBased.DataProviders, and allocation churn surfaces as Gen0 GC pressure under
+high QPS. The 10/20 split is conservative — actual targets will tighten once #129
+lands.
+
+## Baseline — 2026-05-09
+
+All numbers below come from BenchmarkDotNet `--job short`. Treat them as
+order-of-magnitude indicators with wide confidence intervals (3 iterations is too
+few for sub-microsecond methods to stabilize) — full-job runs should replace these
+once a regression-detection workflow exists.
+
+### Machine
+
+```
+BenchmarkDotNet=v0.13.4, OS=Windows 11 (10.0.26200.8328)
+11th Gen Intel Core i7-1185G7 3.00GHz, 1 CPU, 8 logical and 4 physical cores
+.NET SDK=10.0.201
+[Host] / ShortRun : .NET 10.0.5 (10.0.526.15411), X64 RyuJIT AVX2
+```
+
+### Parser benchmarks
+
+| Method                              | Mean       | Allocated  |
+|------------------------------------ |-----------:|-----------:|
+| ParseSimpleSelect_Ansi              |   4.40 us  |   ~7.6 KB  |
+| ParseSimpleSelect_MySql             |   4.34 us  |    7.6 KB  |
+| ParseComplexSelect_Ansi             |  59.08 us  |   65.1 KB  |
+| ParseComplexSelect_MySql            |  62.01 us  |   65.8 KB  |
+| ParseDeeplyNestedExpression_Ansi    |   3.71 us  |   ~8.5 KB  |
+| ParseCte_Ansi                       |  13.15 us  |   18.1 KB  |
+| ParseAndCreate_ComplexSelect_Ansi   | 166.77 us  |   82.6 KB  |
+
+Source JSON: [`baseline-2026-05-09-ParseBenchmarks.json`](baseline-2026-05-09-ParseBenchmarks.json) and
+[`baseline-2026-05-09-ParseBenchmarks.md`](baseline-2026-05-09-ParseBenchmarks.md).
+
+### QueryEngine benchmarks (100-row tables)
+
+| Method              | Mean        | Allocated   |
+|-------------------- |------------:|------------:|
+| ExecuteSimpleSelect |    1.94 ms  |   207.5 KB  |
+| ExecuteJoinedSelect |  359.74 ms  |  2648.4 KB  |
+
+Source JSON: [`baseline-2026-05-09-QueryEngineBenchmarks.json`](baseline-2026-05-09-QueryEngineBenchmarks.json) and
+[`baseline-2026-05-09-QueryEngineBenchmarks.md`](baseline-2026-05-09-QueryEngineBenchmarks.md).
+
+## Findings from the baseline run
+
+These observations are starting points for follow-up performance work — they are
+**not regressions**, they are existing costs the benchmarks now expose:
+
+1. **`ExecuteJoinedSelect` is 185x slower than `ExecuteSimpleSelect` on the same row
+   count (360 ms vs 1.94 ms for two 100-row tables).** Allocated bytes are also
+   ~13x higher (2.65 MB vs 208 KB). This is the strongest signal that the
+   reflection-based generic dispatch tracked in #129 is a real cost. A 100x100
+   inner join evaluating in 360 ms implies roughly 36 us per row pair — the
+   QueryEngine is doing meaningful per-row reflection work.
+2. **`ParseAndCreate_ComplexSelect_Ansi` is ~2.8x slower than parse-only
+   (`ParseComplexSelect_Ansi`).** Create() walking and NonTerminal dispatch costs
+   nearly as much as the Irony parse itself for non-trivial SELECTs. If #129 also
+   reduces Create-side reflection, this is the parse-side test for it.
+3. **`ParseDeeplyNestedExpression_Ansi` is *faster* than `ParseSimpleSelect_Ansi`
+   (3.7 us vs 4.4 us).** The nested expression has no FROM clause work because the
+   benchmark prepends `SELECT * FROM T WHERE ...`; left-recursive binary expressions
+   parse extremely efficiently in Irony. This means a 50-deep nested expression is
+   not a stress case for parse perf — it's a stress case for stack depth (verified
+   non-fatal by Wave 2). For perf, add wider-shape stress (long IN lists, wide
+   SELECT lists) when #129 work begins.
+
+## CI workflow (deferred)
+
+GitHub Actions integration is intentionally **not** part of this PR. The recommended
+shape when it is added:
+
+```yaml
+# .github/workflows/benchmarks.yml (recommended — not yet committed)
+name: Benchmarks
+on:
+  pull_request:
+    paths:
+      - 'src/Core/**'
+      - 'src/Grammars/**'
+      - 'benchmarks/**'
+jobs:
+  bench:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with: { dotnet-version: '10.0.x' }
+      - run: dotnet build --configuration Release
+      - run: dotnet run --configuration Release --project benchmarks/SqlBuildingBlocks.Benchmarks -- --filter "*" --job short --exporters json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: benchmarks/SqlBuildingBlocks.Benchmarks/BenchmarkDotNet.Artifacts/**
+```
+
+A future PR should add the workflow plus a comparison step (e.g.,
+[`benchmark-action/github-action-benchmark`](https://github.com/benchmark-action/github-action-benchmark))
+that fails the check on the 10/20 threshold.
