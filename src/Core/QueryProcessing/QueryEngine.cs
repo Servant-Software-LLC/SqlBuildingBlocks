@@ -487,14 +487,12 @@ public class QueryEngine : IQueryEngine
         throw new NotSupportedException($"Aggregate '{aggregate.AggregateName}' requires a column argument. Use COUNT(*) for counting all rows.");
     }
 
-    private IEnumerable<DataRow> ApplyFilter<TDataRow>(IQueryable<TDataRow> dataRows, SqlBinaryExpression filteringClause, Dictionary<SqlTable, DataRow> substituteValues, SqlTable tableDataRow, DataTable tableWithColumnsToProjectOnto)
-    {
-        var expression = filteringClause.BuildExpression<TDataRow>(substituteValues, tableDataRow);
-        return dataRows.Where(expression).ToDataRows(tableWithColumnsToProjectOnto);
-    }
-
-    private IEnumerable<DataRow> ToDataRows<TDataRow>(IQueryable<TDataRow> dataRows, DataTable tableWithColumnsToProjectOnto) =>
-        dataRows.ToDataRows(tableWithColumnsToProjectOnto);
+    // ApplyFilter<TDataRow> and ToDataRows<TDataRow> were the original generic helpers
+    // that ReflectionHelper.CallMethod dispatched into. They are now expressed inline
+    // inside the cached compiled delegates in CompiledQueryDispatch (#129, Wave 12).
+    // The error-message strings below still reference these names via nameof() to keep
+    // the diagnostic stable for existing log readers; the call sites use
+    // CompiledQueryDispatch.ApplyFilter / .ToDataRows.
 
     /// <summary>
     /// Resolves query output if there are no tables involved.
@@ -687,16 +685,14 @@ public class QueryEngine : IQueryEngine
             //Calls in a generic fashon:
             //  var expression = selectDefinition.WhereClause.BuildExpression<TDataRow>(null, selectDefinition.Table);
             //  return fromTableQueryable.Where(expression).ToDataRows(tableWithColumnsToProjectOnto);
-
-            var applyFilterMethodReturnValue = ReflectionHelper.CallMethod<IEnumerable<DataRow>>(
-                                                    this,
-                                                    methodName: nameof(ApplyFilter),
-                                                    typeParameter: fromTableQueryable.ElementType,
-                                                    // Method arguments
-                                                    fromTableQueryable, whereClauseAsBinary, null, sqlSelectDefinition.Table, tableWithColumnsToProjectOnto);
+            // Dispatch via cached compiled delegate keyed on TDataRow (#129, Wave 12).
+            var applyFilterMethodReturnValue = CompiledQueryDispatch.ApplyFilter(
+                this,
+                fromTableQueryable.ElementType,
+                fromTableQueryable, whereClauseAsBinary, null, sqlSelectDefinition.Table, tableWithColumnsToProjectOnto);
 
             if (applyFilterMethodReturnValue == null)
-                throw new ArgumentNullException($"{nameof(ApplyFilter)}'s return value was null", innerException: null);
+                throw new ArgumentNullException("ApplyFilter's return value was null", innerException: null);
 
             processingState.WhereApplied = sqlSelectDefinition.Table;
             return applyFilterMethodReturnValue;
@@ -704,15 +700,13 @@ public class QueryEngine : IQueryEngine
 
         //Calls in a generic fashon:
         //  return fromTableQueryable.ToDataRows(tableWithColumnsToProjectOnto);
-        var toDataRowsReturnValue = ReflectionHelper.CallMethod<IEnumerable<DataRow>>(
-                                        this,
-                                        methodName: nameof(ToDataRows),
-                                        typeParameter: fromTableQueryable.ElementType,
-                                        // Method arguments
-                                        fromTableQueryable, tableWithColumnsToProjectOnto);
+        // Dispatch via cached compiled delegate keyed on TDataRow (#129, Wave 12).
+        var toDataRowsReturnValue = CompiledQueryDispatch.ToDataRows(
+            fromTableQueryable.ElementType,
+            fromTableQueryable, tableWithColumnsToProjectOnto);
 
         if (toDataRowsReturnValue == null)
-            throw new ArgumentNullException($"{nameof(ToDataRows)}'s return value was null", innerException: null);
+            throw new ArgumentNullException("ToDataRows's return value was null", innerException: null);
 
         return toDataRowsReturnValue;
     }
@@ -749,16 +743,14 @@ public class QueryEngine : IQueryEngine
         //Calls in a generic fashon:
         //  var expression = filteringExpression.BuildExpression<TDataRow>(processingState.DataRowsOfOtherTables, join.Table);
         //  return joinTableQueryable.Where(expression).ToDataRows(tableWithColumnsToProjectOnto);
-
-        var applyFilterMethodReturnValue = ReflectionHelper.CallMethod<IEnumerable<DataRow>>(
-                                               this,
-                                               methodName: nameof(ApplyFilter),
-                                               typeParameter: joinTableQueryable.ElementType,
-                                               // Method arguments
-                                               joinTableQueryable, filteringExpression, processingState.DataRowsOfOtherTables, join.Table, tableWithColumnsToProjectOnto);
+        // Dispatch via cached compiled delegate keyed on TDataRow (#129, Wave 12).
+        var applyFilterMethodReturnValue = CompiledQueryDispatch.ApplyFilter(
+            this,
+            joinTableQueryable.ElementType,
+            joinTableQueryable, filteringExpression, processingState.DataRowsOfOtherTables, join.Table, tableWithColumnsToProjectOnto);
 
         if (applyFilterMethodReturnValue == null)
-            throw new ArgumentNullException($"{nameof(ApplyFilter)}'s return value was null", innerException: null);
+            throw new ArgumentNullException("ApplyFilter's return value was null", innerException: null);
 
         processingState.WhereApplied = sqlSelectDefinition.Table;
         return applyFilterMethodReturnValue;
@@ -780,15 +772,13 @@ public class QueryEngine : IQueryEngine
         if (!processingState.TablesProjections.TryGetValue(join.Table, out var tableWithColumnsToProjectOnto))
             tableWithColumnsToProjectOnto = emptyDataTable.Value;
 
-        var toDataRowsReturnValue = ReflectionHelper.CallMethod<IEnumerable<DataRow>>(
-                                        this,
-                                        methodName: nameof(ToDataRows),
-                                        typeParameter: joinTableQueryable.ElementType,
-                                        // Method arguments
-                                        joinTableQueryable, tableWithColumnsToProjectOnto);
+        // Dispatch via cached compiled delegate keyed on TDataRow (#129, Wave 12).
+        var toDataRowsReturnValue = CompiledQueryDispatch.ToDataRows(
+            joinTableQueryable.ElementType,
+            joinTableQueryable, tableWithColumnsToProjectOnto);
 
         if (toDataRowsReturnValue == null)
-            throw new ArgumentNullException($"{nameof(ToDataRows)}'s return value was null", innerException: null);
+            throw new ArgumentNullException("ToDataRows's return value was null", innerException: null);
 
         return toDataRowsReturnValue.ToList();
     }
