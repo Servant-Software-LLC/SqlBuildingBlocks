@@ -148,7 +148,7 @@ These are designed extension points:
 
 1. **PostgreSQL grammar build-out.** Stub today. Adding RETURNING, array types, JSON operators, distinct PostgreSQL data types. Consumes the same plug-in pattern as MySQL.
 2. **SQL Server grammar build-out.** Stub today. Adding TOP, OUTPUT, MERGE, table hints, square-bracket identifier quoting.
-3. **Query engine feature coverage.** Window functions execution (#137), CTE execution (#125), error handling (#127), generic-method-dispatch performance (#129) are all open. The engine layer accepts new arms in `SqlExpression` and new visitors without architectural change.
+3. **Query engine feature coverage.** Window functions execution (#137), CTE execution (#125), error handling (#127) are all open. Generic-method-dispatch performance (#129) was resolved in Wave 12 of `/uber-report 2026-05-09` by replacing `ReflectionHelper.CallMethod` with cached compiled-delegate dispatch in `SqlBuildingBlocks.Utils.CompiledQueryDispatch`; `ReflectionHelper` is `[Obsolete]` on the public surface, retained for back-compat. The engine layer accepts new arms in `SqlExpression` and new visitors without architectural change.
 4. **`SqlExpression` discriminated union enforcement.** Issue #132 -- today multiple properties can be set simultaneously, which is a latent invariant violation. Tightening this is a public-surface change.
 5. **Integration tests for consumer scenarios.** Issue #151 -- a new test project exercising real FileBased.DataProviders and MockDB usage patterns would catch consumer breakage before NuGet release.
 6. **Grammar / SQL compatibility matrix as published documentation.** Today only in `sqlbuildingblocks-qa-knowledge`. Promoting it to user-facing docs is a doc-writer task.

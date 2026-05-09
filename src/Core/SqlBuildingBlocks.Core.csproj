@@ -12,9 +12,14 @@
 
   <ItemGroup>
     <None Include="..\..\README.md" Link="README.md" Pack="true" PackagePath="\" />
-	  
+
 	<PackageReference Include="Irony" />
 	<PackageReference Include="System.ValueTuple" />
-  </ItemGroup>  
-	
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Allow Core.Tests to assert on internal cache state of CompiledQueryDispatch (#129). -->
+    <InternalsVisibleTo Include="SqlBuildingBlocks.Core.Tests" />
+  </ItemGroup>
+
 </Project>

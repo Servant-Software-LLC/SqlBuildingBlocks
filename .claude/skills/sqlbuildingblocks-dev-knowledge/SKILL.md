@@ -294,6 +294,37 @@ table named `Chain` during execution. Hand-built tests must use a CTE name
 that does not collide case-insensitively with any FROM/JOIN table name in
 the recursive term.
 
+### Generic dispatch — `CompiledQueryDispatch` (issue #129, Wave 12)
+
+`QueryEngine` cannot know the element type of an `IQueryable<TDataRow>` at compile
+time (a consumer may back a table with `IQueryable<DataRow>`, `IQueryable<MyPoco>`,
+etc.). The original implementation routed through `ReflectionHelper.CallMethod`
+which used `MethodInfo.MakeGenericMethod` + `MethodInfo.Invoke` per call.
+
+Wave 12 of `/uber-report 2026-05-09` replaced this with
+`SqlBuildingBlocks.Utils.CompiledQueryDispatch` (`internal static`):
+
+- Two `ConcurrentDictionary<Type, Delegate>` caches — one for the `ApplyFilter`
+  shape, one for `ToDataRows`.
+- On first call for a given `TDataRow`, an `Expression.Lambda<...>(...)` is built
+  that closes over the open-generic `BuildExpression`, `Queryable.Where`, and
+  `IQueryableExtensions.ToDataRows` resolved from `MethodInfo.MakeGenericMethod`,
+  then `.Compile()`'d.
+- Subsequent calls hit the cached delegate directly.
+- `ReflectionHelper` is `[Obsolete]` (kept on the public surface for back-compat)
+  and has zero internal callers; all four call sites in
+  `QueryEngine.GetQueryableRowsInFromTable` / `GetQueryableRowsInJoinTable` /
+  `GetAllRowsInJoinTable` now route through `CompiledQueryDispatch`.
+
+Why this matters when adding new generic dispatch: do **not** re-introduce
+`ReflectionHelper.CallMethod` on the QueryEngine hot path. Build a new compiled
+delegate cache in the same shape if you need a third dispatch site.
+
+The `InternalsVisibleTo("SqlBuildingBlocks.Core.Tests")` declaration in
+`src/Core/SqlBuildingBlocks.Core.csproj` exists so tests can assert on the
+internal cache counters (`ApplyFilterCacheCount`, `ToDataRowsCacheCount`,
+`ClearForTests()`).
+
 ### Key Interfaces for Query Engine
 
 | Interface | Purpose |

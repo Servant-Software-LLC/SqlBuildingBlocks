@@ -124,6 +124,59 @@ These observations are starting points for follow-up performance work — they a
    non-fatal by Wave 2). For perf, add wider-shape stress (long IN lists, wide
    SELECT lists) when #129 work begins.
 
+## Post-Wave-12 baseline — 2026-05-09 (#129 resolved)
+
+Wave 12 of `/uber-report 2026-05-09` replaced the QueryEngine reflection dispatch
+(`ReflectionHelper.CallMethod` -> `MethodInfo.Invoke`) with cached compiled-delegate
+dispatch in `SqlBuildingBlocks.Utils.CompiledQueryDispatch`. The baseline below
+captures the post-refactor numbers on the same machine and `--job short` config.
+
+### QueryEngine benchmarks (100-row tables) — post-Wave-12
+
+| Method              | Mean        | Allocated    | vs original baseline |
+|-------------------- |------------:|-------------:|---------------------:|
+| ExecuteSimpleSelect |   808.8 us  |    207.3 KB  | 2.4x faster, equal alloc |
+| ExecuteJoinedSelect |   240.4 ms  |   2634.5 KB  | 1.5x faster, ~equal alloc |
+
+Source JSON: [`baseline-2026-05-09-wave12-QueryEngineBenchmarks.json`](baseline-2026-05-09-wave12-QueryEngineBenchmarks.json) and
+[`baseline-2026-05-09-wave12-QueryEngineBenchmarks.md`](baseline-2026-05-09-wave12-QueryEngineBenchmarks.md).
+
+### Parser benchmarks — post-Wave-12
+
+| Method                              | Mean       | Allocated  |
+|------------------------------------ |-----------:|-----------:|
+| ParseSimpleSelect_Ansi              |   4.29 us  |     ~7.6 KB |
+| ParseSimpleSelect_MySql             |   4.36 us  |     ~7.6 KB |
+| ParseComplexSelect_Ansi             |  57.39 us  |    ~65.1 KB |
+| ParseComplexSelect_MySql            |  62.60 us  |    ~65.8 KB |
+| ParseDeeplyNestedExpression_Ansi    |   3.72 us  |     ~8.5 KB |
+| ParseCte_Ansi                       |  12.31 us  |          -  |
+| ParseAndCreate_ComplexSelect_Ansi   |  98.67 us  |    ~82.6 KB |
+
+Source JSON: [`baseline-2026-05-09-wave12-ParseBenchmarks.json`](baseline-2026-05-09-wave12-ParseBenchmarks.json) and
+[`baseline-2026-05-09-wave12-ParseBenchmarks.md`](baseline-2026-05-09-wave12-ParseBenchmarks.md).
+
+### Findings — post-Wave-12
+
+1. **`ExecuteSimpleSelect` improved by ~2.4x (1.94 ms → 0.81 ms).** With one element
+   type cached, the per-call cost of dispatch drops from MethodInfo.Invoke (~3-5 us
+   plus boxing) to a direct delegate call (~2-3 ns). Allocated bytes are essentially
+   unchanged (207.5 KB → 207.3 KB) — the dispatch was a CPU cost, not an allocation
+   cost.
+2. **`ExecuteJoinedSelect` improved by ~1.5x (360 ms → 240 ms).** The win is real
+   but more modest than the speculative 5-10x target. The remaining cost lives
+   inside `BuildExpression<TDataRow>` (which compiles a `Where` predicate
+   expression-tree per call) and the per-row cross-product join enumeration. A
+   future PR can amortize the predicate-compile via a second cache keyed on the
+   `SqlBinaryExpression` shape — out of scope for #129.
+3. **`ParseAndCreate_ComplexSelect_Ansi` apparent improvement (167 us → 99 us)
+   is statistically inconclusive.** The Create() pipeline does not call
+   `ReflectionHelper`, so it should not benefit from this refactor. The original
+   number had a 18 us margin of error on a 167 us mean (11%) and the new number
+   has 0.45 us margin on 99 us — the change is more likely run-to-run variance
+   than signal. Worth re-measuring under a full job before attributing the
+   improvement.
+
 ## CI workflow (deferred)
 
 GitHub Actions integration is intentionally **not** part of this PR. The recommended

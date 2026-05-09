@@ -1,13 +1,17 @@
-﻿using System.Reflection;
+using System.Reflection;
 
 namespace SqlBuildingBlocks.Utils;
 
-// #129: Reflection dispatch retained pending BenchmarkDotNet baseline.
-// The CallMethod<>/GetSpecializedMethod helpers are used by QueryEngine
-// for type-specialized dispatch (see QueryEngine.cs ~lines 674, 690, 736, 766).
-// Replacement (e.g. cached compiled delegates or generic interface dispatch)
-// is deferred until we have a measurable hot-path win to justify it.
-// See https://github.com/Servant-Software-LLC/SqlBuildingBlocks/issues/129
+// #129 (Wave 12 of /uber-report 2026-05-09): the QueryEngine reflection-dispatch sites
+// that justified this helper have been replaced with cached compiled delegates in
+// SqlBuildingBlocks.Utils.CompiledQueryDispatch. The Wave 9 BenchmarkDotNet baseline
+// (Docs/Benchmarks/baseline-2026-05-09-*.json) showed ExecuteJoinedSelect at ~360 ms
+// for two 100-row tables; the dispatch was a real cost.
+//
+// This helper is retained as [Obsolete] rather than deleted because it ships in the
+// public SqlBuildingBlocks.Core NuGet contract — external consumers may still call it.
+// A separate cleanup PR will remove it once consumers are confirmed not to use it.
+[Obsolete("Reflection dispatch was replaced by SqlBuildingBlocks.Utils.CompiledQueryDispatch in Wave 12 of /uber-report 2026-05-09 (issue #129). This helper is retained for back-compat and will be removed in a future release. Prefer cached compiled delegates for any new generic-dispatch needs.")]
 public static class ReflectionHelper
 {
     public static TResult? CallMethod<TResult>(object instance, string methodName, Type typeParameter, params object?[] methodArguments) =>
