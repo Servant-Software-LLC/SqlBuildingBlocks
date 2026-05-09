@@ -61,28 +61,30 @@ public class NegativeTests
         // 3. Empty IN list
         new object[] { "SELECT * FROM Customers WHERE x IN ()" },
 
-        // (Finding: dangling comma in SELECT list -- "SELECT a, b, FROM Customers" --
-        // is silently accepted by the PostgreSQL grammar; not enforced here.)
+        // 4. Dangling comma in SELECT list (issue #167) -- now rejected by the
+        //    PostgreSQL grammar because FROM/INTO are reserved words and cannot
+        //    be consumed as identifiers after a trailing comma in the column list.
+        new object[] { "SELECT a, b, FROM Customers" },
 
-        // 4. Dangling comma in INSERT column list
+        // 5. Dangling comma in INSERT column list
         new object[] { "INSERT INTO Customers (a, b,) VALUES (1, 2)" },
 
-        // 5. Missing FROM keyword
+        // 6. Missing FROM keyword
         new object[] { "SELECT * Customers" },
 
-        // 6. Unterminated string literal
+        // 7. Unterminated string literal
         new object[] { "SELECT 'abc FROM Customers" },
 
-        // 7. Malformed JOIN -- INNER JOIN with no table or condition
+        // 8. Malformed JOIN -- INNER JOIN with no table or condition
         new object[] { "SELECT * FROM a INNER JOIN" },
 
-        // 8. Trailing operator
+        // 9. Trailing operator
         new object[] { "SELECT * FROM Customers WHERE x =" },
 
-        // 9. ON CONFLICT keyword with no body
+        // 10. ON CONFLICT keyword with no body
         new object[] { "INSERT INTO Customers (a, b) VALUES (1, 2) ON CONFLICT" },
 
-        // 10. UPDATE with dangling comma in SET list
+        // 11. UPDATE with dangling comma in SET list
         new object[] { "UPDATE Customers SET a = 1, b = 2, WHERE id = 1" },
     };
 

@@ -60,14 +60,41 @@ public class SqlServerScenarioTests
         Assert.False(selectDefinition.InvalidReferences);
     }
 
-    [Fact(Skip = "FINDING (Wave 5): QueryEngine does not honor SqlTopClause during execution. " +
-                  "SQL Server TOP parses into SqlSelectDefinition.Top correctly, but no code path " +
-                  "in QueryEngine applies the row limit (Top is propagated through CTE copies but " +
-                  "never read at result emission). LIMIT/OFFSET works because of explicit Skip/Take. " +
-                  "Until QueryEngine wires Top into the result pipeline (mirroring Limit), end-to-end " +
-                  "TOP execution silently returns the full set.")]
-    public void Scenario_Top_LimitsRowCount_NotImplemented()
+    [Fact]
+    public void Scenario_Top_LimitsRowCount()
     {
-        // Placeholder for the executable end-to-end TOP scenario, kept skipped per FINDING above.
+        // Scenario 8b: SQL Server TOP — execution-side integration.
+        // QueryEngine now honors SqlSelectDefinition.Top by limiting the result to N rows
+        // after ORDER BY. Source has 7 products; TOP 3 ORDER BY Price DESC must yield exactly
+        // the top three priced rows (Cheese 6.25, Grape 5.50, Flour 4.00).
+        var db = BuildSampleDatabase();
+        var result = Run("SELECT TOP 3 ID, Name, Price FROM Products ORDER BY Price DESC", db);
+
+        Assert.Equal(3, result.Rows.Count);
+        Assert.Equal("Cheese", result.Rows[0]["Name"]);
+        Assert.Equal("Grape", result.Rows[1]["Name"]);
+        Assert.Equal("Flour", result.Rows[2]["Name"]);
+    }
+
+    [Fact]
+    public void Scenario_Top_Percent_ThrowsNotSupported()
+    {
+        // TOP PERCENT parses but the engine does not implement the percent semantics.
+        // Verify the engine raises a clean NotSupportedException rather than returning wrong rows.
+        var db = BuildSampleDatabase();
+        var ex = Assert.Throws<NotSupportedException>(() =>
+            Run("SELECT TOP 50 PERCENT ID FROM Products", db));
+        Assert.Contains("PERCENT", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Scenario_Top_WithTies_ThrowsNotSupported()
+    {
+        // TOP ... WITH TIES parses but the engine does not implement tie-extension semantics.
+        // Verify the engine raises a clean NotSupportedException rather than silently dropping ties.
+        var db = BuildSampleDatabase();
+        var ex = Assert.Throws<NotSupportedException>(() =>
+            Run("SELECT TOP 3 WITH TIES ID FROM Products ORDER BY Price DESC", db));
+        Assert.Contains("WITH TIES", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 }

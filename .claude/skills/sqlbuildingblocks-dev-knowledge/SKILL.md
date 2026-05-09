@@ -136,6 +136,26 @@ dotnet test --configuration Release
 5. **Create corresponding logical entity** in `src/Core/LogicalEntities/` if needed
 6. **Write tests** in `tests/Core.Tests/` using GrammarParser utility
 
+### Reserving Keywords (avoid silent IdentifierTerminal capture)
+
+`grammar.ToTerm("FOO")` registers a keyword token but does **not** prevent the
+`IdentifierTerminal` from also matching `FOO` in identifier-position contexts.
+When a malformed SQL pattern leaves the parser expecting an identifier
+(e.g. a trailing comma in a SELECT column list, leaving `FROM` in
+columnSource position), the lexer happily produces `FROM` as an identifier and
+the grammar silently accepts the input.
+
+The fix is `grammar.MarkReservedWords("FROM", "INTO", ...)` near the place the
+keyword is introduced. Existing examples in the codebase:
+
+- `SelectStmt.cs` reserves `FROM`, `INTO` (issue #167 -- the dangling SELECT comma fix)
+- `Expr.cs` reserves `CASE`, `WHEN`, `THEN`, `ELSE`, `END`, `CAST`, `IS`, `BETWEEN`, `EXISTS`
+- `LiteralValue.cs` reserves `NULL`, `TRUE`, `FALSE` and synonyms
+- `MergeStmt.cs` reserves `MERGE`, `USING`, `MATCHED`, `SOURCE`, `TARGET`
+- Various dialect-specific keywords reserved in their respective files
+
+Rule of thumb: **if a keyword's misuse should be a syntax error rather than a column reference, reserve it.** When you add or modify a NonTerminal that introduces a new SQL keyword, decide whether it should be reserved. Then add a NegativeTests row that proves the malformed pattern is rejected.
+
 ## Logical Entity Classes (src/Core/LogicalEntities/)
 
 These represent the semantic meaning of parsed SQL:

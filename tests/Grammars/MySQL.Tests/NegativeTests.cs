@@ -64,25 +64,27 @@ public class NegativeTests
         // 5. Malformed LIMIT -- trailing comma
         new object[] { "SELECT * FROM Customers LIMIT 5," },
 
-        // (Finding: dangling comma in SELECT list -- "SELECT a, b, FROM Customers" --
-        // is silently accepted by the MySQL grammar; not enforced here.)
+        // 6. Dangling comma in SELECT list (issue #167) -- now rejected by the
+        //    MySQL grammar because FROM/INTO are reserved words and cannot be
+        //    consumed as identifiers after a trailing comma in the column list.
+        new object[] { "SELECT a, b, FROM Customers" },
 
-        // 6. Dangling comma in INSERT column list
+        // 7. Dangling comma in INSERT column list
         new object[] { "INSERT INTO Customers (a, b,) VALUES (1, 2)" },
 
-        // 7. Missing FROM keyword
+        // 8. Missing FROM keyword
         new object[] { "SELECT * Customers" },
 
-        // 8. Unterminated string literal
+        // 9. Unterminated string literal
         new object[] { "SELECT 'abc FROM Customers" },
 
-        // 9. Malformed JOIN -- INNER JOIN with no table or condition
+        // 10. Malformed JOIN -- INNER JOIN with no table or condition
         new object[] { "SELECT * FROM a INNER JOIN" },
 
-        // 10. Trailing operator
+        // 11. Trailing operator
         new object[] { "SELECT * FROM Customers WHERE x =" },
 
-        // 11. UPDATE with dangling comma in SET list
+        // 12. UPDATE with dangling comma in SET list
         new object[] { "UPDATE Customers SET a = 1, b = 2, WHERE id = 1" },
     };
 

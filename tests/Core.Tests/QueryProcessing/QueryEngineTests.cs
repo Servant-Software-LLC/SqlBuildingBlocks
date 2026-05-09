@@ -592,6 +592,92 @@ public class QueryEngineTests
     }
 
     [Fact]
+    public void QueryAsDataTable_OrderBy_Then_Top_LimitsRowCount()
+    {
+        // Issue #173: SQL Server TOP — verify SqlSelectDefinition.Top is honored at result emission.
+        const string databaseName = "MyDB";
+
+        SqlSelectDefinition sqlSelect = new();
+        SqlColumn idCol = new(databaseName, "locations", "id") { ColumnType = typeof(int) };
+        SqlColumn cityCol = new(databaseName, "locations", "city") { ColumnType = typeof(string) };
+        sqlSelect.Columns.Add(idCol);
+        sqlSelect.Columns.Add(cityCol);
+
+        SqlTable locationsTable = new(databaseName, "locations");
+        idCol.TableRef = locationsTable;
+        cityCol.TableRef = locationsTable;
+        sqlSelect.Table = locationsTable;
+
+        sqlSelect.OrderBy.Add(new SqlOrderByColumn("id", descending: false));
+        sqlSelect.Top = new SqlTopClause { Count = new SqlLimitValue(2) };
+
+        DataSet dataSet = new(databaseName);
+        DataTable locations = new("locations");
+        locations.Columns.Add("id", typeof(int));
+        locations.Columns.Add("city", typeof(string));
+        locations.Rows.Add(3, "Austin");
+        locations.Rows.Add(1, "Houston");
+        locations.Rows.Add(2, "New Braunfels");
+        dataSet.Tables.Add(locations);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var resultset = queryEngine.QueryAsDataTable();
+
+        // After sort: 1-Houston, 2-New Braunfels, 3-Austin. TOP 2 → first two.
+        Assert.Equal(2, resultset.Rows.Count);
+        Assert.Equal(1, resultset.Rows[0]["id"]);
+        Assert.Equal(2, resultset.Rows[1]["id"]);
+    }
+
+    [Fact]
+    public void QueryAsDataTable_Top_Percent_ThrowsNotSupported()
+    {
+        // Issue #173: TOP PERCENT is parsed but not implemented — engine must throw cleanly.
+        const string databaseName = "MyDB";
+        SqlSelectDefinition sqlSelect = new();
+        SqlColumn idCol = new(databaseName, "locations", "id") { ColumnType = typeof(int) };
+        sqlSelect.Columns.Add(idCol);
+        SqlTable locationsTable = new(databaseName, "locations");
+        idCol.TableRef = locationsTable;
+        sqlSelect.Table = locationsTable;
+        sqlSelect.Top = new SqlTopClause { Count = new SqlLimitValue(50), Percent = true };
+
+        DataSet dataSet = new(databaseName);
+        DataTable locations = new("locations");
+        locations.Columns.Add("id", typeof(int));
+        locations.Rows.Add(1);
+        dataSet.Tables.Add(locations);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var ex = Assert.Throws<NotSupportedException>(() => queryEngine.QueryAsDataTable());
+        Assert.Contains("PERCENT", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void QueryAsDataTable_Top_WithTies_ThrowsNotSupported()
+    {
+        // Issue #173: TOP ... WITH TIES is parsed but not implemented — engine must throw cleanly.
+        const string databaseName = "MyDB";
+        SqlSelectDefinition sqlSelect = new();
+        SqlColumn idCol = new(databaseName, "locations", "id") { ColumnType = typeof(int) };
+        sqlSelect.Columns.Add(idCol);
+        SqlTable locationsTable = new(databaseName, "locations");
+        idCol.TableRef = locationsTable;
+        sqlSelect.Table = locationsTable;
+        sqlSelect.Top = new SqlTopClause { Count = new SqlLimitValue(2), WithTies = true };
+
+        DataSet dataSet = new(databaseName);
+        DataTable locations = new("locations");
+        locations.Columns.Add("id", typeof(int));
+        locations.Rows.Add(1);
+        dataSet.Tables.Add(locations);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var ex = Assert.Throws<NotSupportedException>(() => queryEngine.QueryAsDataTable());
+        Assert.Contains("WITH TIES", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void QueryWithUnendingDataSource_Select()
     {
         SelectStmtTests.TestGrammar grammar = new();
@@ -3019,14 +3105,14 @@ public class QueryEngineTests
     }
 
     [Fact]
-    public void WindowFunction_NotSupportedKind_ThrowsNotSupported_WithName()
+    public void WindowFunction_AllNamedKinds_AreNowImplemented()
     {
-        // QueryEngine.cs:1395 — ComputeNamedWindowFunctionValues default branch.
-        // NTILE / FIRST_VALUE / LAST_VALUE / NTH_VALUE are recognized window-function names
-        // (so DetermineColumns routes them through window-function evaluation), but the engine
-        // switch only implements RowNumber/Rank/DenseRank/Lag/Lead. The default branch throws.
+        // Issue #169: NTILE / FIRST_VALUE / LAST_VALUE / NTH_VALUE were previously routed to
+        // ComputeNamedWindowFunctionValues' default branch and threw NotSupportedException.
+        // After #169, every WindowFunctionType enum value (except None) has a switch arm in
+        // ComputeNamedWindowFunctionValues, so executing NTILE end-to-end no longer throws.
+        // This test guards against accidental regression of the named-window-function coverage.
         const string databaseName = "MyDB";
-        const string unsupportedFn = "NTILE";
 
         SqlSelectDefinition sqlSelect = new();
         SqlTable table = new(databaseName, "Employees");
@@ -3038,7 +3124,7 @@ public class QueryEngineTests
         };
         sqlSelect.Columns.Add(nameCol);
 
-        var func = new SqlFunction(unsupportedFn) { ValueType = typeof(int) };
+        var func = new SqlFunction("NTILE") { ValueType = typeof(int) };
         func.Arguments.Add(new SqlExpression(new SqlLiteralValue(4)));
         func.WindowSpecification = new SqlWindowSpecification
         {
@@ -3056,9 +3142,9 @@ public class QueryEngineTests
 
         QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
 
-        var ex = Assert.Throws<NotSupportedException>(() => queryEngine.QueryAsDataTable());
-        Assert.Contains(unsupportedFn, ex.Message);
-        Assert.Contains("not yet supported", ex.Message, StringComparison.OrdinalIgnoreCase);
+        // No exception expected — the four window functions added in #169 must execute end-to-end.
+        var result = queryEngine.QueryAsDataTable();
+        Assert.Equal(2, result.Rows.Count);
     }
 
     [Fact]
@@ -3289,11 +3375,10 @@ public class QueryEngineTests
     }
 
     [Fact]
-    public void Query_Ntile_ThrowsNotSupported()
+    public void Query_Ntile_BucketsRowsCorrectly()
     {
-        // NTILE is recognized as a WindowFunctionType but not implemented in the
-        // QueryEngine switch — verify the engine throws NotSupportedException
-        // with the function name in the message.
+        // Issue #169: NTILE(N) — partition the sorted rows into N approximately-equal
+        // buckets and return the 1-based bucket index per row. Four rows / NTILE(2) ⇒ {1,1,2,2}.
         const string databaseName = "MyDB";
         SqlSelectDefinition sqlSelect = new();
         SqlTable table = new(databaseName, "Employees");
@@ -3302,7 +3387,7 @@ public class QueryEngineTests
         sqlSelect.Columns.Add(nameCol);
 
         var func = new SqlFunction("NTILE") { ValueType = typeof(int) };
-        func.Arguments.Add(new SqlExpression(new SqlLiteralValue(4)));
+        func.Arguments.Add(new SqlExpression(new SqlLiteralValue(2)));
         func.WindowSpecification = new SqlWindowSpecification
         {
             OrderBy = { new SqlOrderByColumn("Name") }
@@ -3320,14 +3405,175 @@ public class QueryEngineTests
         dataSet.Tables.Add(employees);
 
         QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
-        var ex = Assert.Throws<NotSupportedException>(() => queryEngine.QueryAsDataTable());
-        Assert.Contains("NTILE", ex.Message);
+        var result = queryEngine.QueryAsDataTable();
+
+        Assert.Equal(4, result.Rows.Count);
+        // Sort order is insertion order (stable for ties) — rows already alpha-sorted by Name.
+        Assert.Equal(1, result.Rows[0]["bucket"]);  // Alice
+        Assert.Equal(1, result.Rows[1]["bucket"]);  // Bob
+        Assert.Equal(2, result.Rows[2]["bucket"]);  // Carol
+        Assert.Equal(2, result.Rows[3]["bucket"]);  // Dave
     }
 
     [Fact]
-    public void Query_FirstValue_ThrowsNotSupported()
+    public void Query_Ntile_UnevenRowCount_FrontBucketsTakeExtras()
     {
-        // FIRST_VALUE is recognized as a WindowFunctionType but not implemented.
+        // Issue #169: 5 rows / NTILE(3) — buckets are size {2, 2, 1} (extras to front).
+        const string databaseName = "MyDB";
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable table = new(databaseName, "Employees");
+        SqlColumn nameCol = new(databaseName, "Employees", "Name") { ColumnType = typeof(string), TableRef = table };
+        sqlSelect.Columns.Add(nameCol);
+
+        var func = new SqlFunction("NTILE") { ValueType = typeof(int) };
+        func.Arguments.Add(new SqlExpression(new SqlLiteralValue(3)));
+        func.WindowSpecification = new SqlWindowSpecification
+        {
+            OrderBy = { new SqlOrderByColumn("Name") }
+        };
+        sqlSelect.Columns.Add(new SqlFunctionColumn(func) { ColumnAlias = "bucket" });
+        sqlSelect.Table = table;
+
+        DataSet dataSet = new(databaseName);
+        DataTable employees = new("Employees");
+        employees.Columns.Add("Name", typeof(string));
+        employees.Rows.Add("A");
+        employees.Rows.Add("B");
+        employees.Rows.Add("C");
+        employees.Rows.Add("D");
+        employees.Rows.Add("E");
+        dataSet.Tables.Add(employees);
+
+        var result = new QueryEngine(new DataSet[] { dataSet }, sqlSelect).QueryAsDataTable();
+
+        Assert.Equal(5, result.Rows.Count);
+        Assert.Equal(1, result.Rows[0]["bucket"]);  // A
+        Assert.Equal(1, result.Rows[1]["bucket"]);  // B
+        Assert.Equal(2, result.Rows[2]["bucket"]);  // C
+        Assert.Equal(2, result.Rows[3]["bucket"]);  // D
+        Assert.Equal(3, result.Rows[4]["bucket"]);  // E
+    }
+
+    [Fact]
+    public void Query_Ntile_BucketCountExceedsRows_OneRowPerBucket()
+    {
+        // Issue #169 boundary: NTILE(N) with N > rowcount — each row gets its own bucket
+        // starting from 1; trailing buckets are unused.
+        const string databaseName = "MyDB";
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable table = new(databaseName, "Employees");
+        SqlColumn nameCol = new(databaseName, "Employees", "Name") { ColumnType = typeof(string), TableRef = table };
+        sqlSelect.Columns.Add(nameCol);
+
+        var func = new SqlFunction("NTILE") { ValueType = typeof(int) };
+        func.Arguments.Add(new SqlExpression(new SqlLiteralValue(10)));
+        func.WindowSpecification = new SqlWindowSpecification
+        {
+            OrderBy = { new SqlOrderByColumn("Name") }
+        };
+        sqlSelect.Columns.Add(new SqlFunctionColumn(func) { ColumnAlias = "bucket" });
+        sqlSelect.Table = table;
+
+        DataSet dataSet = new(databaseName);
+        DataTable employees = new("Employees");
+        employees.Columns.Add("Name", typeof(string));
+        employees.Rows.Add("Alice");
+        employees.Rows.Add("Bob");
+        dataSet.Tables.Add(employees);
+
+        var result = new QueryEngine(new DataSet[] { dataSet }, sqlSelect).QueryAsDataTable();
+
+        Assert.Equal(2, result.Rows.Count);
+        Assert.Equal(1, result.Rows[0]["bucket"]);
+        Assert.Equal(2, result.Rows[1]["bucket"]);
+    }
+
+    [Fact]
+    public void Query_Ntile_OneBucket_AllRowsBucketOne()
+    {
+        // Issue #169 boundary: NTILE(1) — the entire partition is one bucket.
+        const string databaseName = "MyDB";
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable table = new(databaseName, "Employees");
+        SqlColumn nameCol = new(databaseName, "Employees", "Name") { ColumnType = typeof(string), TableRef = table };
+        sqlSelect.Columns.Add(nameCol);
+
+        var func = new SqlFunction("NTILE") { ValueType = typeof(int) };
+        func.Arguments.Add(new SqlExpression(new SqlLiteralValue(1)));
+        func.WindowSpecification = new SqlWindowSpecification
+        {
+            OrderBy = { new SqlOrderByColumn("Name") }
+        };
+        sqlSelect.Columns.Add(new SqlFunctionColumn(func) { ColumnAlias = "bucket" });
+        sqlSelect.Table = table;
+
+        DataSet dataSet = new(databaseName);
+        DataTable employees = new("Employees");
+        employees.Columns.Add("Name", typeof(string));
+        employees.Rows.Add("Alice");
+        employees.Rows.Add("Bob");
+        employees.Rows.Add("Carol");
+        dataSet.Tables.Add(employees);
+
+        var result = new QueryEngine(new DataSet[] { dataSet }, sqlSelect).QueryAsDataTable();
+
+        Assert.Equal(3, result.Rows.Count);
+        Assert.Equal(1, result.Rows[0]["bucket"]);
+        Assert.Equal(1, result.Rows[1]["bucket"]);
+        Assert.Equal(1, result.Rows[2]["bucket"]);
+    }
+
+    [Fact]
+    public void Query_Ntile_PartitionedIndependentBuckets()
+    {
+        // Issue #169: NTILE buckets independently within each PARTITION BY group.
+        const string databaseName = "MyDB";
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable table = new(databaseName, "Employees");
+
+        SqlColumn deptCol = new(databaseName, "Employees", "Dept") { ColumnType = typeof(string), TableRef = table };
+        SqlColumn nameCol = new(databaseName, "Employees", "Name") { ColumnType = typeof(string), TableRef = table };
+        sqlSelect.Columns.Add(deptCol);
+        sqlSelect.Columns.Add(nameCol);
+
+        var func = new SqlFunction("NTILE") { ValueType = typeof(int) };
+        func.Arguments.Add(new SqlExpression(new SqlLiteralValue(2)));
+        func.WindowSpecification = new SqlWindowSpecification
+        {
+            PartitionBy = { new SqlExpression(new SqlColumnRef(null, null, "Dept") { Column = deptCol }) },
+            OrderBy = { new SqlOrderByColumn("Name") }
+        };
+        sqlSelect.Columns.Add(new SqlFunctionColumn(func) { ColumnAlias = "bucket" });
+        sqlSelect.Table = table;
+
+        DataSet dataSet = new(databaseName);
+        DataTable employees = new("Employees");
+        employees.Columns.Add("Dept", typeof(string));
+        employees.Columns.Add("Name", typeof(string));
+        employees.Rows.Add("Eng", "Alice");
+        employees.Rows.Add("Eng", "Bob");
+        employees.Rows.Add("Sales", "Carol");
+        employees.Rows.Add("Sales", "Dave");
+        dataSet.Tables.Add(employees);
+
+        var result = new QueryEngine(new DataSet[] { dataSet }, sqlSelect).QueryAsDataTable();
+
+        Assert.Equal(4, result.Rows.Count);
+        // Row order in result follows source order; bucketing is per partition.
+        // Alice, Bob (Eng) ⇒ buckets 1, 2 ; Carol, Dave (Sales) ⇒ buckets 1, 2.
+        var rowsByName = result.Rows.Cast<DataRow>().ToDictionary(r => (string)r["Name"]);
+        Assert.Equal(1, rowsByName["Alice"]["bucket"]);
+        Assert.Equal(2, rowsByName["Bob"]["bucket"]);
+        Assert.Equal(1, rowsByName["Carol"]["bucket"]);
+        Assert.Equal(2, rowsByName["Dave"]["bucket"]);
+    }
+
+    [Fact]
+    public void Query_FirstValue_ReturnsFirstInWindow()
+    {
+        // Issue #169: FIRST_VALUE returns the first row's value within the window frame.
+        // Default frame (with ORDER BY) is UNBOUNDED PRECEDING → CURRENT ROW, so the first
+        // row in the frame is the first row of the partition (sorted ascending) for every output row.
         const string databaseName = "MyDB";
         SqlSelectDefinition sqlSelect = new();
         SqlTable table = new(databaseName, "Employees");
@@ -3352,17 +3598,24 @@ public class QueryEngineTests
         employees.Columns.Add("Salary", typeof(int));
         employees.Rows.Add("Alice", 50000);
         employees.Rows.Add("Bob", 60000);
+        employees.Rows.Add("Carol", 70000);
         dataSet.Tables.Add(employees);
 
-        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
-        var ex = Assert.Throws<NotSupportedException>(() => queryEngine.QueryAsDataTable());
-        Assert.Contains("FIRST_VALUE", ex.Message);
+        var result = new QueryEngine(new DataSet[] { dataSet }, sqlSelect).QueryAsDataTable();
+
+        Assert.Equal(3, result.Rows.Count);
+        // Every row's first_salary is the lowest (50000 = Alice).
+        Assert.Equal(50000, result.Rows[0]["first_salary"]);
+        Assert.Equal(50000, result.Rows[1]["first_salary"]);
+        Assert.Equal(50000, result.Rows[2]["first_salary"]);
     }
 
     [Fact]
-    public void Query_LastValue_ThrowsNotSupported()
+    public void Query_LastValue_DefaultFrame_ReturnsCurrentRowValue()
     {
-        // LAST_VALUE is recognized as a WindowFunctionType but not implemented.
+        // Issue #169: the famous LAST_VALUE trap. With ORDER BY but no explicit frame,
+        // the default frame is UNBOUNDED PRECEDING → CURRENT ROW, so LAST_VALUE returns
+        // the CURRENT row's value (not the partition's last value).
         const string databaseName = "MyDB";
         SqlSelectDefinition sqlSelect = new();
         SqlTable table = new(databaseName, "Employees");
@@ -3387,11 +3640,140 @@ public class QueryEngineTests
         employees.Columns.Add("Salary", typeof(int));
         employees.Rows.Add("Alice", 50000);
         employees.Rows.Add("Bob", 60000);
+        employees.Rows.Add("Carol", 70000);
         dataSet.Tables.Add(employees);
 
-        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
-        var ex = Assert.Throws<NotSupportedException>(() => queryEngine.QueryAsDataTable());
-        Assert.Contains("LAST_VALUE", ex.Message);
+        var result = new QueryEngine(new DataSet[] { dataSet }, sqlSelect).QueryAsDataTable();
+
+        Assert.Equal(3, result.Rows.Count);
+        // Each output row's last_salary equals its own salary (default frame is up to current row).
+        Assert.Equal(50000, result.Rows[0]["last_salary"]);
+        Assert.Equal(60000, result.Rows[1]["last_salary"]);
+        Assert.Equal(70000, result.Rows[2]["last_salary"]);
+    }
+
+    [Fact]
+    public void Query_LastValue_ExplicitUnboundedFrame_ReturnsPartitionLast()
+    {
+        // Issue #169: with an explicit ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING,
+        // LAST_VALUE returns the last (highest-ordered) value in the partition for every row.
+        const string databaseName = "MyDB";
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable table = new(databaseName, "Employees");
+
+        SqlColumn nameCol = new(databaseName, "Employees", "Name") { ColumnType = typeof(string), TableRef = table };
+        SqlColumn salaryCol = new(databaseName, "Employees", "Salary") { ColumnType = typeof(int), TableRef = table };
+        sqlSelect.Columns.Add(nameCol);
+        sqlSelect.Columns.Add(salaryCol);
+
+        var func = new SqlFunction("LAST_VALUE") { ValueType = typeof(object) };
+        func.Arguments.Add(new SqlExpression(new SqlColumnRef(null, null, "Salary") { Column = salaryCol }));
+        func.WindowSpecification = new SqlWindowSpecification
+        {
+            OrderBy = { new SqlOrderByColumn("Salary") },
+            Frame = new SqlWindowFrame(WindowFrameMode.Rows,
+                new SqlWindowFrameBound(WindowFrameBoundType.UnboundedPreceding),
+                new SqlWindowFrameBound(WindowFrameBoundType.UnboundedFollowing))
+        };
+        sqlSelect.Columns.Add(new SqlFunctionColumn(func) { ColumnAlias = "last_salary" });
+        sqlSelect.Table = table;
+
+        DataSet dataSet = new(databaseName);
+        DataTable employees = new("Employees");
+        employees.Columns.Add("Name", typeof(string));
+        employees.Columns.Add("Salary", typeof(int));
+        employees.Rows.Add("Alice", 50000);
+        employees.Rows.Add("Bob", 60000);
+        employees.Rows.Add("Carol", 70000);
+        dataSet.Tables.Add(employees);
+
+        var result = new QueryEngine(new DataSet[] { dataSet }, sqlSelect).QueryAsDataTable();
+
+        Assert.Equal(3, result.Rows.Count);
+        // Every row's last_salary is the highest (70000 = Carol).
+        Assert.Equal(70000, result.Rows[0]["last_salary"]);
+        Assert.Equal(70000, result.Rows[1]["last_salary"]);
+        Assert.Equal(70000, result.Rows[2]["last_salary"]);
+    }
+
+    [Fact]
+    public void Query_NthValue_ReturnsNthInFrame()
+    {
+        // Issue #169: NTH_VALUE(expr, 2) over an unbounded-frame returns the 2nd row's expr
+        // for every output row in the partition.
+        const string databaseName = "MyDB";
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable table = new(databaseName, "Employees");
+
+        SqlColumn salaryCol = new(databaseName, "Employees", "Salary") { ColumnType = typeof(int), TableRef = table };
+        sqlSelect.Columns.Add(salaryCol);
+
+        var func = new SqlFunction("NTH_VALUE") { ValueType = typeof(object) };
+        func.Arguments.Add(new SqlExpression(new SqlColumnRef(null, null, "Salary") { Column = salaryCol }));
+        func.Arguments.Add(new SqlExpression(new SqlLiteralValue(2)));
+        func.WindowSpecification = new SqlWindowSpecification
+        {
+            OrderBy = { new SqlOrderByColumn("Salary") },
+            Frame = new SqlWindowFrame(WindowFrameMode.Rows,
+                new SqlWindowFrameBound(WindowFrameBoundType.UnboundedPreceding),
+                new SqlWindowFrameBound(WindowFrameBoundType.UnboundedFollowing))
+        };
+        sqlSelect.Columns.Add(new SqlFunctionColumn(func) { ColumnAlias = "second_salary" });
+        sqlSelect.Table = table;
+
+        DataSet dataSet = new(databaseName);
+        DataTable employees = new("Employees");
+        employees.Columns.Add("Salary", typeof(int));
+        employees.Rows.Add(50000);
+        employees.Rows.Add(60000);
+        employees.Rows.Add(70000);
+        dataSet.Tables.Add(employees);
+
+        var result = new QueryEngine(new DataSet[] { dataSet }, sqlSelect).QueryAsDataTable();
+
+        Assert.Equal(3, result.Rows.Count);
+        // The 2nd row in sorted-by-Salary order is 60000.
+        Assert.Equal(60000, result.Rows[0]["second_salary"]);
+        Assert.Equal(60000, result.Rows[1]["second_salary"]);
+        Assert.Equal(60000, result.Rows[2]["second_salary"]);
+    }
+
+    [Fact]
+    public void Query_NthValue_NExceedsFrameSize_ReturnsNull()
+    {
+        // Issue #169: NTH_VALUE(expr, N) returns NULL when N is larger than the frame.
+        const string databaseName = "MyDB";
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable table = new(databaseName, "Employees");
+
+        SqlColumn salaryCol = new(databaseName, "Employees", "Salary") { ColumnType = typeof(int), TableRef = table };
+        sqlSelect.Columns.Add(salaryCol);
+
+        var func = new SqlFunction("NTH_VALUE") { ValueType = typeof(object) };
+        func.Arguments.Add(new SqlExpression(new SqlColumnRef(null, null, "Salary") { Column = salaryCol }));
+        func.Arguments.Add(new SqlExpression(new SqlLiteralValue(5)));
+        func.WindowSpecification = new SqlWindowSpecification
+        {
+            OrderBy = { new SqlOrderByColumn("Salary") },
+            Frame = new SqlWindowFrame(WindowFrameMode.Rows,
+                new SqlWindowFrameBound(WindowFrameBoundType.UnboundedPreceding),
+                new SqlWindowFrameBound(WindowFrameBoundType.UnboundedFollowing))
+        };
+        sqlSelect.Columns.Add(new SqlFunctionColumn(func) { ColumnAlias = "fifth_salary" });
+        sqlSelect.Table = table;
+
+        DataSet dataSet = new(databaseName);
+        DataTable employees = new("Employees");
+        employees.Columns.Add("Salary", typeof(int));
+        employees.Rows.Add(50000);
+        employees.Rows.Add(60000);
+        dataSet.Tables.Add(employees);
+
+        var result = new QueryEngine(new DataSet[] { dataSet }, sqlSelect).QueryAsDataTable();
+
+        Assert.Equal(2, result.Rows.Count);
+        Assert.Equal(DBNull.Value, result.Rows[0]["fifth_salary"]);
+        Assert.Equal(DBNull.Value, result.Rows[1]["fifth_salary"]);
     }
 
     [Fact(Skip = "FINDING: QueryEngine does not validate that LAG/LEAD have at least one argument. " +

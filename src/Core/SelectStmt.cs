@@ -67,6 +67,13 @@ public class SelectStmt : NonTerminal
         var INTERSECT = grammar.ToTerm("INTERSECT");
         var EXCEPT = grammar.ToTerm("EXCEPT");
 
+        // Reserve FROM and INTO as keywords so the IdentifierTerminal cannot
+        // claim them.  Without this, "SELECT a, b, FROM Customers" is silently
+        // accepted because the trailing comma causes the parser to expect
+        // another columnItem; the lexer then lexes FROM as an identifier
+        // (column name) and Customers becomes its alias.  See issue #167.
+        grammar.MarkReservedWords("FROM", "INTO");
+
         SelRestrOpt = new NonTerminal("selRestrOpt");
         SelRestrOpt.Rule = grammar.Empty | "ALL" | "DISTINCT";
         var selRestrOpt = SelRestrOpt;
