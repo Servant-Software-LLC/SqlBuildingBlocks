@@ -45,10 +45,10 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           global-json-file: global.json
 
@@ -62,7 +62,7 @@ jobs:
 
       - name: Upload BenchmarkDotNet artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: benchmark-results
           path: benchmarks/SqlBuildingBlocks.Benchmarks/BenchmarkDotNet.Artifacts/**
@@ -94,7 +94,7 @@ jobs:
 
       - name: Post benchmark report as PR comment
         if: always() && github.event_name == 'pull_request' && steps.compare.outputs.summary_path != ''
-        uses: marocchino/sticky-pull-request-comment@v2
+        uses: marocchino/sticky-pull-request-comment@v3
         with:
           header: benchmarks
           recreate: true
