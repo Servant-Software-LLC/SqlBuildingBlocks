@@ -114,7 +114,7 @@ live in `Docs/Benchmarks/README.md`.
 | `Id` | Identifiers (schema.table.column hierarchies) |
 | `SimpleId` | Basic identifier token |
 | `Parameter` | Parameterized query placeholders |
-| `LiteralValue` | String, numeric, NULL, date literals |
+| `LiteralValue` | String, numeric, NULL, date literals (see "Numeric literal runtime types" below) |
 | `FuncCall` | SQL function calls with arguments |
 | `DataType` | Type definitions (INT, VARCHAR, etc.) |
 
@@ -167,6 +167,21 @@ keyword is introduced. Existing examples in the codebase:
 - `SelectStmt.cs` reserves `FROM`, `INTO` (issue #167 -- the dangling SELECT comma fix)
 - `Expr.cs` reserves `CASE`, `WHEN`, `THEN`, `ELSE`, `END`, `CAST`, `IS`, `BETWEEN`, `EXISTS`
 - `LiteralValue.cs` reserves `NULL`, `TRUE`, `FALSE` and synonyms
+
+### Numeric literal runtime types (#184)
+
+`LiteralValue` configures Irony's `NumberLiteral` with `DefaultFloatType = TypeCode.Decimal`,
+so unsuffixed fractional literals (e.g. `3.00`, `12.345`) materialize as `System.Decimal`,
+not `System.Double`. SQL numerics are exact, not approximate, and decimal preserves the
+literal's scale. Integer literals materialize as `System.Int32` (Irony's
+`DefaultIntTypes = [TypeCode.Int32]`). Scientific-notation literals (e.g. `3.0e2`) still
+go through Irony's exponent path and may produce `System.Double`.
+
+`LiteralValue.Create` accepts every numeric runtime type the grammar can hand it:
+`int`, `decimal`, `double`, `float`, plus `string` and the boolean / NULL terms. If you
+add a new numeric path that materializes some other CLR type (e.g. `long` for an
+unsuffixed-integer overflow case), extend both `Create`'s switch and `SqlLiteralValue`'s
+constructors / `GetExpression` arms — the discriminated union must cover every type.
 - `MergeStmt.cs` reserves `MERGE`, `USING`, `MATCHED`, `SOURCE`, `TARGET`
 - Various dialect-specific keywords reserved in their respective files
 
@@ -293,6 +308,86 @@ parameterless overloads continue to work for existing consumers.
 table named `Chain` during execution. Hand-built tests must use a CTE name
 that does not collide case-insensitively with any FROM/JOIN table name in
 the recursive term.
+
+### Self-join correctness — `SqlTableOccurrenceComparer` (issue #183, Wave 13)
+
+`SqlTable.Equals(SqlTable?)` compares `(DatabaseName, TableName)` and **ignores**
+`TableAlias`. That contract is part of the public API (consumers may rely on the
+alias-blind semantics for "is this column referencing the Customers table?"
+checks), so it is unchanged. But the QueryEngine bookkeeping dictionaries must
+keep distinct occurrences of the same table — e.g. `t a` and `t b` in a
+self-join — separate, otherwise both columns appear to reference the same join
+table and the predicate-builder produces a Cartesian product.
+
+`SqlBuildingBlocks.LogicalEntities.SqlTableOccurrenceComparer` (public,
+`Instance` static singleton) compares
+`(DatabaseName, TableName, TableAlias)` case-insensitively. It is wired into:
+
+- `ProcessingState.TablesInProcessing` / `TablesProjections` /
+  `DataRowsOfOtherTables` / `AllJoinTableRows` / `MatchedJoinRows`.
+- The local `HashSet<SqlTable>` instances in `QueryEngine.ResolveSelectColumns`
+  (RIGHT/FULL OUTER null-padding) and `BuildResultRow` and `GetColumnRefs`.
+- The `!=` reference checks in `SqlExpression.GetColumnExpression` — replaced
+  with `!SqlTableOccurrenceComparer.Instance.Equals(...)` so the substitute-value
+  branch correctly distinguishes a self-join's two occurrences.
+
+Adding a new bookkeeping collection that is keyed by `SqlTable`? Pass
+`SqlTableOccurrenceComparer.Instance` to the constructor — otherwise self-joins
+will silently collapse into the wrong shape.
+
+### `WhereApplied` reset between FROM-row iterations (issue #183 finding, Wave 13)
+
+`ProcessingState.WhereApplied` tracks whether the WHERE clause has been
+incorporated into the JOIN-side filter. The check at
+`GetQueryableRowsInJoinTable` only AND's the WHERE into the filter when
+`WhereApplied is null`. Pre-Wave 13, `GetQueryableRowsInJoinTable` had a stray
+unconditional `processingState.WhereApplied = sqlSelectDefinition.Table;` at the
+end that (a) clobbered the more-precise marker the conditional set inside the
+`if`, and (b) ran on every iteration of the outer FROM-row loop. After the first
+FROM row, `WhereApplied` was non-null forever and subsequent rows skipped
+re-incorporating the multi-table WHERE — silently dropping correctness for any
+self-join (or other multi-table) WHERE filter.
+
+The fix:
+- Removed the bogus unconditional assignment.
+- Snapshot `WhereApplied` at the start of `ResolveSelectColumns(processingState,
+  fromDataRows)` and reset it to that snapshot at the start of every FROM-row
+  iteration. The JOIN-side filter is rebuilt per FROM row anyway (substituted
+  values change), so the WHERE-application decision must also be made fresh.
+
+### DBNull / Nullable promotion in comparison predicates (issue #186, Wave 13)
+
+Pre-Wave 13, `SqlExpression.GetExpressionForDataRow` emitted
+`Expression.Convert(rawObject, columnType)` (e.g. `Expression.Convert(value, int)`).
+At runtime, when the underlying DataRow column held `DBNull.Value`, the conversion
+threw — making `JOIN ON nullable_col = literal` and `WHERE nullable_col = X`
+unusable for any column that could be NULL. Wave 11's recursive-CTE work had to
+use `parent_id = 0` as a "no-parent" sentinel because of this.
+
+The fix lives in two places in `src/Core/LogicalEntities/SqlExpression.cs`:
+
+- `GetExpressionForDataRow` — for value-type columns, the raw indexer value is
+  wrapped in a runtime `Expression.Condition(isDBNull, default(T?), (T?)(T)value)`
+  that produces `Nullable<T>`. The existing nullable-aware lifting in
+  `SqlBinaryExpression.GetBinaryExpression` then produces the correct SQL
+  three-valued logic result (UNKNOWN/false) for the predicate.
+- `GetColumnExpression` substitute-values branch — when the substituted value is
+  `DBNull.Value`, returns `Expression.Constant(null, Nullable<T>)`. When the value
+  is non-null, returns `Expression.Constant(typedValue, Nullable<T>)` so the operand
+  types align with the DataRow-backed side.
+
+This required fixing a latent companion bug in `GetBinaryExpression`'s
+"both-nullable" branch: it used `Expression.Add(leftHasValue, rightHasValue)`
+which throws because `Add` is undefined for `bool`. Replaced with
+`Expression.AndAlso` plus an unwrapped value comparison so the lifted bool issue
+is avoided.
+
+`IS NULL` / `IS NOT NULL` are unchanged — they go through `GetIsNullExpression`,
+which reads the raw DataRow indexer directly and compares to `DBNull.Value`.
+
+Operator coverage: `=`, `<>`, `<`, `<=`, `>`, `>=` all flow through
+`GetBinaryExpression` and benefit from the fix. `IS NULL` / `IS NOT NULL` had
+their own DBNull-aware path already.
 
 ### Generic dispatch — `CompiledQueryDispatch` (issue #129, Wave 12)
 

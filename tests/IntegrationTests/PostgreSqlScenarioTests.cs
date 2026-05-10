@@ -61,6 +61,35 @@ public class PostgreSqlScenarioTests
     }
 
     [Fact]
+    public void Scenario_DecimalLiteralComparison_FiltersByPriceGreaterThan()
+    {
+        // Issue #184: dialect parity — PostgreSQL grammar must also handle unsuffixed
+        // fractional literals against decimal-typed columns end-to-end.
+        var db = new InMemoryDatabase("Sales");
+        var products = db.AddTable("products",
+            ("id", typeof(int)),
+            ("name", typeof(string)),
+            ("price", typeof(decimal)));
+        products.Rows.Add(1, "Apple", 1.50m);
+        products.Rows.Add(2, "Bread", 3.00m);
+        products.Rows.Add(3, "Cheese", 6.25m);
+        products.Rows.Add(4, "Donut", 0.75m);
+
+        var grammar = new PostgreSqlSelectGrammar();
+        var node = ParseHelper.Parse(grammar, "SELECT id, price FROM products WHERE price > 3.00");
+        var selectDefinition = grammar.CreateSelect(node, db, db);
+        Assert.False(selectDefinition.InvalidReferences);
+
+        var allTableProvider = new AllTableDataProvider(new[] { (SqlBuildingBlocks.Interfaces.ITableDataProvider)db });
+        var engine = new QueryEngine(allTableProvider, selectDefinition);
+        var result = engine.QueryAsDataTable();
+
+        // Prices > 3.00 are 6.25 (Cheese) only — 1.50, 3.00, and 0.75 are excluded.
+        Assert.Single(result.Rows);
+        Assert.Equal(6.25m, (decimal)result.Rows[0]["price"]);
+    }
+
+    [Fact]
     public void Scenario_InsertReturning_ParsesEndToEnd()
     {
         // Scenario 7: PostgreSQL RETURNING — INSERT ... RETURNING.

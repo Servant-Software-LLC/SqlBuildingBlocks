@@ -4353,4 +4353,531 @@ public class QueryEngineTests
     }
 
     #endregion
+
+    // ======================================================================
+    // Issue #186 — DBNull / Int promotion in JOIN ON / WHERE comparison predicates
+    //
+    // Per SQL three-valued logic, any comparison (other than IS NULL / IS NOT NULL)
+    // involving NULL evaluates to UNKNOWN — modeled as false so the row is excluded
+    // from JOIN ON / WHERE predicates. Before #186 the expression-builder threw at
+    // runtime when a DataRow column held DBNull because Expression.Convert(DBNull, T)
+    // is invalid. The fix promotes DataRow-backed value-type columns to Nullable<T>
+    // and feeds the existing nullable-aware lifting in GetBinaryExpression.
+    // ======================================================================
+    #region Issue #186 — DBNull handling in comparison predicates
+
+    /// <summary>
+    /// JOIN ON nullable_col = literal: when the column value is DBNull, the row is excluded
+    /// (UNKNOWN in three-valued logic). Pre-#186 this throws "Object cannot be cast from
+    /// DBNull to other types" inside the compiled predicate.
+    /// </summary>
+    [Fact]
+    public void Query_JoinOn_NullableLeftSide_RowExcludedNotThrown_Issue186()
+    {
+        const string databaseName = "MyDB";
+
+        // SELECT e.Id FROM Engineers e JOIN Roots r ON e.ParentId = r.Id
+        // Engineers has 1 row with ParentId = NULL — that row's join must be excluded silently.
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable engineersTable = new(databaseName, "Engineers") { TableAlias = "e" };
+        SqlTable rootsTable = new(databaseName, "Roots") { TableAlias = "r" };
+
+        var idCol = new SqlColumn(databaseName, "Engineers", "Id") { ColumnType = typeof(int), TableRef = engineersTable };
+        sqlSelect.Columns.Add(idCol);
+        sqlSelect.Table = engineersTable;
+
+        // ON e.ParentId = r.Id
+        var parentCol = new SqlColumn(databaseName, "Engineers", "ParentId") { ColumnType = typeof(int), TableRef = engineersTable };
+        var parentRef = new SqlColumnRef(null, "e", "ParentId") { Column = parentCol };
+        var rootIdCol = new SqlColumn(databaseName, "Roots", "Id") { ColumnType = typeof(int), TableRef = rootsTable };
+        var rootIdRef = new SqlColumnRef(null, "r", "Id") { Column = rootIdCol };
+        var joinCond = new SqlBinaryExpression(new SqlExpression(parentRef), SqlBinaryOperator.Equal, new SqlExpression(rootIdRef));
+        sqlSelect.Joins.Add(new SqlJoin(rootsTable, joinCond));
+
+        DataSet dataSet = new(databaseName);
+        DataTable engineers = new("Engineers");
+        engineers.Columns.Add("Id", typeof(int));
+        engineers.Columns.Add("ParentId", typeof(int)) /* AllowDBNull */ .AllowDBNull = true;
+        engineers.Rows.Add(1, DBNull.Value); // root row — no parent
+        engineers.Rows.Add(2, 1);
+        engineers.Rows.Add(3, 1);
+        dataSet.Tables.Add(engineers);
+
+        DataTable roots = new("Roots");
+        roots.Columns.Add("Id", typeof(int));
+        roots.Rows.Add(1);
+        dataSet.Tables.Add(roots);
+
+        QueryEngine engine = new(new[] { dataSet }, sqlSelect);
+        var result = engine.QueryAsDataTable();
+
+        // Engineers 2 and 3 match Roots.Id=1; engineer 1 (ParentId=NULL) is excluded.
+        Assert.Equal(2, result.Rows.Count);
+        var ids = result.Rows.Cast<DataRow>().Select(r => Convert.ToInt32(r["Id"])).OrderBy(i => i).ToArray();
+        Assert.Equal(new[] { 2, 3 }, ids);
+    }
+
+    /// <summary>
+    /// JOIN ON nullable_col = nullable_col where one side holds DBNull: row excluded per
+    /// three-valued logic (NULL = NULL is UNKNOWN, not TRUE).
+    /// </summary>
+    [Fact]
+    public void Query_JoinOn_BothSidesNullable_NullEqualsNullExcluded_Issue186()
+    {
+        const string databaseName = "MyDB";
+
+        // SELECT e.Id FROM Engineers e JOIN Managers m ON e.ParentId = m.SupervisorId
+        // Both ParentId and SupervisorId are nullable ints. Engineer 1 has ParentId=NULL and
+        // Manager 1 has SupervisorId=NULL. Per SQL spec, NULL = NULL is UNKNOWN, so engineer 1
+        // does NOT match manager 1 even though both are NULL.
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable engineers = new(databaseName, "Engineers") { TableAlias = "e" };
+        SqlTable managers = new(databaseName, "Managers") { TableAlias = "m" };
+
+        var eIdCol = new SqlColumn(databaseName, "Engineers", "Id") { ColumnType = typeof(int), TableRef = engineers };
+        sqlSelect.Columns.Add(eIdCol);
+        sqlSelect.Table = engineers;
+
+        var eParentCol = new SqlColumn(databaseName, "Engineers", "ParentId") { ColumnType = typeof(int), TableRef = engineers };
+        var mSupCol = new SqlColumn(databaseName, "Managers", "SupervisorId") { ColumnType = typeof(int), TableRef = managers };
+        var eParentRef = new SqlColumnRef(null, "e", "ParentId") { Column = eParentCol };
+        var mSupRef = new SqlColumnRef(null, "m", "SupervisorId") { Column = mSupCol };
+        var joinCond = new SqlBinaryExpression(new SqlExpression(eParentRef), SqlBinaryOperator.Equal, new SqlExpression(mSupRef));
+        sqlSelect.Joins.Add(new SqlJoin(managers, joinCond));
+
+        DataSet dataSet = new(databaseName);
+        DataTable engineersTbl = new("Engineers");
+        engineersTbl.Columns.Add("Id", typeof(int));
+        engineersTbl.Columns.Add("ParentId", typeof(int)).AllowDBNull = true;
+        engineersTbl.Rows.Add(1, DBNull.Value);
+        engineersTbl.Rows.Add(2, 1);
+        engineersTbl.Rows.Add(3, 1);
+        dataSet.Tables.Add(engineersTbl);
+
+        DataTable managersTbl = new("Managers");
+        managersTbl.Columns.Add("MgrId", typeof(int));
+        managersTbl.Columns.Add("SupervisorId", typeof(int)).AllowDBNull = true;
+        managersTbl.Rows.Add(10, DBNull.Value); // would match engineer 1 by reference equality, but UNKNOWN per spec.
+        managersTbl.Rows.Add(11, 1);
+        dataSet.Tables.Add(managersTbl);
+
+        QueryEngine engine = new(new[] { dataSet }, sqlSelect);
+        var result = engine.QueryAsDataTable();
+
+        // Engineer 2's ParentId=1 matches Manager 11; engineer 3's ParentId=1 matches Manager 11.
+        // Engineer 1's NULL does NOT match Manager 10's NULL (UNKNOWN).
+        Assert.Equal(2, result.Rows.Count);
+        var ids = result.Rows.Cast<DataRow>().Select(r => Convert.ToInt32(r["Id"])).OrderBy(i => i).ToArray();
+        Assert.Equal(new[] { 2, 3 }, ids);
+    }
+
+    /// <summary>
+    /// WHERE nullable_col = literal: row excluded when the column value is DBNull.
+    /// </summary>
+    [Fact]
+    public void Query_Where_NullableEqualsLiteral_RowExcluded_Issue186()
+    {
+        const string databaseName = "MyDB";
+
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable t = new(databaseName, "Engineers");
+        var idCol = new SqlColumn(databaseName, "Engineers", "Id") { ColumnType = typeof(int), TableRef = t };
+        var parentCol = new SqlColumn(databaseName, "Engineers", "ParentId") { ColumnType = typeof(int), TableRef = t };
+        sqlSelect.Columns.Add(idCol);
+        sqlSelect.Table = t;
+        var parentRef = new SqlColumnRef(null, null, "ParentId") { Column = parentCol };
+        sqlSelect.WhereClause = new SqlExpression(new SqlBinaryExpression(
+            new SqlExpression(parentRef), SqlBinaryOperator.Equal, new SqlExpression(new SqlLiteralValue(1))));
+
+        DataSet dataSet = new(databaseName);
+        DataTable engineers = new("Engineers");
+        engineers.Columns.Add("Id", typeof(int));
+        engineers.Columns.Add("ParentId", typeof(int)).AllowDBNull = true;
+        engineers.Rows.Add(1, DBNull.Value);
+        engineers.Rows.Add(2, 1);
+        engineers.Rows.Add(3, 2);
+        dataSet.Tables.Add(engineers);
+
+        QueryEngine engine = new(new[] { dataSet }, sqlSelect);
+        var result = engine.QueryAsDataTable();
+
+        Assert.Equal(1, result.Rows.Count);
+        Assert.Equal(2, Convert.ToInt32(result.Rows[0]["Id"]));
+    }
+
+    /// <summary>
+    /// WHERE nullable_col IS NULL: row INCLUDED when the column is DBNull. Verifies the
+    /// IS NULL path (which has its own DBNull-aware emission) still works after the #186 fix.
+    /// </summary>
+    [Fact]
+    public void Query_Where_NullableIsNull_RowIncluded_Issue186()
+    {
+        const string databaseName = "MyDB";
+
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable t = new(databaseName, "Engineers");
+        var idCol = new SqlColumn(databaseName, "Engineers", "Id") { ColumnType = typeof(int), TableRef = t };
+        var parentCol = new SqlColumn(databaseName, "Engineers", "ParentId") { ColumnType = typeof(int), TableRef = t };
+        sqlSelect.Columns.Add(idCol);
+        sqlSelect.Table = t;
+        var parentRef = new SqlColumnRef(null, null, "ParentId") { Column = parentCol };
+        sqlSelect.WhereClause = new SqlExpression(new SqlBinaryExpression(
+            new SqlExpression(parentRef), SqlBinaryOperator.IsNull, null));
+
+        DataSet dataSet = new(databaseName);
+        DataTable engineers = new("Engineers");
+        engineers.Columns.Add("Id", typeof(int));
+        engineers.Columns.Add("ParentId", typeof(int)).AllowDBNull = true;
+        engineers.Rows.Add(1, DBNull.Value);
+        engineers.Rows.Add(2, 1);
+        dataSet.Tables.Add(engineers);
+
+        QueryEngine engine = new(new[] { dataSet }, sqlSelect);
+        var result = engine.QueryAsDataTable();
+
+        Assert.Equal(1, result.Rows.Count);
+        Assert.Equal(1, Convert.ToInt32(result.Rows[0]["Id"]));
+    }
+
+    /// <summary>
+    /// WHERE nullable_col IS NOT NULL: NULL row excluded; non-NULL rows included.
+    /// </summary>
+    [Fact]
+    public void Query_Where_NullableIsNotNull_NullRowExcluded_Issue186()
+    {
+        const string databaseName = "MyDB";
+
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable t = new(databaseName, "Engineers");
+        var idCol = new SqlColumn(databaseName, "Engineers", "Id") { ColumnType = typeof(int), TableRef = t };
+        var parentCol = new SqlColumn(databaseName, "Engineers", "ParentId") { ColumnType = typeof(int), TableRef = t };
+        sqlSelect.Columns.Add(idCol);
+        sqlSelect.Table = t;
+        var parentRef = new SqlColumnRef(null, null, "ParentId") { Column = parentCol };
+        sqlSelect.WhereClause = new SqlExpression(new SqlBinaryExpression(
+            new SqlExpression(parentRef), SqlBinaryOperator.IsNotNull, null));
+
+        DataSet dataSet = new(databaseName);
+        DataTable engineers = new("Engineers");
+        engineers.Columns.Add("Id", typeof(int));
+        engineers.Columns.Add("ParentId", typeof(int)).AllowDBNull = true;
+        engineers.Rows.Add(1, DBNull.Value);
+        engineers.Rows.Add(2, 1);
+        engineers.Rows.Add(3, 2);
+        dataSet.Tables.Add(engineers);
+
+        QueryEngine engine = new(new[] { dataSet }, sqlSelect);
+        var result = engine.QueryAsDataTable();
+
+        Assert.Equal(2, result.Rows.Count);
+        var ids = result.Rows.Cast<DataRow>().Select(r => Convert.ToInt32(r["Id"])).OrderBy(i => i).ToArray();
+        Assert.Equal(new[] { 2, 3 }, ids);
+    }
+
+    /// <summary>
+    /// WHERE nullable_col &gt; literal: NULL row excluded (UNKNOWN comparison) — confirms the
+    /// fix covers all comparison operators, not only equality.
+    /// </summary>
+    [Fact]
+    public void Query_Where_NullableGreaterThan_NullExcluded_Issue186()
+    {
+        const string databaseName = "MyDB";
+
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable t = new(databaseName, "Engineers");
+        var idCol = new SqlColumn(databaseName, "Engineers", "Id") { ColumnType = typeof(int), TableRef = t };
+        var parentCol = new SqlColumn(databaseName, "Engineers", "ParentId") { ColumnType = typeof(int), TableRef = t };
+        sqlSelect.Columns.Add(idCol);
+        sqlSelect.Table = t;
+        var parentRef = new SqlColumnRef(null, null, "ParentId") { Column = parentCol };
+        sqlSelect.WhereClause = new SqlExpression(new SqlBinaryExpression(
+            new SqlExpression(parentRef), SqlBinaryOperator.GreaterThan, new SqlExpression(new SqlLiteralValue(0))));
+
+        DataSet dataSet = new(databaseName);
+        DataTable engineers = new("Engineers");
+        engineers.Columns.Add("Id", typeof(int));
+        engineers.Columns.Add("ParentId", typeof(int)).AllowDBNull = true;
+        engineers.Rows.Add(1, DBNull.Value);
+        engineers.Rows.Add(2, 1);
+        engineers.Rows.Add(3, 2);
+        dataSet.Tables.Add(engineers);
+
+        QueryEngine engine = new(new[] { dataSet }, sqlSelect);
+        var result = engine.QueryAsDataTable();
+
+        Assert.Equal(2, result.Rows.Count);
+    }
+
+    /// <summary>
+    /// Recursive CTE with NULL "no-parent" sentinel — the variant Wave 11 had to work around
+    /// by using parent_id=0. After #186, NULL works correctly and the anchor uses
+    /// "WHERE parent_id IS NULL" with the recursive term joining on parent_id = id.
+    /// </summary>
+    [Fact]
+    public void Query_RecursiveCte_NullParentSentinel_Issue186()
+    {
+        const string databaseName = "MyDB";
+        const string cteName = "org";
+
+        // ── Anchor: SELECT id, parent_id FROM Hierarchy WHERE parent_id IS NULL ──
+        var anchorSelect = new SqlSelectDefinition();
+        var anchorTable = new SqlTable(databaseName, "Hierarchy");
+        anchorSelect.Table = anchorTable;
+        var anchorIdCol = new SqlColumn(databaseName, "Hierarchy", "id") { ColumnType = typeof(int), TableRef = anchorTable };
+        var anchorParentCol = new SqlColumn(databaseName, "Hierarchy", "parent_id") { ColumnType = typeof(int), TableRef = anchorTable };
+        anchorSelect.Columns.Add(anchorIdCol);
+        anchorSelect.Columns.Add(anchorParentCol);
+        var anchorWhereCol = new SqlColumn(databaseName, "Hierarchy", "parent_id") { ColumnType = typeof(int), TableRef = anchorTable };
+        var anchorWhereRef = new SqlColumnRef(null, "Hierarchy", "parent_id") { Column = anchorWhereCol };
+        anchorSelect.WhereClause = new SqlExpression(
+            new SqlBinaryExpression(new SqlExpression(anchorWhereRef), SqlBinaryOperator.IsNull, null));
+
+        // ── Recursive term: SELECT h.id, h.parent_id FROM Hierarchy h JOIN org ON h.parent_id = org.id ──
+        var recursiveSelect = new SqlSelectDefinition();
+        var hierarchyAliased = new SqlTable(databaseName, "Hierarchy") { TableAlias = "h" };
+        var orgTable = new SqlTable(databaseName, cteName);
+        recursiveSelect.Table = hierarchyAliased;
+
+        var recIdCol = new SqlColumn(databaseName, "Hierarchy", "id") { ColumnType = typeof(int), TableRef = hierarchyAliased };
+        var recParentCol = new SqlColumn(databaseName, "Hierarchy", "parent_id") { ColumnType = typeof(int), TableRef = hierarchyAliased };
+        recursiveSelect.Columns.Add(recIdCol);
+        recursiveSelect.Columns.Add(recParentCol);
+
+        var leftJoinCol = new SqlColumn(databaseName, "Hierarchy", "parent_id") { ColumnType = typeof(int), TableRef = hierarchyAliased };
+        var leftJoinRef = new SqlColumnRef(null, "h", "parent_id") { Column = leftJoinCol };
+        var rightJoinCol = new SqlColumn(databaseName, cteName, "id") { ColumnType = typeof(int), TableRef = orgTable };
+        var rightJoinRef = new SqlColumnRef(null, cteName, "id") { Column = rightJoinCol };
+        var joinCond = new SqlBinaryExpression(new SqlExpression(leftJoinRef), SqlBinaryOperator.Equal, new SqlExpression(rightJoinRef));
+        recursiveSelect.Joins.Add(new SqlJoin(orgTable, joinCond));
+
+        anchorSelect.SetOperations.Add(new SqlSetOperation(SqlSetOperator.UnionAll, recursiveSelect));
+
+        var sqlSelect = new SqlSelectDefinition();
+        var mainOrgTable = new SqlTable(databaseName, cteName);
+        sqlSelect.Table = mainOrgTable;
+        sqlSelect.Columns.Add(new SqlColumn(databaseName, cteName, "id") { ColumnType = typeof(int), TableRef = mainOrgTable });
+        sqlSelect.Ctes.Add(new SqlCteDefinition(cteName, anchorSelect, isRecursive: true));
+
+        DataSet dataSet = new(databaseName);
+        DataTable hierarchy = new("Hierarchy");
+        hierarchy.Columns.Add("id", typeof(int));
+        hierarchy.Columns.Add("parent_id", typeof(int)).AllowDBNull = true;
+        hierarchy.Rows.Add(1, DBNull.Value); // root — uses NULL sentinel now
+        hierarchy.Rows.Add(2, 1);
+        hierarchy.Rows.Add(3, 1);
+        hierarchy.Rows.Add(4, 2);
+        hierarchy.Rows.Add(5, 2);
+        dataSet.Tables.Add(hierarchy);
+
+        var queryEngine = new QueryEngine(new[] { dataSet }, sqlSelect);
+        var result = queryEngine.QueryAsDataTable();
+
+        Assert.Equal(5, result.Rows.Count);
+        var ids = result.Rows.Cast<DataRow>().Select(r => Convert.ToInt32(r["id"])).OrderBy(i => i).ToArray();
+        Assert.Equal(new[] { 1, 2, 3, 4, 5 }, ids);
+    }
+
+    #endregion
+
+    // ======================================================================
+    // Issue #183 — Self-join Dictionary key collapse
+    //
+    // SqlTable.Equals compares (DatabaseName, TableName) and ignores TableAlias.
+    // Pre-#183 the QueryEngine bookkeeping dictionaries (DataRowsOfOtherTables,
+    // TablesProjections, AllJoinTableRows, MatchedJoinRows, TablesInProcessing)
+    // used the default equality, so a self-join's two distinct SqlTable instances
+    // (e.g., "t a" and "t b") collapsed to the same key. The JOIN ON predicate-builder
+    // saw both columns as referencing the join table being filtered, the predicate
+    // evaluated to "currentRow.k = currentRow.k" (always true), and the engine
+    // produced a Cartesian product instead of the correct self-join semantics.
+    //
+    // Fix: introduce SqlTableOccurrenceComparer (alias-aware) and use it for the
+    // ProcessingState dictionaries plus the SqlExpression.GetColumnExpression
+    // reference-checks. SqlTable.Equals semantics are unchanged.
+    // ======================================================================
+    #region Issue #183 — Self-join via alias-aware Dictionary keys
+
+    /// <summary>
+    /// Self-join on a base table. Pre-#183 this produced rows×rows (Cartesian product); after #183
+    /// it produces the correct one-row-per-Order semantics (since a.ID = b.ID matches each row to itself).
+    /// </summary>
+    [Fact]
+    public void Query_SelfJoin_ProducesCorrectPairs_NotCartesianProduct_Issue183()
+    {
+        const string databaseName = "MyDB";
+
+        // SELECT a.ID, b.ID FROM Orders a JOIN Orders b ON a.ID = b.ID
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable a = new(databaseName, "Orders") { TableAlias = "a" };
+        SqlTable b = new(databaseName, "Orders") { TableAlias = "b" };
+
+        var aIdCol = new SqlColumn(databaseName, "Orders", "ID") { ColumnType = typeof(int), TableRef = a, ColumnAlias = "a_id" };
+        var bIdCol = new SqlColumn(databaseName, "Orders", "ID") { ColumnType = typeof(int), TableRef = b, ColumnAlias = "b_id" };
+        sqlSelect.Columns.Add(aIdCol);
+        sqlSelect.Columns.Add(bIdCol);
+        sqlSelect.Table = a;
+
+        var aIdRef = new SqlColumnRef(null, "a", "ID") { Column = aIdCol };
+        var bIdRef = new SqlColumnRef(null, "b", "ID") { Column = bIdCol };
+        var joinCond = new SqlBinaryExpression(new SqlExpression(aIdRef), SqlBinaryOperator.Equal, new SqlExpression(bIdRef));
+        sqlSelect.Joins.Add(new SqlJoin(b, joinCond));
+
+        DataSet dataSet = new(databaseName);
+        DataTable orders = new("Orders");
+        orders.Columns.Add("ID", typeof(int));
+        orders.Rows.Add(100);
+        orders.Rows.Add(101);
+        orders.Rows.Add(102);
+        dataSet.Tables.Add(orders);
+
+        QueryEngine engine = new(new[] { dataSet }, sqlSelect);
+        var result = engine.QueryAsDataTable();
+
+        // Each Orders row matches itself (and only itself): 3 rows in, 3 rows out.
+        // Pre-#183 this would be 9 rows (3x3 Cartesian product).
+        Assert.Equal(3, result.Rows.Count);
+        foreach (DataRow row in result.Rows)
+        {
+            Assert.Equal(row["a_id"], row["b_id"]);
+        }
+    }
+
+    /// <summary>
+    /// Self-join with separate WHERE filters on each occurrence. The two filters reference distinct
+    /// aliases — pre-#183 the WHERE clause would conflate the occurrences and the result would be wrong.
+    /// </summary>
+    [Fact]
+    public void Query_SelfJoin_WithFiltersOnEachOccurrence_Issue183()
+    {
+        const string databaseName = "MyDB";
+
+        // SELECT a.ID, b.ID FROM Events a JOIN Events b ON a.GroupId = b.GroupId WHERE a.Year = 2026 AND b.Year = 2025
+        // Looking for pairs of events in the same group, where 'a' is the 2026 event and 'b' is the 2025 one.
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable a = new(databaseName, "Events") { TableAlias = "a" };
+        SqlTable b = new(databaseName, "Events") { TableAlias = "b" };
+
+        var aIdCol = new SqlColumn(databaseName, "Events", "ID") { ColumnType = typeof(int), TableRef = a, ColumnAlias = "a_id" };
+        var bIdCol = new SqlColumn(databaseName, "Events", "ID") { ColumnType = typeof(int), TableRef = b, ColumnAlias = "b_id" };
+        sqlSelect.Columns.Add(aIdCol);
+        sqlSelect.Columns.Add(bIdCol);
+        sqlSelect.Table = a;
+
+        var aGroupCol = new SqlColumn(databaseName, "Events", "GroupId") { ColumnType = typeof(int), TableRef = a };
+        var bGroupCol = new SqlColumn(databaseName, "Events", "GroupId") { ColumnType = typeof(int), TableRef = b };
+        var joinCond = new SqlBinaryExpression(
+            new SqlExpression(new SqlColumnRef(null, "a", "GroupId") { Column = aGroupCol }),
+            SqlBinaryOperator.Equal,
+            new SqlExpression(new SqlColumnRef(null, "b", "GroupId") { Column = bGroupCol }));
+        sqlSelect.Joins.Add(new SqlJoin(b, joinCond));
+
+        // WHERE a.Year = 2026 AND b.Year = 2025
+        var aYearCol = new SqlColumn(databaseName, "Events", "Year") { ColumnType = typeof(int), TableRef = a };
+        var bYearCol = new SqlColumn(databaseName, "Events", "Year") { ColumnType = typeof(int), TableRef = b };
+        var aYearEq = new SqlBinaryExpression(
+            new SqlExpression(new SqlColumnRef(null, "a", "Year") { Column = aYearCol }),
+            SqlBinaryOperator.Equal,
+            new SqlExpression(new SqlLiteralValue(2026)));
+        var bYearEq = new SqlBinaryExpression(
+            new SqlExpression(new SqlColumnRef(null, "b", "Year") { Column = bYearCol }),
+            SqlBinaryOperator.Equal,
+            new SqlExpression(new SqlLiteralValue(2025)));
+        sqlSelect.WhereClause = new SqlExpression(new SqlBinaryExpression(
+            new SqlExpression(aYearEq), SqlBinaryOperator.And, new SqlExpression(bYearEq)));
+
+        DataSet dataSet = new(databaseName);
+        DataTable events = new("Events");
+        events.Columns.Add("ID", typeof(int));
+        events.Columns.Add("GroupId", typeof(int));
+        events.Columns.Add("Year", typeof(int));
+        events.Rows.Add(1, 100, 2025);
+        events.Rows.Add(2, 100, 2026);
+        events.Rows.Add(3, 200, 2025);
+        events.Rows.Add(4, 200, 2026);
+        events.Rows.Add(5, 300, 2024);
+        dataSet.Tables.Add(events);
+
+        QueryEngine engine = new(new[] { dataSet }, sqlSelect);
+        var result = engine.QueryAsDataTable();
+
+        // Group 100: a=row 2 (2026), b=row 1 (2025). Group 200: a=row 4 (2026), b=row 3 (2025).
+        // Group 300 has no 2026 row, so it's excluded.
+        Assert.Equal(2, result.Rows.Count);
+        var pairs = result.Rows.Cast<DataRow>()
+            .Select(r => (Convert.ToInt32(r["a_id"]), Convert.ToInt32(r["b_id"])))
+            .OrderBy(p => p.Item1)
+            .ToArray();
+        Assert.Equal((2, 1), pairs[0]);
+        Assert.Equal((4, 3), pairs[1]);
+    }
+
+    /// <summary>
+    /// Three-way self-join. All three occurrences of the same table must remain distinct keys
+    /// in the QueryEngine bookkeeping. Pre-#183 they all collapsed to one key.
+    /// </summary>
+    [Fact]
+    public void Query_ThreeWaySelfJoin_AllOccurrencesDistinct_Issue183()
+    {
+        const string databaseName = "MyDB";
+
+        // SELECT a.ID, b.ID, c.ID FROM Numbers a JOIN Numbers b ON a.Value + 1 = b.Value
+        // would be ideal but we don't have arithmetic. Use:
+        //   SELECT a.ID FROM Numbers a JOIN Numbers b ON a.NextId = b.ID JOIN Numbers c ON b.NextId = c.ID
+        // Build a chain a→b→c.
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable a = new(databaseName, "Numbers") { TableAlias = "a" };
+        SqlTable b = new(databaseName, "Numbers") { TableAlias = "b" };
+        SqlTable c = new(databaseName, "Numbers") { TableAlias = "c" };
+
+        var aIdCol = new SqlColumn(databaseName, "Numbers", "ID") { ColumnType = typeof(int), TableRef = a, ColumnAlias = "a_id" };
+        var cIdCol = new SqlColumn(databaseName, "Numbers", "ID") { ColumnType = typeof(int), TableRef = c, ColumnAlias = "c_id" };
+        sqlSelect.Columns.Add(aIdCol);
+        sqlSelect.Columns.Add(cIdCol);
+        sqlSelect.Table = a;
+
+        // a.NextId = b.ID
+        var aNextCol = new SqlColumn(databaseName, "Numbers", "NextId") { ColumnType = typeof(int), TableRef = a };
+        var bIdCol = new SqlColumn(databaseName, "Numbers", "ID") { ColumnType = typeof(int), TableRef = b };
+        var join1 = new SqlBinaryExpression(
+            new SqlExpression(new SqlColumnRef(null, "a", "NextId") { Column = aNextCol }),
+            SqlBinaryOperator.Equal,
+            new SqlExpression(new SqlColumnRef(null, "b", "ID") { Column = bIdCol }));
+        sqlSelect.Joins.Add(new SqlJoin(b, join1));
+
+        // b.NextId = c.ID
+        var bNextCol = new SqlColumn(databaseName, "Numbers", "NextId") { ColumnType = typeof(int), TableRef = b };
+        var cIdRefCol = new SqlColumn(databaseName, "Numbers", "ID") { ColumnType = typeof(int), TableRef = c };
+        var join2 = new SqlBinaryExpression(
+            new SqlExpression(new SqlColumnRef(null, "b", "NextId") { Column = bNextCol }),
+            SqlBinaryOperator.Equal,
+            new SqlExpression(new SqlColumnRef(null, "c", "ID") { Column = cIdRefCol }));
+        sqlSelect.Joins.Add(new SqlJoin(c, join2));
+
+        DataSet dataSet = new(databaseName);
+        DataTable numbers = new("Numbers");
+        numbers.Columns.Add("ID", typeof(int));
+        numbers.Columns.Add("NextId", typeof(int));
+        numbers.Rows.Add(1, 2);
+        numbers.Rows.Add(2, 3);
+        numbers.Rows.Add(3, 4);
+        numbers.Rows.Add(4, 99); // no row 99, chain ends
+        dataSet.Tables.Add(numbers);
+
+        QueryEngine engine = new(new[] { dataSet }, sqlSelect);
+        var result = engine.QueryAsDataTable();
+
+        // Chains of length 3:
+        // 1→2→3: (a=1, c=3)
+        // 2→3→4: (a=2, c=4)
+        // 3→4→99: 99 doesn't exist, so excluded
+        Assert.Equal(2, result.Rows.Count);
+        var pairs = result.Rows.Cast<DataRow>()
+            .Select(r => (Convert.ToInt32(r["a_id"]), Convert.ToInt32(r["c_id"])))
+            .OrderBy(p => p.Item1)
+            .ToArray();
+        Assert.Equal((1, 3), pairs[0]);
+        Assert.Equal((2, 4), pairs[1]);
+    }
+
+    #endregion
 }
