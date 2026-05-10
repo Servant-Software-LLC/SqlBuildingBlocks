@@ -235,6 +235,55 @@ public class CrossDialectParityTests
         Assert.Equal("id", join.Condition.Right.Column.ColumnName);
     }
 
+    public static IEnumerable<object[]> RangeIntervalSupportingSelectGrammars => new[]
+    {
+        new object[] { typeof(AnsiSqlSelectGrammar) },
+        new object[] { typeof(MySqlSelectGrammar) },
+        new object[] { typeof(PostgreSqlSelectGrammar) },
+    };
+
+    [Theory]
+    [MemberData(nameof(RangeIntervalSupportingSelectGrammars))]
+    public void Select_WindowFrame_RangeIntervalDayPreceding_ProducesEquivalentAst(Type grammarType)
+    {
+        // Issue #180: AnsiSQL/MySQL/PostgreSQL all accept SQL:2003 INTERVAL window-frame bounds.
+        // The same SQL must produce the same logical entity shape across dialects.
+        // SQL Server is excluded — it rejects INTERVAL bounds (covered by a separate test).
+        const string sql =
+            "SELECT EventDate, " +
+            "SUM(Amount) OVER (ORDER BY EventDate RANGE BETWEEN INTERVAL '1' DAY PRECEDING AND CURRENT ROW) AS rolling " +
+            "FROM Events";
+        var grammar = BuildSelectGrammar(grammarType);
+        var selectStmt = ParseSelect(grammar, sql);
+
+        var aggregate = Assert.IsType<SqlAggregate>(selectStmt.Columns[1]);
+        var frame = aggregate.WindowSpecification!.Frame!;
+        Assert.Equal(WindowFrameMode.Range, frame.Mode);
+        Assert.Equal(WindowFrameBoundType.Preceding, frame.Start.Type);
+        Assert.Equal(SqlWindowFrameBoundOffsetKind.Interval, frame.Start.Offset!.Kind);
+        Assert.Equal(1L, frame.Start.Offset.Interval!.Magnitude);
+        Assert.Equal(IntervalQualifier.Day, frame.Start.Offset.Interval.Qualifier);
+        Assert.Equal(WindowFrameBoundType.CurrentRow, frame.End!.Type);
+    }
+
+    [Fact]
+    public void Select_WindowFrame_RangeIntervalDayPreceding_SqlServer_Rejects()
+    {
+        // Issue #180: SQL Server's grammar accepts the input syntactically (inherited from
+        // core), but the SQL Server-specific SelectStmt.CreateWindowFrameBound override
+        // surfaces a clear NotSupportedException during AST construction. This is the
+        // "clean parse error" promised by the dialect contract.
+        const string sql =
+            "SELECT EventDate, " +
+            "SUM(Amount) OVER (ORDER BY EventDate RANGE BETWEEN INTERVAL '1' DAY PRECEDING AND CURRENT ROW) AS rolling " +
+            "FROM Events";
+        var grammar = new SqlServerSelectGrammar();
+
+        var ex = Assert.Throws<NotSupportedException>(() => ParseSelect(grammar, sql));
+        Assert.Contains("INTERVAL", ex.Message);
+        Assert.Contains("SQL Server", ex.Message);
+    }
+
     // ── INSERT / UPDATE / DELETE grammars (base Core statement types) ─────────
     //
     // For DML parity we use each dialect's SimpleId (so dialect-specific quoting

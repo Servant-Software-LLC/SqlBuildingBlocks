@@ -2240,7 +2240,13 @@ public class QueryEngine : IQueryEngine
     private class CteTableDataProvider : ITableDataProvider
     {
         private readonly ITableDataProvider inner;
-        private readonly Dictionary<string, DataTable> cteResults = new(StringComparer.OrdinalIgnoreCase);
+        // Use Ordinal (case-sensitive) match: SelectReferenceResolver.ResolveCtes already
+        // applied the consumer's case-rules (via DatabaseConnectionProvider.CaseInsensitive)
+        // when binding SqlCteTable references to their canonical declared CTE name. By the
+        // time we get here, sqlTable.TableName is the canonical CTE name. Using
+        // OrdinalIgnoreCase here would shadow base tables that differ from a CTE only in
+        // case (e.g., CTE "chain" vs base table "Chain"). See issue #185.
+        private readonly Dictionary<string, DataTable> cteResults = new(StringComparer.Ordinal);
 
         public CteTableDataProvider(ITableDataProvider inner)
         {

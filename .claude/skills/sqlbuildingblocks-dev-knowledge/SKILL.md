@@ -257,6 +257,29 @@ These represent the semantic meaning of parsed SQL:
 4. **Add dialect-specific productions** to the grammar rules
 5. **Write tests** in `tests/Grammars/[Dialect].Tests/`
 
+### Window-frame INTERVAL bounds (issue #180, Wave 14b lane A)
+
+`SelectStmt.windowFrameBound` accepts SQL:2003 `INTERVAL '<magnitude>' <qualifier> PRECEDING|FOLLOWING`
+in addition to UNBOUNDED PRECEDING/FOLLOWING, CURRENT ROW, and numeric (row-count) offsets.
+The interval magnitude is a single-quoted decimal string; the qualifier is a single-field unit
+(YEAR/MONTH/DAY/HOUR/MINUTE/SECOND). All dialects that inherit the core `SelectStmt` accept this
+syntax automatically — that means AnsiSQL, MySQL, PostgreSQL.
+
+`SqlBuildingBlocks.Grammars.SQLServer.SelectStmt.CreateWindowFrameBound` overrides the base method
+to throw `NotSupportedException` when an INTERVAL bound is encountered. This is the "clean parse
+error" contract for SQL Server (which does not support RANGE INTERVAL frames in T-SQL): the
+grammar layer accepts the input syntactically, but AST construction surfaces a clear error.
+
+When you add a new dialect that should also reject INTERVAL bounds, override
+`CreateWindowFrameBound` in the same way SQL Server does. When you add a dialect that wants its
+own window-frame bound shape, override `CreateWindowFrameBound` to dispatch on the new shape.
+
+**Cross-dialect token sharing gotcha**: the `INTERVAL` token is shared across grammars via
+`grammar.ToTerm("INTERVAL")` (Irony deduplicates). MySQL's `Expr.AddIntervalSupport` calls
+`grammar.MarkPunctuation(INTERVAL)`, which strips INTERVAL from ALL parse-tree child lists
+including `intervalFrameLiteral`. `SelectStmt.CreateIntervalLiteral` therefore locates its children
+by NonTerminal/term name, not by index — do the same if you add a new INTERVAL-shaped rule.
+
 ## Query Engine (src/Core/QueryProcessing/)
 
 In-memory SQL execution engine:
@@ -301,13 +324,60 @@ Public, additive options class (issue #168). One knob today:
 All `QueryEngine` constructors accept an optional `QueryEngineOptions`; the
 parameterless overloads continue to work for existing consumers.
 
-### CTE name case-sensitivity caveat
+### CTE name case-sensitivity contract (issue #185, Wave 14b)
 
-`CteTableDataProvider.GetTableData` matches CTE names case-insensitively
-(`StringComparer.OrdinalIgnoreCase`), so a CTE named `chain` shadows a base
-table named `Chain` during execution. Hand-built tests must use a CTE name
-that does not collide case-insensitively with any FROM/JOIN table name in
-the recursive term.
+`CteTableDataProvider.GetTableData` matches CTE names **case-sensitively**
+(`StringComparer.Ordinal`). Case-rules are applied earlier in the pipeline:
+`SelectReferenceResolver.ResolveCtes` consults
+`DatabaseConnectionProvider.CaseInsensitive` when binding `SqlCteTable`
+references and writes back the canonical declared CTE name to
+`SqlCteTable.TableName`. By the time the executor looks up a CTE, an exact
+string match is correct.
+
+This means a CTE named `chain` does **not** shadow a base table named
+`Chain` during execution — the base-table FROM reference is left unbound
+to the CTE by the resolver and the executor falls through to the inner
+`ITableDataProvider`. Hand-built tests that bypass the resolver must
+ensure the `SqlTable.TableName` they put in `FROM` is either the exact
+declared CTE name (to hit the CTE) or any other string (to hit the base
+provider).
+
+### Non-recursive CTE SetOperation resolution (issue #187, Wave 14b)
+
+When a non-recursive CTE body uses `UNION` / `UNION ALL` / `INTERSECT` /
+`EXCEPT`, the right-hand SELECT of each `SqlSetOperation` must have its
+column→table references resolved at resolution time. `SelectReferenceResolver.ResolveCtes`
+calls `ResolveNonRecursiveSetOperationTerms` immediately after resolving the
+primary CTE body, threading the same outer scope (caller's outer scope plus
+prior CTEs in this WITH clause). The CTE itself is **not** in scope — a
+non-recursive CTE cannot reference itself; only the recursive arm
+(`ResolveRecursiveTerms`) adds the CTE to the scope for the recursive term.
+
+Without this, parser-driven CTE bodies that used set operations would reach
+the QueryEngine with unresolved column refs on the right-hand SELECT and fail
+mid-execution. Hand-built ASTs that pre-wired `TableRef` happened to dodge it.
+
+### Correlated derived tables — outer scope threading (issue #182, Wave 14b)
+
+`SelectReferenceResolver.ResolveDerivedTables` now threads the parent's
+outer scope plus the parent's other FROM/JOIN tables (excluding the derived
+table itself) into each derived table's inner `ResolveReferences` call. This
+makes derived tables effectively **LATERAL** by default — pragmatic for the
+in-memory query engine and consistent with how `EXISTS` / scalar-subquery
+scope is propagated.
+
+Inner-scope precedence: if a column name is unique to either the inner FROM
+or the threaded outer scope, it resolves cleanly. If it appears in both,
+the existing `TableFinder` concat-scope flow (`HuntForPossibleTable`)
+flags it as ambiguous via the `InvalidReferenceReason` channel — same
+semantics as today's EXISTS/scalar subqueries. Resolution errors inside a
+derived table propagate to the parent's `InvalidReferenceReason`.
+
+Note: as of Wave 14b the in-memory `QueryEngine` still does not materialize
+`SqlDerivedTable` for execution — `AllTableDataProvider.GetTableData` cannot
+locate `(<subquery>) AS dt`. Tests for derived-table resolution should use
+the parser → `CreateSelect` flow and assert on `selectDefinition.InvalidReferences`
+rather than `Run()`-ing the result.
 
 ### Self-join correctness — `SqlTableOccurrenceComparer` (issue #183, Wave 13)
 

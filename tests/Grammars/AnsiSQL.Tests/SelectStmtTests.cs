@@ -261,4 +261,54 @@ public class SelectStmtTests
         Assert.Equal("Customers", selectStmt.Table.TableName);
         Assert.Equal("c", selectStmt.Table.TableAlias);
     }
+
+    [Fact]
+    public void Select_WindowFrame_RangeIntervalDayPreceding_Parses()
+    {
+        // Issue #180: AnsiSQL grammar accepts SQL:2003 INTERVAL-literal bounds in
+        // RANGE-mode window frames. The same SQL must produce a SqlWindowFrameBound
+        // whose Offset is an Interval of magnitude 1, qualifier Day.
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "SELECT EventDate, " +
+            "SUM(Amount) OVER (ORDER BY EventDate RANGE BETWEEN INTERVAL '1' DAY PRECEDING AND CURRENT ROW) AS rolling " +
+            "FROM Events");
+
+        var selectStmt = grammar.Create(node);
+        var aggregate = Assert.IsType<SqlAggregate>(selectStmt.Columns[1]);
+        Assert.True(aggregate.IsWindowFunction);
+
+        var frame = aggregate.WindowSpecification!.Frame!;
+        Assert.Equal(WindowFrameMode.Range, frame.Mode);
+        Assert.Equal(WindowFrameBoundType.Preceding, frame.Start.Type);
+        Assert.Equal(SqlWindowFrameBoundOffsetKind.Interval, frame.Start.Offset!.Kind);
+        Assert.Equal(1L, frame.Start.Offset.Interval!.Magnitude);
+        Assert.Equal(IntervalQualifier.Day, frame.Start.Offset.Interval.Qualifier);
+        Assert.Equal(WindowFrameBoundType.CurrentRow, frame.End!.Type);
+    }
+
+    [Theory]
+    [InlineData("YEAR", IntervalQualifier.Year)]
+    [InlineData("MONTH", IntervalQualifier.Month)]
+    [InlineData("DAY", IntervalQualifier.Day)]
+    [InlineData("HOUR", IntervalQualifier.Hour)]
+    [InlineData("MINUTE", IntervalQualifier.Minute)]
+    [InlineData("SECOND", IntervalQualifier.Second)]
+    public void Select_WindowFrame_RangeInterval_AllSingleFieldQualifiers_Parse(string keyword, IntervalQualifier expected)
+    {
+        // Issue #180: every SQL:2003 single-field qualifier (YEAR/MONTH/DAY/HOUR/MINUTE/SECOND)
+        // must round-trip through the grammar to its IntervalQualifier enum value.
+        TestGrammar grammar = new();
+        var sql =
+            "SELECT id, " +
+            $"COUNT(*) OVER (ORDER BY ts RANGE BETWEEN INTERVAL '7' {keyword} PRECEDING AND CURRENT ROW) AS c " +
+            "FROM samples";
+        var node = GrammarParser.Parse(grammar, sql);
+
+        var selectStmt = grammar.Create(node);
+        var aggregate = Assert.IsType<SqlAggregate>(selectStmt.Columns[1]);
+        var frame = aggregate.WindowSpecification!.Frame!;
+        Assert.Equal(7L, frame.Start.Offset!.Interval!.Magnitude);
+        Assert.Equal(expected, frame.Start.Offset.Interval.Qualifier);
+    }
 }

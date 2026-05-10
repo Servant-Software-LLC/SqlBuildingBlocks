@@ -39,6 +39,29 @@ public class SelectStmt : SqlBuildingBlocks.SelectStmt
         AddOptionSupport(grammar);
     }
 
+    /// <summary>
+    /// SQL Server does not support RANGE-mode window frames with INTERVAL-literal bounds
+    /// (e.g. <c>RANGE BETWEEN INTERVAL '1' DAY PRECEDING AND CURRENT ROW</c>). The core
+    /// <see cref="SqlBuildingBlocks.SelectStmt.CreateWindowFrameBound"/> recognizes the
+    /// SQL:2003 INTERVAL bound, but on SQL Server we surface a clear failure during AST
+    /// construction rather than silently produce a logical entity the engine path won't
+    /// translate to a SQL Server query. See issue #180.
+    /// </summary>
+    protected override SqlWindowFrameBound CreateWindowFrameBound(ParseTreeNode boundNode)
+    {
+        // The first child is the intervalFrameLiteral nonterminal in the INTERVAL bound case.
+        if (boundNode.ChildNodes.Count > 0 &&
+            boundNode.ChildNodes[0].Term.Name == "intervalFrameLiteral")
+        {
+            throw new NotSupportedException(
+                "SQL Server does not support INTERVAL-literal bounds in window frame clauses " +
+                "(e.g. RANGE BETWEEN INTERVAL '1' DAY PRECEDING AND CURRENT ROW). Use a numeric " +
+                "row-count offset with a ROWS-mode frame instead.");
+        }
+
+        return base.CreateWindowFrameBound(boundNode);
+    }
+
     public override void Update(ParseTreeNode selectStmt, SqlSelectDefinition sqlSelectDefinition)
     {
         // With OPTION clause, selectStmt children are:

@@ -1100,6 +1100,67 @@ public class SelectStmtTests
     }
 
     [Fact]
+    public void Select_WindowFunction_FrameClause_IntervalDayPreceding()
+    {
+        // Issue #180 — INTERVAL-literal RANGE-mode bound: RANGE BETWEEN INTERVAL '1' DAY PRECEDING AND CURRENT ROW
+        // Note: this Core TestGrammar is case-sensitive (Grammar default), so aggregate
+        // function names use their literal mixed-case form ("Sum", not "SUM"); see the
+        // aggregateName rule in src/Core/SelectStmt.cs.
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "SELECT id, EventDate, " +
+            "Sum(amount) OVER (ORDER BY EventDate RANGE BETWEEN INTERVAL '1' DAY PRECEDING AND CURRENT ROW) AS rolling " +
+            "FROM events");
+
+        var selectStmt = ((SelectStmt)grammar.Root).Create(node);
+
+        var aggColumn = Assert.IsType<SqlAggregate>(selectStmt.Columns[2]);
+        Assert.True(aggColumn.IsWindowFunction);
+
+        var windowSpec = aggColumn.WindowSpecification;
+        Assert.NotNull(windowSpec);
+        Assert.NotNull(windowSpec!.Frame);
+        Assert.Equal(WindowFrameMode.Range, windowSpec.Frame!.Mode);
+
+        // Start bound: INTERVAL '1' DAY PRECEDING.
+        Assert.Equal(WindowFrameBoundType.Preceding, windowSpec.Frame.Start.Type);
+        Assert.NotNull(windowSpec.Frame.Start.Offset);
+        Assert.Equal(SqlWindowFrameBoundOffsetKind.Interval, windowSpec.Frame.Start.Offset!.Kind);
+        var interval = windowSpec.Frame.Start.Offset.Interval!;
+        Assert.Equal(1L, interval.Magnitude);
+        Assert.Equal(IntervalQualifier.Day, interval.Qualifier);
+
+        // End bound: CURRENT ROW.
+        Assert.NotNull(windowSpec.Frame.End);
+        Assert.Equal(WindowFrameBoundType.CurrentRow, windowSpec.Frame.End!.Type);
+        Assert.Null(windowSpec.Frame.End.Offset);
+    }
+
+    [Fact]
+    public void Select_WindowFunction_FrameClause_IntervalHourFollowing_NoBetween()
+    {
+        // Issue #180 — single-bound INTERVAL form: RANGE INTERVAL '6' HOUR FOLLOWING
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "SELECT id, ts, " +
+            "Avg(value) OVER (ORDER BY ts RANGE INTERVAL '6' HOUR FOLLOWING) AS avg6h " +
+            "FROM samples");
+
+        var selectStmt = ((SelectStmt)grammar.Root).Create(node);
+
+        var aggColumn = Assert.IsType<SqlAggregate>(selectStmt.Columns[2]);
+        var windowSpec = aggColumn.WindowSpecification;
+        Assert.NotNull(windowSpec);
+        Assert.NotNull(windowSpec!.Frame);
+        Assert.Equal(WindowFrameMode.Range, windowSpec.Frame!.Mode);
+        Assert.Equal(WindowFrameBoundType.Following, windowSpec.Frame.Start.Type);
+        Assert.Equal(SqlWindowFrameBoundOffsetKind.Interval, windowSpec.Frame.Start.Offset!.Kind);
+        Assert.Equal(6L, windowSpec.Frame.Start.Offset.Interval!.Magnitude);
+        Assert.Equal(IntervalQualifier.Hour, windowSpec.Frame.Start.Offset.Interval.Qualifier);
+        Assert.Null(windowSpec.Frame.End);
+    }
+
+    [Fact]
     public void Select_WindowFunction_CombinedPartitionByOrderByFrame()
     {
         TestGrammar grammar = new();
