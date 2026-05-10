@@ -513,9 +513,31 @@ public class AnsiSqlScenarioTests
 
         Assert.True(selectDefinition.InvalidReferences,
             $"Resolver should report the unqualified ID inside the derived table as ambiguous. Reason was: {selectDefinition.InvalidReferenceReason ?? "<none>"}");
-        // The existing resolver uses a misspelled "amibiguous" in its error string; assert
-        // on that token explicitly so a future spell-fix shows up here as a deliberate change.
-        Assert.Contains("amibiguous", selectDefinition.InvalidReferenceReason!,
+        Assert.Contains("ambiguous", selectDefinition.InvalidReferenceReason!,
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Scenario_UnaliasedTables_AmbiguousColumn_ProducesAmbiguityError()
+    {
+        // Issue #189: two unaliased tables in scope that both have a column with the
+        // same name must produce an ambiguity error, not silently resolve to the first
+        // table. Prior to the fix, GetMatchedTableInternal returned the first table
+        // whenever both table.TableAlias and columnRef.TableName were null/empty
+        // (string.Compare(null, null) == 0), bypassing HuntForPossibleTable entirely.
+        //
+        // Customers and Orders both have an ID column. With no aliases, an unqualified
+        // reference to ID in a two-table JOIN should be flagged as ambiguous.
+        var db = BuildSampleDatabase();
+        var grammar = new AnsiSqlGrammar();
+
+        var node = ParseHelper.Parse(grammar,
+            "SELECT ID FROM Customers INNER JOIN Orders ON Customers.ID = Orders.CustomerID");
+        var selectDefinition = grammar.CreateSelect(node, db, db);
+
+        Assert.True(selectDefinition.InvalidReferences,
+            $"Resolver should flag unqualified ID as ambiguous across two unaliased tables. Reason was: {selectDefinition.InvalidReferenceReason ?? "<none>"}");
+        Assert.Contains("ambiguous", selectDefinition.InvalidReferenceReason!,
             StringComparison.OrdinalIgnoreCase);
     }
 }

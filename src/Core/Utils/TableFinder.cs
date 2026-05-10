@@ -70,11 +70,22 @@ public class TableFinder
         var isDatabaseNameEmpty = string.IsNullOrEmpty(columnRef.DatabaseName);
         if (isDatabaseNameEmpty)
         {
-            //Check if this column is using a table alias.
-            foreach (var table in tables)
+            // Check if this column is using a table alias.
+            // Guard: when both the column's table-name qualifier and the table's alias are
+            // null/empty, string.Compare returns 0 (both empty strings are equal), which
+            // would silently match the *first* unaliased table in scope rather than falling
+            // through to the full column-scan in HuntForPossibleTable. Skip the alias-match
+            // pass entirely when columnRef carries no table-name qualifier — the caller will
+            // use GetPossibleTables (which scans every in-scope table's schema) to find the
+            // owning table, correctly flagging ambiguity when two unaliased tables both
+            // expose a column with the same name.
+            if (!string.IsNullOrEmpty(columnRef.TableName))
             {
-                if (string.Compare(table.TableAlias, columnRef.TableName, true) == 0)
-                    return new(table, string.Empty);
+                foreach (var table in tables)
+                {
+                    if (string.Compare(table.TableAlias, columnRef.TableName, true) == 0)
+                        return new(table, string.Empty);
+                }
             }
 
             return new(null, string.Empty);

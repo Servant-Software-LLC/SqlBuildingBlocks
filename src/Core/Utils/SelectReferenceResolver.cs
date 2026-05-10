@@ -176,7 +176,7 @@ class SelectReferenceResolver
                             break;
                         default:
                             var possibleTableNames = string.Join(", ", possibleTables.Select(table => table.Table.TableName));
-                            sqlSelectDefinition.InvalidReferenceReason = $"The column {column} in the SELECT statement does not directly refer to a table, but multiple tables claim a column of this name in their schema.  The column is amibiguous as a result.";
+                            sqlSelectDefinition.InvalidReferenceReason = $"The column {column} in the SELECT statement does not directly refer to a table, but multiple tables claim a column of this name in their schema.  The column is ambiguous as a result.";
                             return;
                     }
 
@@ -374,7 +374,7 @@ class SelectReferenceResolver
         if (possibleTables.Count > 1)
         {
             var possibleTableNames = string.Join(", ", possibleTables.Select(tableWithColumnType => tableWithColumnType.Table.TableName));
-            sqlSelectDefinition.InvalidReferenceReason = $"The column {operand.Column} in the {clauseType} statement does not directly refer to a table, but multiple tables claim a column of this name in their schema.  The column is amibiguous as a result.";
+            sqlSelectDefinition.InvalidReferenceReason = $"The column {operand.Column} in the {clauseType} statement does not directly refer to a table, but multiple tables claim a column of this name in their schema.  The column is ambiguous as a result.";
             return null;
         }
 
