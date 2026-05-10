@@ -237,35 +237,55 @@ Source JSON: [`baseline-2026-05-09-wave12-ParseBenchmarks.json`](baseline-2026-0
    than signal. Worth re-measuring under a full job before attributing the
    improvement.
 
-## CI workflow (deferred)
+## CI workflow
 
-GitHub Actions integration is intentionally **not** part of this PR. The recommended
-shape when it is added:
+GitHub Actions runs the benchmark suite on every PR that touches `src/Core/**`,
+`src/Grammars/**`, `benchmarks/**`, or this folder via
+[`.github/workflows/benchmarks.yml`](../../.github/workflows/benchmarks.yml). The
+workflow:
 
-```yaml
-# .github/workflows/benchmarks.yml (recommended — not yet committed)
-name: Benchmarks
-on:
-  pull_request:
-    paths:
-      - 'src/Core/**'
-      - 'src/Grammars/**'
-      - 'benchmarks/**'
-jobs:
-  bench:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
-        with: { dotnet-version: '10.0.x' }
-      - run: dotnet build --configuration Release
-      - run: dotnet run --configuration Release --project benchmarks/SqlBuildingBlocks.Benchmarks -- --filter "*" --job short --exporters json
-      - uses: actions/upload-artifact@v4
-        with:
-          name: benchmark-results
-          path: benchmarks/SqlBuildingBlocks.Benchmarks/BenchmarkDotNet.Artifacts/**
-```
+1. Builds and runs the benchmark project in Release with `--job short --exporters json`
+   so each run completes in roughly 3-5 minutes.
+2. Uploads the full `BenchmarkDotNet.Artifacts/` tree as a workflow artifact.
+3. Invokes [`.github/scripts/compare-benchmarks.ps1`](../../.github/scripts/compare-benchmarks.ps1)
+   to diff each fresh `*-report-full.json` against the most recent committed baseline
+   for the same benchmark class (alpha-sorted, last wins -- so adding
+   `baseline-2026-06-01-...-ParseBenchmarks.json` automatically supersedes
+   `baseline-2026-05-10-wave14-ParseBenchmarks.json`).
+4. Posts the resulting markdown table as a sticky PR comment and as the workflow
+   step summary, then exits non-zero (failing the check) when any benchmark
+   exceeds the 10/20 threshold above.
 
-A future PR should add the workflow plus a comparison step (e.g.,
-[`benchmark-action/github-action-benchmark`](https://github.com/benchmark-action/github-action-benchmark))
-that fails the check on the 10/20 threshold.
+### Runner choice
+
+The workflow pins to `windows-latest`. The committed baselines were captured on a
+Windows i7-1185G7 with .NET 10, and absolute BenchmarkDotNet numbers vary across
+runner OS / CPU classes -- a Linux runner against a Windows baseline produces
+spurious deltas in either direction. Switching to `ubuntu-latest` to align with
+[`main.yml`](../../.github/workflows/main.yml) is reasonable but requires
+re-recording every committed baseline on Linux as part of that switch.
+
+GitHub-hosted runners are shared VMs and noisier than dedicated hardware. The
+`--job short` config (3 warmups, 3 iterations) accepts wider confidence intervals
+in exchange for keeping the workflow under 5 minutes; the 10/20 threshold is
+conservative enough to ride out the noise. If false positives accumulate, the
+workflow exposes `mean_threshold` and `alloc_threshold` inputs via
+`workflow_dispatch` for tuning.
+
+### Updating the baseline
+
+When a PR intentionally changes hot-path numbers (a perf optimization lands or a
+new feature legitimately adds cost), commit the new BenchmarkDotNet JSON output
+alongside the code change:
+
+1. Run the benchmark locally with the same `--job short` flag the workflow uses.
+2. Copy the relevant `BenchmarkDotNet.Artifacts/results/*-report-full.json` files
+   into `Docs/Benchmarks/` and rename them to follow the
+   `baseline-YYYY-MM-DD-<tag>-<Class>.json` convention.
+3. Add a new "## Post-Wave-N baseline" section to this README pointing at the
+   new files and explaining what changed.
+4. Include both the code change and the new baseline JSON in the same PR. The
+   workflow's pairing rule will pick up the newer baseline on the next run.
+
+Manual workflow runs are available via the **Actions** tab (`workflow_dispatch`)
+when you need to re-run benchmarks against a branch without opening a PR.

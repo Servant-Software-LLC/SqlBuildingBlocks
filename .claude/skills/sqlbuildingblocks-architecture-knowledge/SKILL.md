@@ -65,6 +65,20 @@ Violating any of these is an architectural incident:
 5. **Grammar package boundaries match NuGet package boundaries.** `src/Grammars/MySQL/` ships as `SqlBuildingBlocks.Grammars.MySQL`. Cross-dialect code goes in Core, never in a sibling Grammar.
 6. **Parse vs resolve is a strict order.** A NonTerminal's `Create` method must not require `ITableSchemaProvider` or `IFunctionProvider` -- those are consulted later by `ResolveReferences()`. Coupling them at parse time would make the parser unusable without a full schema.
 7. **Query engine consumes logical entities, not ParseTreeNodes.** The execution path is `SqlSelectDefinition -> QueryEngine -> VirtualDataTable`. Threading Irony types into the engine would couple execution to the parser implementation.
+8. **Every public property on a SELECT-reachable logical entity has an engine consumer OR an explicit `NotSupportedException` raise-site.** Codified in [`Docs/Architectural/logical-entity-coverage-rule.md`](../../../Docs/Architectural/logical-entity-coverage-rule.md) and enforced by `tests/Core.Tests/Architecture/LogicalEntityCoverageTests.cs`. The rule turns "the engine forgot to read this property" — the recurring root cause behind issues #170, #173, #174, and several previously-resolved bugs — from a runtime silent-wrong-result class of bug into a compile-time failure of the architecture test. The single source of truth for "what is and is not supported" is `QueryEngine.ThrowIfUnsupportedFeatures()`.
+
+## Logical-Entity Coverage Rule
+
+Recurring SELECT bugs share a single shape: a logical-entity property is set by the parser but the engine silently ignores it. The rule (codified in
+[`Docs/Architectural/logical-entity-coverage-rule.md`](../../../Docs/Architectural/logical-entity-coverage-rule.md), wave 15, issue #177):
+
+> Every public instance property on a logical-entity type reachable from `SqlSelectDefinition` has a consumer in the engine path **or** an explicit `NotSupportedException` raise-site.
+
+**Enforcement seam**: `tests/Core.Tests/Architecture/LogicalEntityCoverageTests.cs`. The test reflects over types in `SqlBuildingBlocks.LogicalEntities`, walks the SELECT-reachability closure from `SqlSelectDefinition`, and scans the engine path (`src/Core/QueryProcessing/`, `src/Core/Utils/`, `src/Core/Visitors/`, `src/Core/LogicalEntities/`) for each property name as an identifier. Failures list the offending properties as `TypeName.PropertyName`.
+
+**Scope**: SELECT-reachable types only. DML/DDL types (`SqlInsertDefinition`, `SqlUpdate*`, `SqlAlter*`, etc.) are out of scope because they are consumed by downstream packages (FileBased.DataProviders, MockDB), not by the in-memory `QueryEngine`.
+
+**Adding a property**: when introducing a new property on a SELECT-reachable type, do exactly one of: wire engine consumption, add a guard in `QueryEngine.ThrowIfUnsupportedFeatures()`, or add the property to the test's allow-list with a one-line comment explaining why. The third option requires a deliberate decision — the allow-list is the rule's escape hatch.
 
 ## Grammar Plug-in Pattern
 

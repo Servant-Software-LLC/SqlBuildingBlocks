@@ -1298,6 +1298,69 @@ public class QueryEngine : IQueryEngine
         // SQL:2003 §7.11 — window functions are permitted only in the SELECT list and ORDER BY,
         // and must be rejected in WHERE / HAVING / JOIN ON / GROUP BY (issue #172).
         WindowFunctionPositionValidator.Validate(sqlSelectDefinition);
+
+        // Issue #177 / #170 — window-frame Mode coverage.
+        //
+        // The engine distinguishes ROWS-mode (positional row counts) from RANGE-mode
+        // (domain-valued INTERVAL offsets) by inspecting SqlWindowFrameBoundOffset.Kind,
+        // not by inspecting SqlWindowFrame.Mode directly. The two SQL-syntactic combinations
+        // that fall through that discrimination must be rejected explicitly so the engine
+        // never silently produces wrong results:
+        //   - Mode = Range with a Numeric offset: ANSI semantics treat this as a value-based
+        //     range (rows whose ORDER BY value is within ±N of the current row's value), but
+        //     the engine treats numeric offsets as positional. This is the exact silent-bug
+        //     shape #170 described.
+        //   - Mode = Groups: peer-group-based bounds are not modeled at all.
+        // Throwing here keeps SqlWindowFrame.Mode honest — every combination of Mode + offset
+        // either has a consumer (ROWS+Numeric, RANGE+Interval) or a NotSupportedException
+        // raise-site keyed off the unsupported combination.
+        foreach (var col in sqlSelectDefinition.Columns)
+        {
+            SqlWindowSpecification? winSpec = col switch
+            {
+                SqlAggregate agg when agg.IsWindowFunction => agg.WindowSpecification,
+                SqlFunctionColumn fc when fc.Function.IsWindowFunction => fc.Function.WindowSpecification,
+                _ => null
+            };
+
+            if (winSpec?.Frame == null)
+                continue;
+
+            ThrowIfUnsupportedFrameMode(winSpec.Frame);
+        }
+    }
+
+    /// <summary>
+    /// Rejects window-frame Mode + offset combinations the engine does not honor. See
+    /// <see cref="ThrowIfUnsupportedFeatures"/> for the architectural rationale (issue #177).
+    /// </summary>
+    private static void ThrowIfUnsupportedFrameMode(SqlWindowFrame frame)
+    {
+        if (frame.Mode == WindowFrameMode.Groups)
+            throw new NotSupportedException(
+                "GROUPS-mode window frames are not supported by the QueryEngine.");
+
+        if (frame.Mode == WindowFrameMode.Range)
+        {
+            // RANGE + Numeric offset would require value-based comparisons that the engine
+            // does not implement. RANGE + Interval is the supported path (handled inside
+            // GetFrameBoundIndex via SqlWindowFrameBoundOffset.Kind == Interval).
+            ThrowIfRangeBoundIsNumeric(frame.Start);
+            if (frame.End != null)
+                ThrowIfRangeBoundIsNumeric(frame.End);
+        }
+    }
+
+    private static void ThrowIfRangeBoundIsNumeric(SqlWindowFrameBound bound)
+    {
+        if (bound.Type != WindowFrameBoundType.Preceding && bound.Type != WindowFrameBoundType.Following)
+            return; // UNBOUNDED PRECEDING/FOLLOWING and CURRENT ROW are mode-agnostic and supported.
+        if (bound.Offset == null)
+            return; // No offset to interpret.
+        if (bound.Offset.Kind == SqlWindowFrameBoundOffsetKind.Numeric)
+            throw new NotSupportedException(
+                "RANGE-mode window frames with a numeric offset are not supported by the QueryEngine. " +
+                "Use ROWS for positional offsets or an INTERVAL offset for value-based ranges.");
     }
 
     /// <summary>
