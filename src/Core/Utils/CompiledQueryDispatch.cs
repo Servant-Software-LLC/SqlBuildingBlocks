@@ -49,7 +49,18 @@ internal static class CompiledQueryDispatch
         object dataRows,
         DataTable tableWithColumnsToProjectOnto);
 
+    // Issue #188: cached-predicate fast path. Same outer shape as ApplyFilterDelegate but the
+    // QueryEngine 'engine' parameter is dropped (unused by either path) — kept symmetrical with
+    // the legacy delegate's other args so callers can route on a single conditional.
+    private delegate IEnumerable<DataRow> ApplyFilterCachedPredicateDelegate(
+        object dataRows,
+        SqlBinaryExpression filteringClause,
+        Dictionary<SqlTable, DataRow>? substituteValues,
+        SqlTable tableDataRow,
+        DataTable tableWithColumnsToProjectOnto);
+
     private static readonly ConcurrentDictionary<Type, ApplyFilterDelegate> _applyFilterCache = new();
+    private static readonly ConcurrentDictionary<Type, ApplyFilterCachedPredicateDelegate> _applyFilterCachedPredicateCache = new();
     private static readonly ConcurrentDictionary<Type, ToDataRowsDelegate> _toDataRowsCache = new();
 
     // Open generic SqlBinaryExpression.BuildExpression<TDataRow>(...) — resolved once.
@@ -73,9 +84,29 @@ internal static class CompiledQueryDispatch
         ?? throw new InvalidOperationException(
             $"Could not resolve {nameof(IQueryableExtensions)}.{nameof(IQueryableExtensions.ToDataRows)} via reflection.");
 
+    // Issue #188: open generic SqlBinaryExpression.BuildCompiledPredicate<TDataRow>(...) — resolved once.
+    private static readonly MethodInfo _buildCompiledPredicateMethod = typeof(SqlBinaryExpression)
+        .GetMethod(
+            nameof(SqlBinaryExpression.BuildCompiledPredicate),
+            BindingFlags.Public | BindingFlags.Instance)
+        ?? throw new InvalidOperationException(
+            $"Could not resolve {nameof(SqlBinaryExpression)}.{nameof(SqlBinaryExpression.BuildCompiledPredicate)} via reflection.");
+
+    // Issue #188: Enumerable.Where<TSource>(IEnumerable<TSource>, Func<TSource, bool>) — resolved once.
+    private static readonly MethodInfo _enumerableWhereMethod = ResolveEnumerableWhereMethod();
+
     /// <summary>
     /// Invokes the equivalent of <c>QueryEngine.ApplyFilter&lt;TDataRow&gt;(...)</c> via a
     /// cached compiled delegate keyed on <paramref name="elementType"/> (TDataRow).
+    ///
+    /// Issue #188: when <paramref name="filteringClause"/> is a "cacheable shape"
+    /// (<see cref="SqlBinaryExpression.IsCacheableShape"/>), this dispatches to the
+    /// <see cref="CompiledPredicateCache"/>-backed fast path that compiles the predicate body
+    /// exactly once per (predicate-shape, TDataRow, tableDataRow) tuple and runs the filter via
+    /// <see cref="Enumerable.Where{TSource}(IEnumerable{TSource}, Func{TSource, bool})"/>
+    /// (avoiding the per-call expression-tree compile that <c>Queryable.Where</c> incurs on the
+    /// default LINQ-to-Objects provider). Non-cacheable shapes (BETWEEN, CASE, IN, NOT IN, ...)
+    /// fall back to the legacy compile-per-call path.
     /// </summary>
     public static IEnumerable<DataRow> ApplyFilter(
         QueryEngine engine,
@@ -86,6 +117,18 @@ internal static class CompiledQueryDispatch
         SqlTable tableDataRow,
         DataTable tableWithColumnsToProjectOnto)
     {
+        // Fast path: cacheable shapes (the common JOIN-ON / simple-WHERE case in the benchmark
+        // and in real workloads). The compiled lambda is reused across iterations of the FROM-row
+        // loop because we keyed on structural shape, not the enclosing object identity (the JOIN
+        // wrapper SqlBinaryExpression is recreated per iteration when WHERE is folded with ON;
+        // see QueryEngine.GetQueryableRowsInJoinTable line ~747).
+        if (filteringClause.IsCacheableShape())
+        {
+            var fastPath = _applyFilterCachedPredicateCache.GetOrAdd(elementType, BuildApplyFilterCachedPredicateDelegate);
+            return fastPath(dataRows, filteringClause, substituteValues, tableDataRow, tableWithColumnsToProjectOnto);
+        }
+
+        // Legacy path for arms not yet supported by the cached compiler.
         var compiled = _applyFilterCache.GetOrAdd(elementType, BuildApplyFilterDelegate);
         return compiled(engine, dataRows, filteringClause, substituteValues, tableDataRow, tableWithColumnsToProjectOnto);
     }
@@ -109,8 +152,14 @@ internal static class CompiledQueryDispatch
     internal static void ClearForTests()
     {
         _applyFilterCache.Clear();
+        _applyFilterCachedPredicateCache.Clear();
         _toDataRowsCache.Clear();
     }
+
+    /// <summary>
+    /// Test-only hook: returns the current cached-predicate ApplyFilter cache size.
+    /// </summary>
+    internal static int ApplyFilterCachedPredicateCacheCount => _applyFilterCachedPredicateCache.Count;
 
     /// <summary>
     /// Test-only hook: returns the current ApplyFilter cache size (number of TDataRow
@@ -123,6 +172,163 @@ internal static class CompiledQueryDispatch
     /// Test-only hook: returns the current ToDataRows cache size.
     /// </summary>
     internal static int ToDataRowsCacheCount => _toDataRowsCache.Count;
+
+    /// <summary>
+    /// Issue #188: builds the cached-predicate fast-path delegate for a given TDataRow.
+    /// The compiled body is roughly:
+    /// <code>
+    ///   (dataRowsObj, clause, subst, tableDataRow, table) =>
+    ///   {
+    ///       var dataRows = (IEnumerable&lt;TDataRow&gt;)dataRowsObj;
+    ///       var predicate = clause.BuildCompiledPredicate&lt;TDataRow&gt;(tableDataRow);
+    ///       return dataRows.Where(row =&gt; predicate(row, subst))
+    ///                      .Select(row =&gt; IQueryableExtensions.ToDataRow(row, table))
+    ///                      .AsEnumerable();
+    ///   }
+    /// </code>
+    /// The predicate compile is cached by <see cref="CompiledPredicateCache"/>; the closure over
+    /// <c>subst</c> is allocated per call but the predicate itself is reused. The
+    /// <c>Enumerable.Where(IEnumerable&lt;T&gt;, Func&lt;T,bool&gt;)</c> overload (NOT
+    /// <see cref="Queryable.Where{TSource}(IQueryable{TSource}, System.Linq.Expressions.Expression{Func{TSource, bool}})"/>)
+    /// avoids the LINQ-to-Objects internal expression compile per call — that was the dominant
+    /// cost on <c>ExecuteJoinedSelect</c> after Wave 12.
+    /// </summary>
+    private static ApplyFilterCachedPredicateDelegate BuildApplyFilterCachedPredicateDelegate(Type elementType)
+    {
+        // Resolve the closed BuildCompiledPredicate<TDataRow> method.
+        var buildCompiledPredicateClosed = _buildCompiledPredicateMethod.MakeGenericMethod(elementType);
+
+        // The predicate type is Func<TDataRow, Dictionary<SqlTable, DataRow>?, bool>.
+        var predicateType = typeof(Func<,,>).MakeGenericType(
+            elementType,
+            typeof(Dictionary<SqlTable, DataRow>),
+            typeof(bool));
+
+        // The Func<TDataRow, bool> that wraps the precompiled predicate with the substitute closure.
+        var rowPredicateType = typeof(Func<,>).MakeGenericType(elementType, typeof(bool));
+
+        // Resolve helper methods.
+        var enumerableWhereClosed = _enumerableWhereMethod.MakeGenericMethod(elementType);
+        var toDataRowOpenMethod = _toDataRowMethod;
+        var toDataRowClosed = toDataRowOpenMethod.MakeGenericMethod(elementType);
+        var enumerableSelectClosed = _enumerableSelectMethod.MakeGenericMethod(elementType, typeof(DataRow));
+
+        // Lambda parameters.
+        var dataRowsObjParam = Expression.Parameter(typeof(object), "dataRowsObj");
+        var filteringClauseParam = Expression.Parameter(typeof(SqlBinaryExpression), "filteringClause");
+        var substituteValuesParam = Expression.Parameter(typeof(Dictionary<SqlTable, DataRow>), "substituteValues");
+        var tableDataRowParam = Expression.Parameter(typeof(SqlTable), "tableDataRow");
+        var tableParam = Expression.Parameter(typeof(DataTable), "tableWithColumnsToProjectOnto");
+
+        // (IEnumerable<TDataRow>)dataRowsObj — IEnumerable<T> covariant cast also accepts the
+        // IQueryable<T> caller passes in (every IQueryable<T> is also an IEnumerable<T>).
+        var enumerableType = typeof(IEnumerable<>).MakeGenericType(elementType);
+        var castDataRows = Expression.Convert(dataRowsObjParam, enumerableType);
+
+        // var predicate = filteringClause.BuildCompiledPredicate<TDataRow>(tableDataRow);
+        var predicateCall = Expression.Call(
+            filteringClauseParam,
+            buildCompiledPredicateClosed,
+            tableDataRowParam);
+        var predicateVar = Expression.Variable(predicateType, "predicate");
+        var predicateAssign = Expression.Assign(predicateVar, predicateCall);
+
+        // row => predicate(row, substituteValues)
+        var rowParam = Expression.Parameter(elementType, "row");
+        var predicateInvoke = Expression.Call(predicateVar, predicateType.GetMethod("Invoke")!, rowParam, substituteValuesParam);
+        var rowPredicateLambda = Expression.Lambda(rowPredicateType, predicateInvoke, rowParam);
+
+        // dataRows.Where(rowPredicate)
+        var whereCall = Expression.Call(enumerableWhereClosed, castDataRows, rowPredicateLambda);
+
+        // row => IQueryableExtensions.ToDataRow(row, table)
+        var selectorRowParam = Expression.Parameter(elementType, "row");
+        var toDataRowCall = Expression.Call(toDataRowClosed, selectorRowParam, tableParam);
+        var selectorLambda = Expression.Lambda(typeof(Func<,>).MakeGenericType(elementType, typeof(DataRow)), toDataRowCall, selectorRowParam);
+
+        // .Select(...)
+        var selectCall = Expression.Call(enumerableSelectClosed, whereCall, selectorLambda);
+
+        // Wrap in a block so we can declare the predicate variable.
+        var body = Expression.Block(
+            new[] { predicateVar },
+            predicateAssign,
+            selectCall);
+
+        var lambda = Expression.Lambda<ApplyFilterCachedPredicateDelegate>(
+            body,
+            dataRowsObjParam,
+            filteringClauseParam,
+            substituteValuesParam,
+            tableDataRowParam,
+            tableParam);
+
+        return lambda.Compile();
+    }
+
+    // Resolved-once reflection handles for the cached-predicate fast path.
+    private static readonly MethodInfo _toDataRowMethod = typeof(IQueryableExtensions)
+        .GetMethod(
+            nameof(IQueryableExtensions.ToDataRow),
+            BindingFlags.Public | BindingFlags.Static)
+        ?? throw new InvalidOperationException(
+            $"Could not resolve {nameof(IQueryableExtensions)}.{nameof(IQueryableExtensions.ToDataRow)} via reflection.");
+
+    private static readonly MethodInfo _enumerableSelectMethod = ResolveEnumerableSelectMethod();
+
+    private static MethodInfo ResolveEnumerableSelectMethod()
+    {
+        // Enumerable.Select<TSource, TResult>(this IEnumerable<TSource>, Func<TSource, TResult>) —
+        // pick the overload whose selector is Func<TSource, TResult> (not the indexed
+        // Func<TSource, int, TResult> overload).
+        foreach (var method in typeof(Enumerable).GetMethods(BindingFlags.Public | BindingFlags.Static))
+        {
+            if (method.Name != nameof(Enumerable.Select))
+                continue;
+            if (!method.IsGenericMethodDefinition)
+                continue;
+
+            var parameters = method.GetParameters();
+            if (parameters.Length != 2)
+                continue;
+
+            var selectorType = parameters[1].ParameterType;
+            if (!selectorType.IsGenericType)
+                continue;
+            if (selectorType.GetGenericArguments().Length == 2)
+                return method;
+        }
+
+        throw new InvalidOperationException(
+            "Could not resolve Enumerable.Select<TSource, TResult>(this IEnumerable<TSource>, Func<TSource, TResult>).");
+    }
+
+    private static MethodInfo ResolveEnumerableWhereMethod()
+    {
+        // Enumerable.Where<TSource>(this IEnumerable<TSource>, Func<TSource, bool>) — pick the
+        // overload whose predicate is Func<TSource, bool> (not the indexed Func<TSource, int,
+        // bool> overload).
+        foreach (var method in typeof(Enumerable).GetMethods(BindingFlags.Public | BindingFlags.Static))
+        {
+            if (method.Name != nameof(Enumerable.Where))
+                continue;
+            if (!method.IsGenericMethodDefinition)
+                continue;
+
+            var parameters = method.GetParameters();
+            if (parameters.Length != 2)
+                continue;
+
+            var predicateType = parameters[1].ParameterType;
+            if (!predicateType.IsGenericType)
+                continue;
+            if (predicateType.GetGenericArguments().Length == 2)
+                return method;
+        }
+
+        throw new InvalidOperationException(
+            "Could not resolve Enumerable.Where<TSource>(this IEnumerable<TSource>, Func<TSource, bool>).");
+    }
 
     private static ApplyFilterDelegate BuildApplyFilterDelegate(Type elementType)
     {

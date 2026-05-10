@@ -418,7 +418,64 @@ delegate cache in the same shape if you need a third dispatch site.
 The `InternalsVisibleTo("SqlBuildingBlocks.Core.Tests")` declaration in
 `src/Core/SqlBuildingBlocks.Core.csproj` exists so tests can assert on the
 internal cache counters (`ApplyFilterCacheCount`, `ToDataRowsCacheCount`,
-`ClearForTests()`).
+`ApplyFilterCachedPredicateCacheCount`, `ClearForTests()`).
+
+#### Wave 14 (issue #188) — predicate-shape cache for the JOIN hot path
+
+Wave 14 lane D added a second-tier cache on top of `CompiledQueryDispatch`:
+`SqlBuildingBlocks.Utils.CompiledPredicateCache` (also `internal static`). Wave 12
+eliminated the per-call `MethodInfo.Invoke` but the per-call
+`Expression.Lambda<>(...).Compile()` inside
+`SqlBinaryExpression.BuildExpression<TDataRow>` survived as the next bottleneck —
+profiling showed `ExecuteJoinedSelect` was spending most of its 240 ms recompiling
+the same JOIN-ON predicate 100 times across the FROM-row cross product.
+
+Key changes:
+- `SqlBinaryExpression.BuildCompiledPredicate<TDataRow>(SqlTable tableDataRow)` —
+  returns a `Func<TDataRow, Dictionary<SqlTable, DataRow>?, bool>` whose body
+  reads substitute-table column values from the dictionary at runtime instead of
+  baking them as `Expression.Constant`.
+- `SqlBinaryExpression.IsCacheableShape()` — gates the cache. Returns true only
+  for trees built from `Column`, `Value`, and nested `BinExpr` arms (the only
+  arms that thread the runtime-substitute parameter through their `GetExpression`
+  overloads). BETWEEN/CASE/IN/NOT IN/Function fall back to the legacy
+  `BuildExpression<TDataRow>` path.
+- `SqlExpression.GetExpression(..., ParameterExpression? substituteValuesParam)`
+  internal overload — when the param is non-null, `GetColumnExpression` emits IL
+  that does `dict[tableRef][columnName]` with runtime DBNull/null handling
+  (mirroring the Nullable<T> promotion the constant-emission path does at build
+  time). When the param is null, the historical constant-baking path runs.
+- `CompiledPredicateCache` cache key — a STRUCTURAL FINGERPRINT STRING
+  (alias-aware, includes literal values) plus `(typeof(TDataRow), tableDataRow)`.
+  The hash alone is NOT sufficient — hash collisions would otherwise return the
+  wrong cached lambda. Two predicates with identical shape but different literal
+  values hit different slots because the cached lambda still bakes the literal as
+  `Expression.Constant` (Approach 2 from the issue plan).
+- `CompiledQueryDispatch.ApplyFilter` — now branches on
+  `filteringClause.IsCacheableShape()`. Cacheable shapes route through
+  `_applyFilterCachedPredicateCache` and use
+  `Enumerable.Where(IEnumerable<T>, Func<T, bool>)` instead of
+  `Queryable.Where(IQueryable<T>, Expression<Func<T,bool>>)` — the latter
+  re-compiles the supplied expression per call when the underlying provider is
+  the default LINQ-to-Objects `EnumerableQuery<T>`.
+
+Result: `ExecuteJoinedSelect` 240 ms → 7.5 ms (~32x faster), well under the
+issue-AC <100 ms target. `ExecuteSimpleSelect` is unchanged — it has no JOIN
+cross product so there was nothing to amortize. Allocation on
+`ExecuteJoinedSelect` went up 2.7x (per-call closure capturing substituteValues);
+that is acceptable for the speed win and noted in `Docs/Benchmarks/README.md`
+as a future optimization opportunity.
+
+When extending the cached path to a new `SqlExpression` arm:
+1. Update `SqlBinaryExpression.IsCacheableShape()`'s `IsCacheableArm` switch.
+2. Thread `ParameterExpression? substituteValuesParam` through that arm's
+   `GetExpression` overload (look at how `BetweenExpr`/`CaseExpr` are *NOT* yet
+   threaded — they fall back to the legacy path).
+3. Update `CompiledPredicateCache.AppendExpression` to append a stable
+   discriminator for the new arm so two predicates differing only in this arm
+   produce different fingerprints.
+4. Add a regression test in `tests/Core.Tests/Utils/CompiledPredicateCacheTests.cs`
+   that exercises both shapes through the QueryEngine and asserts correct results.
 
 ### Key Interfaces for Query Engine
 
