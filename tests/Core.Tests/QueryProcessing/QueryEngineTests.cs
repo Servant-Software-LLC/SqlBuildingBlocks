@@ -9,6 +9,7 @@ using Xunit;
 
 namespace SqlBuildingBlocks.Core.Tests.QueryProcessing;
 
+[Collection("CompiledPredicateCache")]
 public class QueryEngineTests
 {
     [Fact]

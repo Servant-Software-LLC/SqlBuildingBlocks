@@ -18,6 +18,7 @@ namespace SqlBuildingBlocks.Core.Tests.Utils;
 /// use. The internal cache-count hooks (<see cref="CompiledQueryDispatch.ApplyFilterCacheCount"/>
 /// etc.) are used only to verify reuse — they are not part of the public surface.
 /// </summary>
+[Collection("CompiledPredicateCache")]
 public class CompiledQueryDispatchTests
 {
     [Fact]
