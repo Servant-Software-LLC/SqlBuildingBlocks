@@ -388,11 +388,31 @@ flags it as ambiguous via the `InvalidReferenceReason` channel — same
 semantics as today's EXISTS/scalar subqueries. Resolution errors inside a
 derived table propagate to the parent's `InvalidReferenceReason`.
 
-Note: as of Wave 14b the in-memory `QueryEngine` still does not materialize
-`SqlDerivedTable` for execution — `AllTableDataProvider.GetTableData` cannot
-locate `(<subquery>) AS dt`. Tests for derived-table resolution should use
-the parser → `CreateSelect` flow and assert on `selectDefinition.InvalidReferences`
-rather than `Run()`-ing the result.
+### Derived table execution — `MaterializeDerivedTable` (issue #190, Wave 16)
+
+`QueryEngine.GetQueryableRowsInFromTable` now checks whether the main FROM table is a
+`SqlDerivedTable` and, if so, calls `MaterializeDerivedTable` before falling through to
+the regular `ITableDataProvider` lookup. Symmetrically, `GetQueryableRowsInJoinTable` and
+`GetAllRowsInJoinTable` detect `SqlDerivedTable` in JOIN position.
+
+`MaterializeDerivedTable` pattern:
+1. Construct a new `QueryEngine` for the inner `SqlDerivedTable.SelectDefinition` with the
+   same `tableDataProvider`, `dataRowType`, and `options`.
+2. Call `innerEngine.Query().ToDataTable()` — materializes the inner SELECT into a `DataTable`.
+3. Expose the rows as `IQueryable<DataRow>` so the outer SELECT's WHERE filter and column
+   projection go through the same `CompiledQueryDispatch.ApplyFilter / ToDataRows` path they
+   use for real tables.
+
+The `DataRow` element type is already handled by `IQueryableExtensions.ToDataRow<DataRow>`
+(reads `dataRow[columnName]`) and `SqlExpression.GetExpressionForDataRow` (builds an expression
+that indexes the DataRow by column name). No special-casing needed beyond the early dispatch.
+
+This is symmetric with the CTE execution path (`ExecuteCte` → `cteEngine.Query().ToDataTable()`).
+
+**Reserved-word gotcha for tests**: `T` and `t` (and `F`, `f`) are reserved as boolean
+literals by `LiteralValue.MarkReservedWords`. Use aliases such as `dt`, `sub`, `derived`
+— not bare `t` or `f` — in derived-table SQL in tests, or the grammar will reject them as
+parse-time identifiers.
 
 ### Self-join correctness — `SqlTableOccurrenceComparer` (issue #183, Wave 13)
 
