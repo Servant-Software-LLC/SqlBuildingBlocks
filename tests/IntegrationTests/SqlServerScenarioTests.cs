@@ -41,6 +41,39 @@ public class SqlServerScenarioTests
     }
 
     [Fact]
+    public void Scenario_DecimalLiteralComparison_FiltersByPriceGreaterThan()
+    {
+        // Issue #184 (the case that originally surfaced the bug). Wave 10 had to reformulate
+        // its SqlServer CTE test from `WHERE Price > 3.00` to an integer comparison because
+        // LiteralValue.Create rejected the Double the grammar produced. With #184 fixed, the
+        // unsuffixed fractional literal materializes as Decimal and the parsed-path works.
+        var db = BuildSampleDatabase();
+
+        var result = Run("SELECT * FROM Products WHERE Price > 3.00", db);
+
+        // Prices > 3.00: Cheese (6.25), Flour (4.00), Grape (5.50) → 3 rows.
+        Assert.Equal(3, result.Rows.Count);
+        Assert.All(result.Rows.Cast<DataRow>(), r => Assert.True((decimal)r["Price"] > 3.00m));
+    }
+
+    [Fact]
+    public void Scenario_DecimalLiteralComparison_InCte()
+    {
+        // Issue #184 specifically — the Wave 10 SqlServer CTE test had to use `WHERE ID > 4`
+        // instead of `WHERE Price > 3.00` to dodge the bug. Restore the more SQL-natural form
+        // now that the grammar handles decimal literals correctly.
+        var db = BuildSampleDatabase();
+
+        var result = Run(
+            "WITH ExpensiveProducts AS (SELECT ID, Name, Price FROM Products WHERE Price > 3.00) " +
+            "SELECT Name FROM ExpensiveProducts",
+            db);
+
+        // Cheese (6.25), Flour (4.00), Grape (5.50) → 3 rows.
+        Assert.Equal(3, result.Rows.Count);
+    }
+
+    [Fact]
     public void Scenario_NonRecursiveCte_ExecutesEndToEnd()
     {
         // Cross-dialect parity: non-recursive CTE works through the SQL Server grammar.

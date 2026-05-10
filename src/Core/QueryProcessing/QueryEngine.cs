@@ -569,6 +569,15 @@ public class QueryEngine : IQueryEngine
             }
         }
 
+        // The FROM table is processed once for WHERE applicability before the per-row loop runs.
+        // If WHERE was applied at the FROM stage, WhereApplied is already set correctly. Otherwise
+        // it is null. We snapshot this here so that we can reset WhereApplied at the start of every
+        // FROM-row iteration — the JOIN-side WHERE-application decision must be made fresh per
+        // FROM row, because the join filter (which embeds substituted FROM-row column values) is
+        // rebuilt per iteration. Without this reset, WhereApplied stayed set after the first FROM
+        // row and subsequent rows skipped re-incorporating the multi-table WHERE.
+        var fromStageWhereApplied = processingState.WhereApplied;
+
         foreach (DataRow dataRow in fromDataRows)
         {
             if (sqlSelectDefinition.Table is null)
@@ -576,6 +585,7 @@ public class QueryEngine : IQueryEngine
 
             processingState.DataRowsOfOtherTables[sqlSelectDefinition.Table] = dataRow;
             processingState.CurrentSourceRow = dataRow;
+            processingState.WhereApplied = fromStageWhereApplied;
 
             var enumerableQueryRows = ResolveSelectColumns(processingState, joins);
             foreach (var queryRow in enumerableQueryRows)
@@ -591,8 +601,9 @@ public class QueryEngine : IQueryEngine
             var allRows = processingState.AllJoinTableRows[join.Table];
             var matched = processingState.MatchedJoinRows[join.Table];
 
-            // Collect all tables that should have NULL values (FROM table + all joins before this one)
-            var nullTables = new HashSet<SqlTable>();
+            // Collect all tables that should have NULL values (FROM table + all joins before this one).
+            // Issue #183: alias-aware so a self-join's two occurrences are distinguished.
+            var nullTables = new HashSet<SqlTable>(SqlTableOccurrenceComparer.Instance);
             if (sqlSelectDefinition.Table is not null)
                 nullTables.Add(sqlSelectDefinition.Table);
             foreach (var j in joins)
@@ -655,8 +666,9 @@ public class QueryEngine : IQueryEngine
         // LEFT/FULL OUTER JOIN: emit a row with NULLs for unmatched join table columns
         if (!hasMatch && (joinKind == SqlJoinKind.Left || joinKind == SqlJoinKind.Full))
         {
-            // All tables from this join onward get NULL values
-            var nullTables = new HashSet<SqlTable>(joinsToProcess.Select(j => j.Table));
+            // All tables from this join onward get NULL values.
+            // Issue #183: alias-aware so a self-join's two occurrences are distinguished.
+            var nullTables = new HashSet<SqlTable>(joinsToProcess.Select(j => j.Table), SqlTableOccurrenceComparer.Instance);
             yield return BuildResultRow(processingState, nullTables);
         }
 
@@ -752,7 +764,14 @@ public class QueryEngine : IQueryEngine
         if (applyFilterMethodReturnValue == null)
             throw new ArgumentNullException("ApplyFilter's return value was null", innerException: null);
 
-        processingState.WhereApplied = sqlSelectDefinition.Table;
+        // Issue #183 finding: the previous unconditional `processingState.WhereApplied =
+        // sqlSelectDefinition.Table;` here was a pre-existing latent bug. It overwrote whatever
+        // the conditional set above (so a JOIN that successfully applied WHERE had its marker
+        // clobbered) and, more critically, ran on every iteration of the outer FROM-row loop —
+        // so on the second FROM row WhereApplied was already non-null and the WHERE check above
+        // skipped re-emitting the WHERE predicate, dropping correctness when a multi-table WHERE
+        // was meant to filter the JOIN result. The condition above already sets WhereApplied
+        // correctly when the WHERE was AND'd with the JOIN ON; nothing else here should mutate it.
         return applyFilterMethodReturnValue;
     }
 
@@ -789,7 +808,9 @@ public class QueryEngine : IQueryEngine
     /// </summary>
     private DataRow BuildResultRow(ProcessingState processingState, IEnumerable<SqlTable>? nullTables = null)
     {
-        var nullTableSet = nullTables != null ? new HashSet<SqlTable>(nullTables) : null;
+        // Issue #183: alias-aware membership check so a self-join's per-occurrence null-padding
+        // works correctly.
+        var nullTableSet = nullTables != null ? new HashSet<SqlTable>(nullTables, SqlTableOccurrenceComparer.Instance) : null;
         var selectColumns = processingState.QueryOutput.NewRow();
 
         foreach (DataColumn dataColumn in processingState.QueryOutput.Columns)
@@ -1013,7 +1034,7 @@ public class QueryEngine : IQueryEngine
     /// <returns></returns>
     private IList<SqlColumnRef> GetColumnRefs(SqlBinaryExpression sqlBinaryExpression, SqlTable excludeTable)
     {
-        ColumnRefsVisitor columnRefsVisitor = new(new HashSet<SqlTable> { excludeTable }, false);
+        ColumnRefsVisitor columnRefsVisitor = new(new HashSet<SqlTable>(SqlTableOccurrenceComparer.Instance) { excludeTable }, false);
         sqlBinaryExpression.Accept(columnRefsVisitor);
         return columnRefsVisitor.Results;
     }

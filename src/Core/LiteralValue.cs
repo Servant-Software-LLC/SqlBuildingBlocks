@@ -1,6 +1,7 @@
 ﻿using Irony.Parsing;
 using SqlBuildingBlocks.Extensions;
 using SqlBuildingBlocks.LogicalEntities;
+using System;
 using System.Reflection;
 
 namespace SqlBuildingBlocks;
@@ -21,7 +22,14 @@ public class LiteralValue : NonTerminal
         var falseLiteral = new NonTerminal(FalseLiteral);
 
         StringLiteral string_literal = new("string", "'", StringOptions.AllowsDoubledQuote);
-        NumberLiteral number = new("number");
+        NumberLiteral number = new("number")
+        {
+            // SQL numeric literals are exact, not approximate. Configure Irony's NumberLiteral
+            // to materialize unsuffixed decimal literals (e.g. `3.00`) as System.Decimal rather
+            // than the Irony default of System.Double. This preserves precision and matches the
+            // CLR type used for typed decimal columns (#184).
+            DefaultFloatType = TypeCode.Decimal
+        };
 
         // Rule for true literals
         //trueLiteral.Rule = grammar.ToTerm("TRUE") | "True" | "T" | "t" | "yes" | "on";
@@ -71,12 +79,23 @@ public class LiteralValue : NonTerminal
 
         var literalValue = childNode.Token.Value;
 
+        // Accept every numeric runtime type the grammar (Irony NumberLiteral) can produce.
+        // With DefaultFloatType = Decimal (set above), unsuffixed fractional literals produce
+        // decimal and scientific-notation literals (e.g. `3.0e2`) still produce double, so we
+        // accept double and float defensively in case a consumer's grammar or hand-built parse
+        // tree presents one of those types. (#184)
         switch (literalValue)
         {
             case string sValue:
                 return new(sValue);
             case int iValue:
                 return new(iValue);
+            case decimal decValue:
+                return new(decValue);
+            case double dValue:
+                return new(dValue);
+            case float fValue:
+                return new(fValue);
         }
 
         throw new Exception($"Value provided to {nameof(SqlLiteralValue)} wasn't a recognized System.Type.  Type: {literalValue.GetType().FullName}");

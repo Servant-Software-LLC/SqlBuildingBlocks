@@ -294,6 +294,23 @@ public class AnsiSqlScenarioTests
     }
 
     [Fact]
+    public void Scenario_DecimalLiteralComparison_FiltersByPriceGreaterThan()
+    {
+        // Issue #184: SQL `WHERE Amount > 25.00` previously failed because the grammar produced
+        // a Double for the unsuffixed fractional literal but LiteralValue.Create only accepted
+        // string and int. With the grammar now producing a Decimal for unsuffixed fractional
+        // literals (DefaultFloatType = TypeCode.Decimal), this end-to-end path works:
+        // parse → resolve → execute → match against decimal-typed Amount column.
+        var db = BuildSampleDatabase();
+
+        var result = Run("SELECT ID, Amount FROM Orders WHERE Amount > 25.00", db);
+
+        // Amounts > 25.00 are: 50, 75, 30, 40 → 4 rows (10 and 25 excluded).
+        Assert.Equal(4, result.Rows.Count);
+        Assert.All(result.Rows.Cast<DataRow>(), r => Assert.True((decimal)r["Amount"] > 25.00m));
+    }
+
+    [Fact]
     public void Scenario_MalformedSql_ReportsParseError()
     {
         // Scenario 12: negative integration test — malformed SQL fails parse with a clear error surface.

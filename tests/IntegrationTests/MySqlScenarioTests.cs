@@ -69,6 +69,20 @@ public class MySqlScenarioTests
     }
 
     [Fact]
+    public void Scenario_DecimalLiteralComparison_FiltersByAmountGreaterThan()
+    {
+        // Issue #184: dialect parity — MySQL grammar must also handle unsuffixed fractional
+        // literals against decimal-typed columns end-to-end.
+        var db = BuildSampleDatabase();
+
+        var result = Run("SELECT ID, Amount FROM Orders WHERE Amount > 250.00", db);
+
+        // Amounts > 250 are 300, 400, 500, 600 → 4 rows.
+        Assert.Equal(4, result.Rows.Count);
+        Assert.All(result.Rows.Cast<DataRow>(), r => Assert.True((decimal)r["Amount"] > 250.00m));
+    }
+
+    [Fact]
     public void Scenario_RecursiveCte_HierarchyTraversal_ExecutesEndToEnd()
     {
         // Cross-dialect parity for issue #168 — WITH RECURSIVE through the MySQL grammar.

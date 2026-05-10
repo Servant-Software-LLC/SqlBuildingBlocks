@@ -291,15 +291,43 @@ public class SqlExpression
             throw new ArgumentNullException(nameof(columnOfOperand.TableRef), $"{nameof(columnOfOperand)}.{nameof(columnOfOperand.TableRef)} cannot be null.");
 
         //Look for table rows that are providing substitute values.
-        if (substituteValues != null && columnOfOperand.TableRef != tableDataRow &&
+        // Issue #183: use SqlTableOccurrenceComparer so a self-join's two occurrences of the same
+        // table (with different aliases) are recognized as different — SqlTable.Equals ignores the
+        // alias so a self-join would otherwise treat both columns as referencing the join table.
+        if (substituteValues != null && !SqlTableOccurrenceComparer.Instance.Equals(columnOfOperand.TableRef, tableDataRow) &&
             substituteValues.TryGetValue(columnOfOperand.TableRef, out DataRow? rowSubstituteValues))
         {
             //TODO: Maltby - Determine if it would be more efficient to store a mapping of columnName to index in the DataRow
             var propertyValue = rowSubstituteValues[columnOfOperand.ColumnName];
+
+            // Issue #186: A DBNull value here would be typed as DBNull at expression-build time,
+            // and a downstream binary comparison against an int (or other typed) operand would
+            // fail in GetCommonType ("No common type found"). Promote the value to Nullable<T> of
+            // the column's declared type so the existing nullable-aware GetBinaryExpression path
+            // produces the correct SQL three-valued logic result (UNKNOWN/false) for the predicate.
+            var declaredType = columnOfOperand.ColumnType;
+            if (declaredType != null && declaredType.IsValueType &&
+                !(declaredType.IsGenericType && declaredType.GetGenericTypeDefinition() == typeof(Nullable<>)))
+            {
+                var nullableType = typeof(Nullable<>).MakeGenericType(declaredType);
+                if (propertyValue == null || propertyValue == DBNull.Value)
+                    return Expression.Constant(null, nullableType);
+
+                // Box the typed value into Nullable<T> so the operand types align with the
+                // DataRow-backed side, which is also produced as Nullable<T> below.
+                return Expression.Constant(System.Activator.CreateInstance(nullableType, propertyValue), nullableType);
+            }
+
+            // Reference type or unknown declared type: a DBNull would still compare incorrectly,
+            // so substitute null when DBNull is observed at build time.
+            if (propertyValue == DBNull.Value)
+                return Expression.Constant(null, declaredType ?? typeof(object));
+
             return Expression.Constant(propertyValue);
         }
 
-        if (columnOfOperand.TableRef != tableDataRow)
+        // Issue #183: alias-aware "is this column referencing the table being filtered?" check.
+        if (!SqlTableOccurrenceComparer.Instance.Equals(columnOfOperand.TableRef, tableDataRow))
             throw new Exception($"The column {columnOfOperand} of the operand, does not have a substitute value nor is it part of the {tableDataRow} table.");
 
         //Is this is DataRow?
@@ -392,6 +420,23 @@ public class SqlExpression
             throw new Exception($"Expected the {columnOfOperand} column to have its {nameof(SqlColumn.ColumnType)} property set.");
 
         var castToType = CastToType(columnOfOperand.ColumnType, companionOfBinExpr);
+
+        // Issue #186: a DBNull value in the underlying DataRow column cannot be unboxed/converted
+        // to the declared value type at runtime (Expression.Convert(DBNull, int) throws). Wrap the
+        // raw indexer value in a runtime DBNull check that produces Nullable<T> for value types
+        // so the existing nullable-aware GetBinaryExpression path enforces SQL three-valued logic
+        // (any comparison with a NULL operand other than IS NULL / IS NOT NULL → UNKNOWN/false).
+        // IS NULL / IS NOT NULL go through GetIsNullExpression which reads the raw indexer directly.
+        if (castToType.IsValueType &&
+            !(castToType.IsGenericType && castToType.GetGenericTypeDefinition() == typeof(Nullable<>)))
+        {
+            var nullableType = typeof(Nullable<>).MakeGenericType(castToType);
+            var isDbNull = Expression.Equal(valueExpression, Expression.Constant(DBNull.Value, typeof(object)));
+            var nullValue = Expression.Constant(null, nullableType);
+            var convertedValue = Expression.Convert(Expression.Convert(valueExpression, castToType), nullableType);
+            return Expression.Condition(isDbNull, nullValue, convertedValue);
+        }
+
         return Convert(valueExpression, columnOfOperand.ColumnType, castToType);
     }
 

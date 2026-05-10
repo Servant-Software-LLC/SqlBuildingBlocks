@@ -204,12 +204,24 @@ public class SqlBinaryExpression
             return Expression.And(rightHasValue, binaryOperatorExpression);
         }
 
-        //Both are nullable
-        var bothHasValueExpression = Expression.Add(leftHasValue, rightHasValue);
-        var leftTernary = Expression.Condition(Expression.Not(leftHasValue), leftNull, Expression.Convert(leftValue, left.Type));
-        var rightTernary = Expression.Condition(Expression.Not(rightHasValue), rightNull, Expression.Convert(rightValue, right.Type));
+        //Both are nullable.
+        //Issue #186: previous code used Expression.Add on two bool HasValue properties — that
+        //throws "the binary operator Add is not defined for the types 'System.Boolean' and 'System.Boolean'."
+        //The intent is bothHasValue AND comparisonOnValues. AndAlso short-circuits so the
+        //comparison is only evaluated when both sides have a value, mirroring SQL three-valued
+        //logic — any comparison (other than IS NULL / IS NOT NULL) involving NULL → UNKNOWN, here
+        //modeled as false so the row is excluded.
+        var bothHasValueExpression = Expression.AndAlso(leftHasValue, rightHasValue);
 
-        var resultExpression = Expression.And(bothHasValueExpression, binaryOperatorExpressionFunc(leftTernary, rightTernary));
+        // Promote both sides to a common non-nullable type so the underlying binary operator
+        // (Equal, LessThan, etc.) returns a plain bool — Expression.AndAlso requires bool/bool.
+        var leftUnwrappedType = Nullable.GetUnderlyingType(left.Type)!;
+        var rightUnwrappedType = Nullable.GetUnderlyingType(right.Type)!;
+        var commonValueType = GetCommonType(leftUnwrappedType, rightUnwrappedType);
+        var leftValueCasted = Expression.Convert(leftValue, commonValueType);
+        var rightValueCasted = Expression.Convert(rightValue, commonValueType);
+
+        var resultExpression = Expression.AndAlso(bothHasValueExpression, binaryOperatorExpressionFunc(leftValueCasted, rightValueCasted));
         return resultExpression;
     }
 
