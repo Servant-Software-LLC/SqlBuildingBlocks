@@ -10,6 +10,93 @@ at the same version.
 
 ---
 
+## 1.0.0.287–1.0.0.297 — 2026-05-10 — Engine completeness milestone (Waves 10–16)
+
+This release series (Waves 10–16) extends the Wave 1–9 foundation with recursive CTE
+execution, derived-table support, predicate caching, and a batch of correctness fixes.
+Test count grew from **1197** (Wave 9) to **1279** passing tests.
+
+### Added — Public API
+
+- **`QueryEngineOptions`** class (sealed) with `MaxRecursionDepth` property (default 100).
+  Pass to `QueryEngine` constructor overloads to configure the recursive-CTE iteration
+  ceiling. `MaxRecursionDepth < 1` throws `ArgumentOutOfRangeException`.
+- **`SqlTableOccurrenceComparer`** — public `IEqualityComparer<SqlTable>` that compares
+  by database + table name + alias. Used by consumers building multi-occurrence join
+  structures.
+
+### Added — Engine features
+
+- **Recursive CTE execution** (`WITH RECURSIVE`): anchor runs once, recursive term
+  iterates against the working set. Terminates on empty working set (natural) or
+  `MaxRecursionDepth` (throws `SqlExecutionException` naming the CTE and depth limit).
+  `UNION ALL` only — `UNION` (deduplicating) in the recursive term throws
+  `NotSupportedException`.
+- **Derived-table execution**: `FROM (SELECT ...) alias` and `JOIN (SELECT ...) alias`
+  positions now materialize the inner SELECT and expose it as a virtual table. Previously
+  threw `NotSupportedException`.
+- **Non-recursive CTEs with UNION bodies**: `WITH cte AS (SELECT ... UNION SELECT ...)`
+  now executes the set-operation CTE body at query time. Previously only simple SELECT
+  CTE bodies were supported.
+- **INTERVAL window-frame bounds**: `RANGE BETWEEN INTERVAL '7' DAY PRECEDING AND CURRENT
+  ROW` — parses and executes correctly for `DateTime`-ordered partitions (AnsiSQL, MySQL,
+  PostgreSQL dialects). SQL Server provides a grammar override that rejects INTERVAL syntax
+  with a clean error.
+- **Predicate-delegate cache** (`CompiledQueryDispatch`): `ApplyFilter` delegates are now
+  compiled once per `(element-type, predicate-shape)` pair and reused. Benchmark: 32×
+  faster for 100×100 cross-product JOIN (7.5 ms vs 240 ms). `ReflectionHelper` is now
+  `[Obsolete]` — use `CompiledQueryDispatch` directly.
+- **SQL Server `TOP N`** honored at result-set materialization (Wave 6, also in 1.0.0.286 milestone).
+
+### Added — Grammar
+
+- **INTERVAL literal grammar** in AnsiSQL, MySQL, PostgreSQL `Expr` NonTerminals for use
+  in RANGE-mode window frames.
+- **INTERVAL negative tests**: malformed INTERVAL expressions produce clean parse errors.
+
+### Added — Architecture / Tooling
+
+- **`LogicalEntityCoverageTests`** architectural rule (issue #177): every public property
+  on a `SqlSelectDefinition`-reachable logical-entity type must have an engine consumer or
+  a `NotSupportedException` raise-site. Prevents silent "engine ignores parsed property" regressions.
+- **CI benchmark workflow** (`benchmarks.yml`): BenchmarkDotNet suite runs on PRs touching
+  parser, grammar, or engine; compares against committed JSON baselines with 10%/20%
+  mean/alloc regression thresholds.
+
+### Changed
+
+- **`ReflectionHelper`** marked `[Obsolete]`. It remains functional but will be removed in
+  a future release. Migrate callers to `CompiledQueryDispatch.ApplyFilter` /
+  `CompiledQueryDispatch.ToDataRows`.
+- **`CteTableDataProvider`** case-sensitivity tightened from `OrdinalIgnoreCase` to
+  `StringComparer.Ordinal` for CTE name lookups. If your schema has identically-named CTEs
+  that differ only in case (unusual), update the names to be case-distinct.
+- **`SelectReferenceResolver.HuntForPossibleTable`** — error message typo corrected:
+  "amibiguous" → "ambiguous". Callers parsing the error message string must be updated.
+- **`TableFinder`** — alias-match loop now skips unaliased column references, preventing
+  false ambiguity reports when a column name exists in multiple tables (Wave 16, issue #189).
+
+### Fixed
+
+- Self-join dictionary key collapse (`SqlTable.Equals` excluded alias — fixed in Wave 13, issue #183).
+- `LiteralValue.Create` did not recognize `Double`; double literals in expressions returned
+  `DBNull` (Wave 13, issue #184).
+- DBNull / Int promotion gap in JOIN equality predicates (Wave 13, issue #186).
+- `SelectReferenceResolver.ResolveDerivedTables` did not propagate `outerTablesInScope`
+  (Wave 14b, issue #182).
+
+### Migration Notes
+
+1. **`ReflectionHelper` callers**: Replace `ReflectionHelper.ApplyFilter(...)` with
+   `CompiledQueryDispatch.ApplyFilter(...)`. The signatures are compatible.
+2. **CTE name case sensitivity**: CTE names are now looked up with `Ordinal` comparison.
+   Schema definitions where the CTE name in `WITH cte AS (...)` differs in case from
+   the reference in the outer SELECT must be corrected.
+3. **Error-message parsing**: If any consumer `string.Contains("amibiguous")` to detect
+   ambiguous-column errors, change to `"ambiguous"`.
+
+---
+
 ## 1.0.0.286 — 2026-05-09 — Engine-completeness milestone
 
 This release consolidates two `/uber-report` sessions (2026-05-05 Waves 1–5

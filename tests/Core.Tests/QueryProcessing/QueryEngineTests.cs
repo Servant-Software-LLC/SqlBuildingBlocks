@@ -3688,6 +3688,154 @@ public class QueryEngineTests
         Assert.Throws<ArgumentOutOfRangeException>(() => new QueryEngineOptions { MaxRecursionDepth = -1 });
     }
 
+    /// <summary>
+    /// Boundary test: a chain of exactly 100 rows exercises iterations 1-99 with non-empty
+    /// working sets, then iteration 100 runs the recursive JOIN but finds no row with
+    /// id=101 (it does not exist), so nextTable is empty and the loop breaks naturally.
+    /// The depth check fires only when iteration > 100 (i.e. 101), so this must succeed.
+    /// Result: all 100 rows returned.
+    /// </summary>
+    [Fact]
+    public void Query_RecursiveCte_AtExactDefaultDepthLimit_Succeeds()
+    {
+        const string databaseName = "MyDB";
+        const string cteName = "chain100_cte";
+
+        // Chain100: id int, next_id int
+        // Rows: (1,2), (2,3), ..., (99,100), (100,101) — row with id=101 does not exist.
+        // Anchor selects row 1. Recursive JOIN: c.id = chain100_cte.next_id.
+        // Iteration 1 finds id=2, ..., iteration 99 finds id=100.
+        // Iteration 100 runs: looks for id=101 — none found. nextTable empty → natural break.
+
+        // ── Anchor: SELECT id, next_id FROM Chain100 WHERE id = 1 ──
+        var anchorSelect = new SqlSelectDefinition();
+        var anchorTable = new SqlTable(databaseName, "Chain100");
+        anchorSelect.Table = anchorTable;
+        anchorSelect.Columns.Add(new SqlColumn(databaseName, "Chain100", "id") { ColumnType = typeof(int), TableRef = anchorTable });
+        anchorSelect.Columns.Add(new SqlColumn(databaseName, "Chain100", "next_id") { ColumnType = typeof(int), TableRef = anchorTable });
+
+        var anchorWhereCol = new SqlColumn(databaseName, "Chain100", "id") { ColumnType = typeof(int), TableRef = anchorTable };
+        var anchorWhereRef = new SqlColumnRef(null, "Chain100", "id") { Column = anchorWhereCol };
+        anchorSelect.WhereClause = new SqlExpression(
+            new SqlBinaryExpression(
+                new SqlExpression(anchorWhereRef),
+                SqlBinaryOperator.Equal,
+                new SqlExpression(new SqlLiteralValue(1))));
+
+        // ── Recursive term: SELECT c.id, c.next_id FROM Chain100 c JOIN chain100_cte ON c.id = chain100_cte.next_id ──
+        var recursiveSelect = new SqlSelectDefinition();
+        var chainAliased = new SqlTable(databaseName, "Chain100") { TableAlias = "c" };
+        var cteRef = new SqlTable(databaseName, cteName);
+        recursiveSelect.Table = chainAliased;
+        recursiveSelect.Columns.Add(new SqlColumn(databaseName, "Chain100", "id") { ColumnType = typeof(int), TableRef = chainAliased });
+        recursiveSelect.Columns.Add(new SqlColumn(databaseName, "Chain100", "next_id") { ColumnType = typeof(int), TableRef = chainAliased });
+
+        var leftJoinCol = new SqlColumn(databaseName, "Chain100", "id") { ColumnType = typeof(int), TableRef = chainAliased };
+        var leftJoinRef = new SqlColumnRef(null, "c", "id") { Column = leftJoinCol };
+        var rightJoinCol = new SqlColumn(databaseName, cteName, "next_id") { ColumnType = typeof(int), TableRef = cteRef };
+        var rightJoinRef = new SqlColumnRef(null, cteName, "next_id") { Column = rightJoinCol };
+        var joinCond = new SqlBinaryExpression(new SqlExpression(leftJoinRef), SqlBinaryOperator.Equal, new SqlExpression(rightJoinRef));
+        recursiveSelect.Joins.Add(new SqlJoin(cteRef, joinCond));
+
+        anchorSelect.SetOperations.Add(new SqlSetOperation(SqlSetOperator.UnionAll, recursiveSelect));
+
+        // ── Main: SELECT id FROM chain100_cte ──
+        var sqlSelect = new SqlSelectDefinition();
+        var mainCteTable = new SqlTable(databaseName, cteName);
+        sqlSelect.Table = mainCteTable;
+        sqlSelect.Columns.Add(new SqlColumn(databaseName, cteName, "id") { ColumnType = typeof(int), TableRef = mainCteTable });
+        sqlSelect.Ctes.Add(new SqlCteDefinition(cteName, anchorSelect, isRecursive: true));
+
+        // ── Data: 100-row chain. id=1..100, next_id=2..101. Row 101 does not exist. ──
+        DataSet dataSet = new(databaseName);
+        DataTable chain100 = new("Chain100");
+        chain100.Columns.Add("id", typeof(int));
+        chain100.Columns.Add("next_id", typeof(int));
+        for (int i = 1; i <= 100; i++)
+            chain100.Rows.Add(i, i + 1);
+        dataSet.Tables.Add(chain100);
+
+        var queryEngine = new QueryEngine(new[] { dataSet }, sqlSelect);
+        var result = queryEngine.QueryAsDataTable();
+
+        Assert.Equal(100, result.Rows.Count);
+        var ids = result.Rows.Cast<DataRow>().Select(r => Convert.ToInt32(r["id"])).ToHashSet();
+        Assert.Contains(1, ids);
+        Assert.Contains(50, ids);
+        Assert.Contains(100, ids);
+    }
+
+    /// <summary>
+    /// Boundary test: a chain of 101 rows means iteration 100 still finds a match (id=101),
+    /// leaving workingSet non-empty. The loop continues: iteration++ makes it 101, the
+    /// check <c>101 &gt; 100</c> fires, and <see cref="SqlExecutionException"/> is thrown.
+    /// </summary>
+    [Fact]
+    public void Query_RecursiveCte_OnePastDefaultDepthLimit_Throws()
+    {
+        const string databaseName = "MyDB";
+        const string cteName = "chain101_cte";
+
+        // Chain101: id int, next_id int
+        // Rows: (1,2), (2,3), ..., (100,101), (101,102) — row with id=102 does not exist.
+        // Anchor selects row 1. Iterations 1-100 find rows 2-101 (workingSet non-empty each time).
+        // After iteration 100 workingSet = {101}; loop continues: iteration++ → 101 > 100 → throws.
+
+        // ── Anchor: SELECT id, next_id FROM Chain101 WHERE id = 1 ──
+        var anchorSelect = new SqlSelectDefinition();
+        var anchorTable = new SqlTable(databaseName, "Chain101");
+        anchorSelect.Table = anchorTable;
+        anchorSelect.Columns.Add(new SqlColumn(databaseName, "Chain101", "id") { ColumnType = typeof(int), TableRef = anchorTable });
+        anchorSelect.Columns.Add(new SqlColumn(databaseName, "Chain101", "next_id") { ColumnType = typeof(int), TableRef = anchorTable });
+
+        var anchorWhereCol = new SqlColumn(databaseName, "Chain101", "id") { ColumnType = typeof(int), TableRef = anchorTable };
+        var anchorWhereRef = new SqlColumnRef(null, "Chain101", "id") { Column = anchorWhereCol };
+        anchorSelect.WhereClause = new SqlExpression(
+            new SqlBinaryExpression(
+                new SqlExpression(anchorWhereRef),
+                SqlBinaryOperator.Equal,
+                new SqlExpression(new SqlLiteralValue(1))));
+
+        // ── Recursive term: SELECT c.id, c.next_id FROM Chain101 c JOIN chain101_cte ON c.id = chain101_cte.next_id ──
+        var recursiveSelect = new SqlSelectDefinition();
+        var chainAliased = new SqlTable(databaseName, "Chain101") { TableAlias = "c" };
+        var cteRef = new SqlTable(databaseName, cteName);
+        recursiveSelect.Table = chainAliased;
+        recursiveSelect.Columns.Add(new SqlColumn(databaseName, "Chain101", "id") { ColumnType = typeof(int), TableRef = chainAliased });
+        recursiveSelect.Columns.Add(new SqlColumn(databaseName, "Chain101", "next_id") { ColumnType = typeof(int), TableRef = chainAliased });
+
+        var leftJoinCol = new SqlColumn(databaseName, "Chain101", "id") { ColumnType = typeof(int), TableRef = chainAliased };
+        var leftJoinRef = new SqlColumnRef(null, "c", "id") { Column = leftJoinCol };
+        var rightJoinCol = new SqlColumn(databaseName, cteName, "next_id") { ColumnType = typeof(int), TableRef = cteRef };
+        var rightJoinRef = new SqlColumnRef(null, cteName, "next_id") { Column = rightJoinCol };
+        var joinCond = new SqlBinaryExpression(new SqlExpression(leftJoinRef), SqlBinaryOperator.Equal, new SqlExpression(rightJoinRef));
+        recursiveSelect.Joins.Add(new SqlJoin(cteRef, joinCond));
+
+        anchorSelect.SetOperations.Add(new SqlSetOperation(SqlSetOperator.UnionAll, recursiveSelect));
+
+        // ── Main: SELECT id FROM chain101_cte ──
+        var sqlSelect = new SqlSelectDefinition();
+        var mainCteTable = new SqlTable(databaseName, cteName);
+        sqlSelect.Table = mainCteTable;
+        sqlSelect.Columns.Add(new SqlColumn(databaseName, cteName, "id") { ColumnType = typeof(int), TableRef = mainCteTable });
+        sqlSelect.Ctes.Add(new SqlCteDefinition(cteName, anchorSelect, isRecursive: true));
+
+        // ── Data: 101-row chain. id=1..101, next_id=2..102. Row 102 does not exist. ──
+        DataSet dataSet = new(databaseName);
+        DataTable chain101 = new("Chain101");
+        chain101.Columns.Add("id", typeof(int));
+        chain101.Columns.Add("next_id", typeof(int));
+        for (int i = 1; i <= 101; i++)
+            chain101.Rows.Add(i, i + 1);
+        dataSet.Tables.Add(chain101);
+
+        var queryEngine = new QueryEngine(new[] { dataSet }, sqlSelect);
+
+        var ex = Assert.Throws<SqlExecutionException>(() => queryEngine.QueryAsDataTable());
+        Assert.Contains(cteName, ex.Message);
+        Assert.Contains("100", ex.Message);
+    }
+
     #endregion
 
     // ======================================================================

@@ -1,3 +1,4 @@
+using SqlBuildingBlocks.Interfaces;
 using SqlBuildingBlocks.IntegrationTests.Infrastructure;
 using SqlBuildingBlocks.QueryProcessing;
 using SqlBuildingBlocks.Utils;
@@ -128,5 +129,73 @@ public class NotSupportedScenarioTests
         Assert.Equal(50, Convert.ToInt32(result.Rows[2]["rolling"]));  // Jan 3: 20 + 30.
         Assert.Equal(40, Convert.ToInt32(result.Rows[3]["rolling"]));  // Jan 5: itself (Jan 4 missing).
         Assert.Equal(90, Convert.ToInt32(result.Rows[4]["rolling"]));  // Jan 6: 40 + 50.
+    }
+
+    // ── GROUP BY ROLLUP / CUBE / GROUPING SETS guards (issue #195) ────────────
+
+    [Fact]
+    public void Scenario_GroupByRollup_ThrowsNotSupported()
+    {
+        // Issue #195: GROUP BY ROLLUP is parsed into GroupBy.GroupingSets but the engine
+        // only evaluates GroupBy.Columns. The ThrowIfUnsupportedFeatures guard must fire
+        // so the consumer sees a clean NotSupportedException rather than silently-wrong results.
+        var db = new InMemoryDatabase("Sales");
+        var orders = db.AddTable("Orders",
+            ("Region", typeof(string)),
+            ("Amount", typeof(decimal)));
+        orders.Rows.Add("North", 100m);
+        orders.Rows.Add("South", 200m);
+
+        var grammar = new AnsiSqlGrammar();
+        var node = ParseHelper.Parse(grammar,
+            "SELECT Region, SUM(Amount) FROM Orders GROUP BY ROLLUP(Region)");
+        var selectDef = grammar.CreateSelect(node, db, db);
+
+        var engine = new QueryEngine(new AllTableDataProvider(new[] { (ITableDataProvider)db }), selectDef);
+        Assert.Throws<NotSupportedException>(() => engine.QueryAsDataTable());
+    }
+
+    [Fact]
+    public void Scenario_GroupByCube_ThrowsNotSupported()
+    {
+        // Issue #195: GROUP BY CUBE is parsed into GroupBy.GroupingSets but the engine
+        // only evaluates GroupBy.Columns. The ThrowIfUnsupportedFeatures guard must fire.
+        var db = new InMemoryDatabase("Sales");
+        var orders = db.AddTable("Orders",
+            ("Region", typeof(string)),
+            ("Quarter", typeof(string)),
+            ("Amount", typeof(decimal)));
+        orders.Rows.Add("North", "Q1", 100m);
+        orders.Rows.Add("South", "Q2", 200m);
+
+        var grammar = new AnsiSqlGrammar();
+        var node = ParseHelper.Parse(grammar,
+            "SELECT Region, Quarter, SUM(Amount) FROM Orders GROUP BY CUBE(Region, Quarter)");
+        var selectDef = grammar.CreateSelect(node, db, db);
+
+        var engine = new QueryEngine(new AllTableDataProvider(new[] { (ITableDataProvider)db }), selectDef);
+        Assert.Throws<NotSupportedException>(() => engine.QueryAsDataTable());
+    }
+
+    [Fact]
+    public void Scenario_GroupByGroupingSets_ThrowsNotSupported()
+    {
+        // Issue #195: GROUP BY GROUPING SETS is parsed into GroupBy.GroupingSets but the
+        // engine only evaluates GroupBy.Columns. The ThrowIfUnsupportedFeatures guard must fire.
+        var db = new InMemoryDatabase("Sales");
+        var orders = db.AddTable("Orders",
+            ("Region", typeof(string)),
+            ("Quarter", typeof(string)),
+            ("Amount", typeof(decimal)));
+        orders.Rows.Add("North", "Q1", 100m);
+        orders.Rows.Add("South", "Q2", 200m);
+
+        var grammar = new AnsiSqlGrammar();
+        var node = ParseHelper.Parse(grammar,
+            "SELECT Region, Quarter, SUM(Amount) FROM Orders GROUP BY GROUPING SETS((Region), (Quarter), ())");
+        var selectDef = grammar.CreateSelect(node, db, db);
+
+        var engine = new QueryEngine(new AllTableDataProvider(new[] { (ITableDataProvider)db }), selectDef);
+        Assert.Throws<NotSupportedException>(() => engine.QueryAsDataTable());
     }
 }

@@ -65,8 +65,6 @@ public class LogicalEntityCoverageTests
             Path.Combine("src", "Core", "QueryProcessing"),
             Path.Combine("src", "Core", "Utils"),
             Path.Combine("src", "Core", "Visitors"),
-            Path.Combine("src", "Core", "LogicalEntities"),
-            Path.Combine("src", "Core"), // root-level files like SavepointStmt.cs (but mostly NonTerminals — harmless)
         };
 
         var repoRoot = FindRepoRoot();
@@ -298,6 +296,28 @@ public class LogicalEntityCoverageTests
             // SqlExpression default case (NotSupportedException for Kind == CastExpr) so
             // ArrayDimensions is reachable only via that guarded arm.
             "SqlDataType.ArrayDimensions" => true,
+
+            // SqlDataType.Precision and SqlDataType.Scale capture type modifiers like
+            // DECIMAL(10, 2). SqlDataType surfaces in SqlCastExpression which is rejected
+            // at the SqlExpression default-case NotSupportedException. The in-memory engine
+            // has no backing store that enforces column precision or scale, so these modifiers
+            // are parsed but not evaluated. They are preserved as round-trip metadata.
+            "SqlDataType.Precision" => true,
+            "SqlDataType.Scale" => true,
+
+            // SqlBetweenExpression.IsNegated is genuinely consumed by the engine — it
+            // controls NOT BETWEEN semantics in SqlBetweenExpression.GetExpression() (the
+            // Expression.Not wrap). The corpus restriction (issue #198) excludes LogicalEntities/
+            // from the scan directories, so consumption inside the declaring type's own file is
+            // no longer visible to the scanner. Allow-listed rather than re-broadening the corpus.
+            "SqlBetweenExpression.IsNegated" => true,
+
+            // SqlExistsExpression.IsNegated distinguishes EXISTS from NOT EXISTS. EXISTS/NOT EXISTS
+            // predicates reach the SqlExpression.GetExpression default-case NotSupportedException
+            // (ExistsExpr kind is not dispatched). IsNegated is consumed only within
+            // SqlExistsExpression's own ToExpressionString/ToString, which the corpus restriction
+            // now excludes. Allow-listed as round-trip/diagnostic metadata for the unsupported arm.
+            "SqlExistsExpression.IsNegated" => true,
 
             _ => false
         };

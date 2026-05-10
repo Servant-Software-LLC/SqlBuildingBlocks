@@ -968,19 +968,22 @@ public class QueryEngine : IQueryEngine
     private static IEnumerable<DataRow> ApplyDistinct(IEnumerable<DataRow> rows, VirtualDataTable queryOutput)
     {
         var columnNames = queryOutput.Columns.Cast<DataColumn>().Select(c => c.ColumnName).ToList();
-        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var seen = new HashSet<GroupKey>();
 
         foreach (var row in rows)
         {
-            var key = string.Join("\0", columnNames.Select(c =>
-            {
-                var val = row[c];
-                return val == DBNull.Value ? "\x01NULL\x01" : val?.ToString() ?? "";
-            }));
-
+            var key = MakeRowKey(row, columnNames);
             if (seen.Add(key))
                 yield return row;
         }
+    }
+
+    private static GroupKey MakeRowKey(DataRow row, IList<string> columnNames)
+    {
+        var values = new object[columnNames.Count];
+        for (int i = 0; i < columnNames.Count; i++)
+            values[i] = row[columnNames[i]];   // DBNull.Value stays as DBNull.Value — no sentinel needed
+        return new GroupKey(values);
     }
 
     private static int CompareValues(object x, object y)
@@ -1368,6 +1371,14 @@ public class QueryEngine : IQueryEngine
             if (sqlSelectDefinition.Top.WithTies)
                 throw new NotSupportedException("TOP ... WITH TIES is not supported by the QueryEngine.");
         }
+
+        // GROUP BY ROLLUP, CUBE, and GROUPING SETS are parsed into GroupBy.GroupingSets
+        // but not executed — the engine only reads GroupBy.Columns. Guard here to prevent
+        // silent wrong results (issue #195).
+        if (sqlSelectDefinition.GroupBy?.GroupingSets?.Count > 0)
+            throw new NotSupportedException(
+                "GROUP BY ROLLUP, CUBE, and GROUPING SETS are not supported by the QueryEngine. " +
+                "GroupingSets (Type, Sets) are not evaluated.");
 
         // SQL:2003 §7.11 — window functions are permitted only in the SELECT list and ORDER BY,
         // and must be rejected in WHERE / HAVING / JOIN ON / GROUP BY (issue #172).
@@ -2474,24 +2485,15 @@ public class QueryEngine : IQueryEngine
         }
     }
 
-    private static string GetRowKey(DataRow row, IList<string> columnNames)
-    {
-        return string.Join("\0", columnNames.Select(c =>
-        {
-            var val = row[c];
-            return val == DBNull.Value ? "\x01NULL\x01" : val?.ToString() ?? "";
-        }));
-    }
-
     private static IEnumerable<DataRow> ApplyUnion(
         IEnumerable<DataRow> left, IEnumerable<DataRow> right, VirtualDataTable schema)
     {
         var columnNames = schema.Columns.Cast<DataColumn>().Select(c => c.ColumnName).ToList();
-        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var seen = new HashSet<GroupKey>();
 
         foreach (var row in left.Concat(right))
         {
-            var key = GetRowKey(row, columnNames);
+            var key = MakeRowKey(row, columnNames);
             if (seen.Add(key))
                 yield return row;
         }
@@ -2503,14 +2505,14 @@ public class QueryEngine : IQueryEngine
         var columnNames = schema.Columns.Cast<DataColumn>().Select(c => c.ColumnName).ToList();
 
         // Materialize right side to build lookup set.
-        var rightKeys = new HashSet<string>(StringComparer.Ordinal);
+        var rightKeys = new HashSet<GroupKey>();
         foreach (var row in right)
-            rightKeys.Add(GetRowKey(row, columnNames));
+            rightKeys.Add(MakeRowKey(row, columnNames));
 
-        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var seen = new HashSet<GroupKey>();
         foreach (var row in left)
         {
-            var key = GetRowKey(row, columnNames);
+            var key = MakeRowKey(row, columnNames);
             if (rightKeys.Contains(key) && seen.Add(key))
                 yield return row;
         }
@@ -2522,14 +2524,14 @@ public class QueryEngine : IQueryEngine
         var columnNames = schema.Columns.Cast<DataColumn>().Select(c => c.ColumnName).ToList();
 
         // Materialize right side to build lookup set.
-        var rightKeys = new HashSet<string>(StringComparer.Ordinal);
+        var rightKeys = new HashSet<GroupKey>();
         foreach (var row in right)
-            rightKeys.Add(GetRowKey(row, columnNames));
+            rightKeys.Add(MakeRowKey(row, columnNames));
 
-        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var seen = new HashSet<GroupKey>();
         foreach (var row in left)
         {
-            var key = GetRowKey(row, columnNames);
+            var key = MakeRowKey(row, columnNames);
             if (!rightKeys.Contains(key) && seen.Add(key))
                 yield return row;
         }
