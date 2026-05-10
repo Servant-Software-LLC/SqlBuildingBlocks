@@ -32,3 +32,25 @@ When reviewing pull requests, focus on the following by priority:
 - Code style and formatting
 - Suggestions to restructure the grammar unless they fix a P0/P1 issue
 - Refactoring suggestions unrelated to the PR's scope
+
+## Key Interface Contracts
+
+### `ITableDataProvider` vs `IAllTableDataProvider`
+
+`ITableDataProvider` (`src/Core/Interfaces/ITableDataProvider.cs`) is the base data-access
+contract: `GetTableData(SqlTable)`, `GetTables(string?)`, and `GetColumns(SqlTable)`. A
+provider may serve only a single, fixed table.
+
+`IAllTableDataProvider` (`src/Core/Interfaces/IAllTableDataProvider.cs`) extends
+`ITableDataProvider` with no additional members. It is a **semantic marker** meaning: "this
+provider can satisfy `GetTableData` for *any* table in the schema." `QueryEngine`'s
+multi-table constructor overloads require this type, not `ITableDataProvider`, to enforce that
+JOIN execution only happens when the provider can serve every table referenced in the query.
+
+The canonical implementation is `AllTableDataProvider` (`src/Core/Utils/AllTableDataProvider.cs`),
+which fans out calls across a DI-injected `IEnumerable<ITableDataProvider>`. External consumers
+(e.g. MockDB's `SchemaManagerTableDataProvider`) implement `IAllTableDataProvider` directly when
+they hold an in-memory representation of the full schema.
+
+**Do not** add a concrete method to `IAllTableDataProvider` without a careful NuGet-surface review
+— it is part of the public API and removing or changing its signature is a breaking change.
