@@ -2,6 +2,7 @@ using SqlBuildingBlocks.IntegrationTests.Infrastructure;
 using SqlBuildingBlocks.QueryProcessing;
 using SqlBuildingBlocks.Utils;
 using System.Data;
+using System.Linq;
 using Xunit;
 
 namespace SqlBuildingBlocks.IntegrationTests;
@@ -87,6 +88,29 @@ public class PostgreSqlScenarioTests
         // Prices > 3.00 are 6.25 (Cheese) only — 1.50, 3.00, and 0.75 are excluded.
         Assert.Single(result.Rows);
         Assert.Equal(6.25m, (decimal)result.Rows[0]["price"]);
+    }
+
+    [Fact]
+    public void Scenario_DerivedTable_CrossDialectSmoke_PostgreSQL()
+    {
+        // Issue #190 cross-dialect smoke: derived table in FROM position works through the
+        // PostgreSQL grammar.
+        var db = BuildSampleDatabase();
+        var grammar = new PostgreSqlSelectGrammar();
+        var node = ParseHelper.Parse(grammar,
+            "SELECT dt.id, dt.name FROM (SELECT id, name FROM users WHERE region = 'North') AS dt");
+        var selectDefinition = grammar.CreateSelect(node, db, db);
+        Assert.False(selectDefinition.InvalidReferences,
+            $"Reference resolution failed: {selectDefinition.InvalidReferenceReason}");
+
+        var allTableProvider = new AllTableDataProvider(new[] { (SqlBuildingBlocks.Interfaces.ITableDataProvider)db });
+        var engine = new QueryEngine(allTableProvider, selectDefinition);
+        var result = engine.QueryAsDataTable();
+
+        // North users are Alice and Carol → 2 rows.
+        Assert.Equal(2, result.Rows.Count);
+        var names = result.Rows.Cast<DataRow>().Select(r => (string)r["name"]).OrderBy(n => n).ToList();
+        Assert.Equal(new[] { "Alice", "Carol" }, names);
     }
 
     [Fact]

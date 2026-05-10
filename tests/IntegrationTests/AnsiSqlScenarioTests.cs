@@ -470,23 +470,27 @@ public class AnsiSqlScenarioTests
     }
 
     [Fact]
-    public void Scenario_NonCorrelatedDerivedTable_StillResolves()
+    public void Scenario_NonCorrelatedDerivedTable_ExecutesEndToEnd()
     {
-        // Issue #182 regression guard: a non-correlated derived table (the existing case)
-        // must still resolve cleanly after the outer-scope threading change. Resolution-
-        // only check — the in-memory QueryEngine does not currently materialize derived
-        // tables for execution, but the resolver path is what this issue is about.
+        // Issue #182 / #190: a non-correlated derived table must resolve cleanly AND
+        // execute end-to-end. The resolution-only limitation comment has been removed now
+        // that QueryEngine.GetQueryableRowsInFromTable materializes SqlDerivedTable.
+        // Orders: (100,1,50), (101,1,25), (102,2,75), (103,3,10), (104,3,30), (105,3,40)
+        // WHERE Amount > 25 keeps: 50, 75, 30, 40 → 4 rows.
         var db = BuildSampleDatabase();
-        var grammar = new AnsiSqlGrammar();
 
-        var node = ParseHelper.Parse(grammar,
+        var result = Run(
             "SELECT dt.CustomerID, dt.Amount FROM (SELECT CustomerID, Amount FROM Orders) AS dt " +
-            "WHERE dt.Amount > 25");
-        var selectDefinition = grammar.CreateSelect(node, db, db);
+            "WHERE dt.Amount > 25",
+            db);
 
-        Assert.False(selectDefinition.InvalidReferences,
-            $"Non-correlated derived-table resolution failed: {selectDefinition.InvalidReferenceReason}");
-        Assert.IsType<SqlBuildingBlocks.LogicalEntities.SqlDerivedTable>(selectDefinition.Table);
+        Assert.Equal(2, result.Columns.Count);
+        Assert.Equal(4, result.Rows.Count);
+        var amounts = result.Rows.Cast<DataRow>()
+            .Select(r => Convert.ToDecimal(r["Amount"]))
+            .OrderBy(a => a)
+            .ToList();
+        Assert.Equal(new[] { 30m, 40m, 50m, 75m }, amounts);
     }
 
     [Fact]
@@ -515,6 +519,63 @@ public class AnsiSqlScenarioTests
             $"Resolver should report the unqualified ID inside the derived table as ambiguous. Reason was: {selectDefinition.InvalidReferenceReason ?? "<none>"}");
         Assert.Contains("ambiguous", selectDefinition.InvalidReferenceReason!,
             StringComparison.OrdinalIgnoreCase);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Issue #190 — SqlDerivedTable in main FROM position: QueryEngine must
+    // materialize the inner SELECT and expose its rows to the outer query.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Scenario_DerivedTable_SingleRowProjection_ReturnsExpectedRow()
+    {
+        // Issue #190: simplest derived-table case where the inner SELECT returns one row.
+        // Order ID=100 belongs to CustomerID=1; the outer query projects just CustomerID.
+        var db = BuildSampleDatabase();
+
+        var result = Run(
+            "SELECT sub.CustomerID FROM (SELECT CustomerID FROM Orders WHERE ID = 100) AS sub",
+            db);
+
+        Assert.Single(result.Columns);
+        Assert.Single(result.Rows);
+        Assert.Equal(1, Convert.ToInt32(result.Rows[0]["CustomerID"]));
+    }
+
+    [Fact]
+    public void Scenario_DerivedTable_WithWhereClause_FiltersCorrectly()
+    {
+        // Issue #190: derived table with an outer WHERE clause applied to the
+        // materialized result. The inner SELECT returns all 6 orders; the outer
+        // WHERE Amount > 50 keeps 75 (Bob) → 1 row.
+        var db = BuildSampleDatabase();
+
+        var result = Run(
+            "SELECT dt.CustomerID, dt.Amount FROM (SELECT CustomerID, Amount FROM Orders) AS dt " +
+            "WHERE dt.Amount > 50",
+            db);
+
+        Assert.Equal(2, result.Columns.Count);
+        Assert.Single(result.Rows);
+        Assert.Equal(75m, Convert.ToDecimal(result.Rows[0]["Amount"]));
+    }
+
+    [Fact]
+    public void Scenario_DerivedTable_WithInnerWhereClause_FiltersBeforeMaterializing()
+    {
+        // Issue #190: derived table whose inner SELECT contains its own WHERE.
+        // Only orders from customer 1 are projected by the inner SELECT;
+        // the outer query sees those 2 rows.
+        var db = BuildSampleDatabase();
+
+        var result = Run(
+            "SELECT dt.CustomerID, dt.Amount FROM (SELECT CustomerID, Amount FROM Orders WHERE CustomerID = 1) AS dt",
+            db);
+
+        Assert.Equal(2, result.Columns.Count);
+        Assert.Equal(2, result.Rows.Count);
+        foreach (DataRow r in result.Rows)
+            Assert.Equal(1, Convert.ToInt32(r["CustomerID"]));
     }
 
     [Fact]

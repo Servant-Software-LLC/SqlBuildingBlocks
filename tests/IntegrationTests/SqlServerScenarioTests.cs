@@ -2,6 +2,7 @@ using SqlBuildingBlocks.IntegrationTests.Infrastructure;
 using SqlBuildingBlocks.QueryProcessing;
 using SqlBuildingBlocks.Utils;
 using System.Data;
+using System.Linq;
 using Xunit;
 
 namespace SqlBuildingBlocks.IntegrationTests;
@@ -144,5 +145,25 @@ public class SqlServerScenarioTests
         var ex = Assert.Throws<NotSupportedException>(() =>
             Run("SELECT TOP 3 WITH TIES ID FROM Products ORDER BY Price DESC", db));
         Assert.Contains("WITH TIES", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Scenario_DerivedTable_CrossDialectSmoke_SqlServer()
+    {
+        // Issue #190 cross-dialect smoke: derived table in FROM position works through the
+        // SQL Server grammar.
+        var db = BuildSampleDatabase();
+
+        var result = Run(
+            "SELECT dt.ID, dt.Name FROM (SELECT ID, Name, Price FROM Products WHERE Price > 3.00) AS dt",
+            db);
+
+        // Products with Price > 3.00: Cheese (6.25), Flour (4.00), Grape (5.50) → 3 rows.
+        Assert.Equal(3, result.Rows.Count);
+        var names = result.Rows.Cast<DataRow>()
+            .Select(r => (string)r["Name"])
+            .OrderBy(n => n)
+            .ToList();
+        Assert.Equal(new[] { "Cheese", "Flour", "Grape" }, names);
     }
 }
