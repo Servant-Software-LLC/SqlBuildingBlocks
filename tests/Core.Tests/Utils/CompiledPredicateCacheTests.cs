@@ -19,6 +19,7 @@ namespace SqlBuildingBlocks.Core.Tests.Utils;
 /// cache-count hooks (<see cref="CompiledPredicateCache.CacheCount"/>) are used only to
 /// verify reuse — they are not part of the public surface.
 /// </summary>
+[Collection("CompiledPredicateCache")]
 public class CompiledPredicateCacheTests
 {
     [Fact]
