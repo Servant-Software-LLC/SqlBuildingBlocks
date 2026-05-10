@@ -2,6 +2,7 @@ using SqlBuildingBlocks.IntegrationTests.Infrastructure;
 using SqlBuildingBlocks.QueryProcessing;
 using SqlBuildingBlocks.Utils;
 using System.Data;
+using System.Linq;
 using Xunit;
 
 namespace SqlBuildingBlocks.IntegrationTests;
@@ -146,5 +147,22 @@ public class MySqlScenarioTests
         Assert.Equal("Root", byId[1]);
         Assert.Equal("Left", byId[2]);
         Assert.Equal("Right", byId[3]);
+    }
+
+    [Fact]
+    public void Scenario_DerivedTable_CrossDialectSmoke_MySQL()
+    {
+        // Issue #190 cross-dialect smoke: derived table in FROM position works through the
+        // MySQL grammar. Same SQL should round-trip through all dialects.
+        var db = BuildSampleDatabase();
+
+        var result = Run(
+            "SELECT dt.CustomerID, dt.Amount FROM (SELECT CustomerID, Amount FROM Orders) AS dt " +
+            "WHERE dt.Amount > 250",
+            db);
+
+        // Orders with Amount > 250: 300, 400, 500, 600 → 4 rows.
+        Assert.Equal(4, result.Rows.Count);
+        Assert.All(result.Rows.Cast<DataRow>(), r => Assert.True(Convert.ToDecimal(r["Amount"]) > 250m));
     }
 }

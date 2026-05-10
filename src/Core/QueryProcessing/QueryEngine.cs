@@ -679,6 +679,14 @@ public class QueryEngine : IQueryEngine
         if (sqlSelectDefinition.Table is null)
             return null;
 
+        // Issue #190: materialize a derived table in the main FROM position by recursively
+        // executing its inner SELECT. This is symmetric with how SqlCteTable results are
+        // produced in ExecuteWithCtes / ExecuteCte — run the inner SELECT, turn it into a
+        // DataTable, then expose its rows as IQueryable<DataRow> so the outer SELECT's WHERE
+        // filtering and column projection work exactly as they do for any real table.
+        if (sqlSelectDefinition.Table is SqlDerivedTable fromDerivedTable)
+            return MaterializeDerivedTable(fromDerivedTable, processingState);
+
         if (!processingState.TablesProjections.TryGetValue(sqlSelectDefinition.Table, out var tableWithColumnsToProjectOnto))
             tableWithColumnsToProjectOnto = emptyDataTable.Value;
 
@@ -723,14 +731,71 @@ public class QueryEngine : IQueryEngine
         return toDataRowsReturnValue;
     }
 
+    /// <summary>
+    /// Materializes a <see cref="SqlDerivedTable"/> (inline subquery in FROM or JOIN position)
+    /// by recursively executing its inner SELECT against the current table-data provider.
+    /// The result rows are returned as <see cref="IQueryable{DataRow}"/> so the outer SELECT's
+    /// WHERE filtering and column-projection machinery (which already handles DataRow elements)
+    /// work without any special-casing.
+    ///
+    /// This is symmetric with how CTE results are materialized in
+    /// <see cref="ExecuteCte"/> / <see cref="ExecuteWithCtes"/>: run the inner SELECT, convert
+    /// the output to a DataTable, expose the rows back up to the caller (issue #190).
+    /// </summary>
+    private IEnumerable<DataRow> MaterializeDerivedTable(SqlDerivedTable derivedTable, ProcessingState processingState)
+    {
+        var innerEngine = new QueryEngine(tableDataProvider, derivedTable.SelectDefinition, dataRowType, options);
+        var innerResult = innerEngine.Query().ToDataTable();
+
+        if (!processingState.TablesProjections.TryGetValue(derivedTable, out var tableWithColumnsToProjectOnto))
+            tableWithColumnsToProjectOnto = emptyDataTable.Value;
+
+        processingState.TablesInProcessing.Add(derivedTable);
+        var whereClauseAsBinary = sqlSelectDefinition.WhereClause?.BinExpr;
+        var innerQueryable = innerResult.Rows.Cast<DataRow>().AsQueryable();
+
+        if (whereClauseAsBinary != null && WhereClauseContainsOnlyTables(whereClauseAsBinary, processingState.TablesInProcessing))
+        {
+            var applyFilterResult = CompiledQueryDispatch.ApplyFilter(
+                this,
+                typeof(DataRow),
+                innerQueryable, whereClauseAsBinary, null, derivedTable, tableWithColumnsToProjectOnto);
+
+            if (applyFilterResult == null)
+                throw new ArgumentNullException("ApplyFilter's return value was null", innerException: null);
+
+            processingState.WhereApplied = derivedTable;
+            return applyFilterResult;
+        }
+
+        var toDataRowsResult = CompiledQueryDispatch.ToDataRows(
+            typeof(DataRow),
+            innerQueryable, tableWithColumnsToProjectOnto);
+
+        if (toDataRowsResult == null)
+            throw new ArgumentNullException("ToDataRows's return value was null", innerException: null);
+
+        return toDataRowsResult;
+    }
+
     private IEnumerable<DataRow> GetQueryableRowsInJoinTable(ProcessingState processingState, SqlJoin join)
     {
-        var joinTableQueryable = tableDataProvider.GetTableData(join.Table);
-        if (joinTableQueryable is null)
-            throw new ArgumentNullException($"Table '{join.Table.TableName}' was not found in DataSet '{join.Table.DatabaseName}'", nameof(joinTableQueryable));
-
-        if (dataRowType)
-            joinTableQueryable = joinTableQueryable.Cast<DataRow>();
+        // Issue #190: a derived table in JOIN position is materialized before filtering,
+        // mirroring the FROM-position path in MaterializeDerivedTable.
+        IQueryable joinTableQueryable;
+        if (join.Table is SqlDerivedTable joinDerivedTable)
+        {
+            var innerEngine = new QueryEngine(tableDataProvider, joinDerivedTable.SelectDefinition, dataRowType, options);
+            var innerResult = innerEngine.Query().ToDataTable();
+            joinTableQueryable = innerResult.Rows.Cast<DataRow>().AsQueryable();
+        }
+        else
+        {
+            var rawQueryable = tableDataProvider.GetTableData(join.Table);
+            if (rawQueryable is null)
+                throw new ArgumentNullException($"Table '{join.Table.TableName}' was not found in DataSet '{join.Table.DatabaseName}'", nameof(rawQueryable));
+            joinTableQueryable = dataRowType ? rawQueryable.Cast<DataRow>() : rawQueryable;
+        }
 
         //var joinOnExpression = join.Condition.BuildExpression(processingState.DataRowsOfOtherTables, join.Table);
 
@@ -781,12 +846,21 @@ public class QueryEngine : IQueryEngine
     /// </summary>
     private List<DataRow> GetAllRowsInJoinTable(ProcessingState processingState, SqlJoin join)
     {
-        var joinTableQueryable = tableDataProvider.GetTableData(join.Table);
-        if (joinTableQueryable is null)
-            throw new ArgumentNullException($"Table '{join.Table.TableName}' was not found in DataSet '{join.Table.DatabaseName}'", nameof(joinTableQueryable));
-
-        if (dataRowType)
-            joinTableQueryable = joinTableQueryable.Cast<DataRow>();
+        // Issue #190: materialized derived tables in JOIN position are already DataRow sequences.
+        IQueryable joinTableQueryable;
+        if (join.Table is SqlDerivedTable allRowsDerivedTable)
+        {
+            var innerEngine = new QueryEngine(tableDataProvider, allRowsDerivedTable.SelectDefinition, dataRowType, options);
+            var innerResult = innerEngine.Query().ToDataTable();
+            joinTableQueryable = innerResult.Rows.Cast<DataRow>().AsQueryable();
+        }
+        else
+        {
+            var rawQueryable = tableDataProvider.GetTableData(join.Table);
+            if (rawQueryable is null)
+                throw new ArgumentNullException($"Table '{join.Table.TableName}' was not found in DataSet '{join.Table.DatabaseName}'", nameof(rawQueryable));
+            joinTableQueryable = dataRowType ? rawQueryable.Cast<DataRow>() : rawQueryable;
+        }
 
         if (!processingState.TablesProjections.TryGetValue(join.Table, out var tableWithColumnsToProjectOnto))
             tableWithColumnsToProjectOnto = emptyDataTable.Value;
