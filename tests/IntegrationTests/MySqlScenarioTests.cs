@@ -165,4 +165,27 @@ public class MySqlScenarioTests
         Assert.Equal(4, result.Rows.Count);
         Assert.All(result.Rows.Cast<DataRow>(), r => Assert.True(Convert.ToDecimal(r["Amount"]) > 250m));
     }
+
+    [Fact]
+    public void Scenario_LeftJoin_CrossDialectSmoke_MySQL()
+    {
+        // Issue #205 smoke test: MySQL grammar parses LEFT JOIN correctly and produces null-padded rows.
+        // Build a tiny DB: Customers (1=Alice, 2=Bob) with one order for Alice → Bob has no match.
+        var db = new InMemoryDatabase("Sales");
+        var customers = db.AddTable("Customers", ("ID", typeof(int)), ("Name", typeof(string)));
+        customers.Rows.Add(1, "Alice");
+        customers.Rows.Add(2, "Bob");  // no orders
+        var orders = db.AddTable("Orders", ("ID", typeof(int)), ("CustomerID", typeof(int)), ("Amount", typeof(decimal)));
+        orders.Rows.Add(101, 1, 100.00m);
+
+        var result = Run(
+            "SELECT c.Name, o.Amount FROM Customers c LEFT JOIN Orders o ON c.ID = o.CustomerID",
+            db);
+
+        // 1 matched (Alice) + 1 null row (Bob) = 2
+        Assert.Equal(2, result.Rows.Count);
+        var bobRows = result.Rows.Cast<DataRow>().Where(r => "Bob".Equals(r["Name"])).ToList();
+        Assert.Single(bobRows);
+        Assert.Equal(DBNull.Value, bobRows[0]["Amount"]);
+    }
 }

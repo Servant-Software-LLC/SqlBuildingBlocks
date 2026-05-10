@@ -102,11 +102,39 @@ public class RoundTripTests
         public SqlExpression Create(ParseTreeNode node) => ((Expr)Root).Create(node);
     }
 
+    /// <summary>
+    /// SELECT-only grammar with Root = SelectStmt, required for derived-table round-trip tests.
+    /// TableName.CreateDerivedSelectDefinition checks grammar.Root is SelectStmt; a Stmt-rooted
+    /// grammar fails that check. This grammar supports SELECT (including derived tables and CTEs)
+    /// but not INSERT/UPDATE/DELETE/CREATE TABLE.
+    /// </summary>
+    private class SelectGrammar : Grammar
+    {
+        public SelectGrammar() : base(false)
+        {
+            SelectStmt selectStmt = new(this);
+            Expr expr = selectStmt.JoinChainOpt.Expr;
+            expr.InitializeRule(selectStmt, selectStmt.FuncCall);
+
+            Root = selectStmt;
+        }
+
+        public SqlSelectDefinition Create(ParseTreeNode node) =>
+            ((SelectStmt)Root).Create(node);
+    }
+
     // ── Round-trip oracles ────────────────────────────────────────────────────
 
     private static SqlDefinition ParseStmt(string sql)
     {
         var grammar = new StmtGrammar();
+        var node = GrammarParser.Parse(grammar, sql);
+        return grammar.Create(node);
+    }
+
+    private static SqlSelectDefinition ParseSelect(string sql)
+    {
+        var grammar = new SelectGrammar();
         var node = GrammarParser.Parse(grammar, sql);
         return grammar.Create(node);
     }
@@ -128,6 +156,18 @@ public class RoundTripTests
     {
         var first = ParseStmt(sql);
         var second = ParseStmt(sql);
+        AstComparer.AssertEqual(first, second, $"sql=`{sql}`");
+    }
+
+    /// <summary>
+    /// SELECT-only round-trip oracle. Uses <see cref="SelectGrammar"/> (Root = SelectStmt)
+    /// which is required for SQL that contains derived tables: TableName.CreateDerivedSelectDefinition
+    /// validates grammar.Root is SelectStmt and throws when a Stmt-rooted grammar is used.
+    /// </summary>
+    private static void AssertSelectRoundTrip(string sql)
+    {
+        var first = ParseSelect(sql);
+        var second = ParseSelect(sql);
         AstComparer.AssertEqual(first, second, $"sql=`{sql}`");
     }
 
@@ -247,5 +287,78 @@ public class RoundTripTests
     public void Expression_Cast()
     {
         AssertExprRoundTrip("CAST(price AS INT) > 0");
+    }
+
+    // ── New round-trip tests for Wave 10–16 constructs (issue #204) ──────────
+
+    [Fact]
+    public void Cte_NonRecursive_RoundTrips()
+    {
+        // Non-recursive CTE: WITH x AS (...) SELECT ... FROM x
+        AssertStmtRoundTrip("WITH x AS (SELECT ID FROM Orders) SELECT ID FROM x");
+    }
+
+    [Fact]
+    public void Cte_Chained_RoundTrips()
+    {
+        // Chained CTEs: CTE b references CTE a declared earlier in the same WITH clause.
+        AssertStmtRoundTrip("WITH a AS (SELECT ID FROM Orders), b AS (SELECT ID FROM a) SELECT ID FROM b");
+    }
+
+    [Fact]
+    public void Cte_Recursive_RoundTrips()
+    {
+        // Recursive CTE: RECURSIVE keyword is supported in the Core SelectStmt grammar.
+        // The parse-only oracle (no AstComparer) is used here because the recursive CTE
+        // creates a back-reference cycle in the resolved AST (the inner SELECT's FROM table
+        // resolves to a SqlCteTable that points back to the outer SqlCteDefinition).
+        // AstComparer.AssertEqual would stack-overflow on that cycle.
+        // This test verifies: (a) the grammar accepts WITH RECURSIVE syntax without errors,
+        // and (b) a second parse of the same SQL produces no errors (grammar is deterministic).
+        // Uses the fake TableSchemaProvider's "employees" table (id, manager_id columns).
+        // Multi-character aliases avoid reserved boolean words (T, F, on, off, yes, no).
+        const string sql =
+            "WITH RECURSIVE mgr AS (" +
+            "SELECT id, manager_id FROM employees WHERE manager_id = 0 " +
+            "UNION ALL " +
+            "SELECT emp.id, emp.manager_id FROM employees emp JOIN mgr pr ON emp.manager_id = pr.id) " +
+            "SELECT id FROM mgr";
+
+        var grammar1 = new StmtGrammar();
+        GrammarParser.Parse(grammar1, sql); // asserts no parse errors
+
+        var grammar2 = new StmtGrammar();
+        GrammarParser.Parse(grammar2, sql); // second parse is also error-free
+    }
+
+    [Fact]
+    public void DerivedTable_InFrom_RoundTrips()
+    {
+        // Derived table in the FROM position: subquery with alias.
+        // Uses SelectGrammar (Root = SelectStmt) because TableName.CreateDerivedSelectDefinition
+        // requires grammar.Root is SelectStmt; a Stmt-rooted grammar throws at AST creation time.
+        AssertSelectRoundTrip("SELECT sub.ID FROM (SELECT ID FROM Orders) AS sub");
+    }
+
+    [Fact]
+    public void DerivedTable_InJoin_RoundTrips()
+    {
+        // Derived table on the JOIN side: subquery aliased and joined on a column.
+        // Uses SelectGrammar (Root = SelectStmt) for the same reason as DerivedTable_InFrom_RoundTrips.
+        AssertSelectRoundTrip(
+            "SELECT c.CustomerName, sub.CustomerID FROM Customers c " +
+            "INNER JOIN (SELECT CustomerID FROM Orders) AS sub ON c.ID = sub.CustomerID");
+    }
+
+    [Fact]
+    public void WindowFrame_IntervalBound_RoundTrips()
+    {
+        // INTERVAL window frame bound: RANGE BETWEEN INTERVAL '1' DAY PRECEDING AND CURRENT ROW.
+        // The AnsiSQL grammar (SelectStmt.cs) supports INTERVAL '<magnitude>' <qualifier> in window
+        // frame bounds, so this exercises the intervalFrameLiteral grammar rule on round-trip.
+        AssertStmtRoundTrip(
+            "SELECT ID, SUM(CustomerID) OVER " +
+            "(ORDER BY ID RANGE BETWEEN INTERVAL '1' DAY PRECEDING AND CURRENT ROW) " +
+            "AS running_sum FROM Orders");
     }
 }
