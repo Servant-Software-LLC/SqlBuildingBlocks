@@ -2439,6 +2439,100 @@ public class QueryEngineTests
         Assert.Equal(new[] { "Alice", "Bob", "Carol" }, names);
     }
 
+    // Issue #185 — CteTableDataProvider previously used StringComparer.OrdinalIgnoreCase,
+    // so a CTE named "chain" would shadow a base table named "Chain" during execution.
+    // The resolver (SelectReferenceResolver.ResolveCtes) already applies the consumer's
+    // case-rules and writes back the canonical declared CTE name to SqlCteTable.TableName,
+    // so the executor's CTE-name lookup must be exact (Ordinal) — otherwise it intercepts
+    // base-table FROM references that the resolver intentionally left unbound to the CTE.
+
+    [Fact]
+    public void Query_CteWithLowercaseName_DoesNotShadowBaseTableWithDifferentCase()
+    {
+        // Given a CTE "chain" (body: SELECT id FROM Seed → 1 row) and a base table
+        // "Chain" (3 rows), SELECT id FROM Chain (capital C) must hit the base table,
+        // not the CTE. Pre-fix: OrdinalIgnoreCase routed Chain to the CTE → 1 row.
+        const string databaseName = "MyDB";
+
+        // CTE body: SELECT id FROM Seed (1 row)
+        var cteSelect = new SqlSelectDefinition();
+        SqlTable seedTable = new(databaseName, "Seed");
+        cteSelect.Table = seedTable;
+        cteSelect.Columns.Add(new SqlColumn(databaseName, "Seed", "id") { TableRef = seedTable });
+
+        // Main query: SELECT id FROM Chain (capital C — should bind to base table, not CTE)
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable mainTable = new(databaseName, "Chain");
+        sqlSelect.Table = mainTable;
+        sqlSelect.Columns.Add(new SqlColumn(databaseName, "Chain", "id") { TableRef = mainTable });
+
+        sqlSelect.Ctes.Add(new SqlCteDefinition("chain", cteSelect));
+
+        DataSet dataSet = new(databaseName);
+        DataTable seed = new("Seed");
+        seed.Columns.Add("id", typeof(int));
+        seed.Rows.Add(99);
+        dataSet.Tables.Add(seed);
+
+        DataTable chain = new("Chain");
+        chain.Columns.Add("id", typeof(int));
+        chain.Rows.Add(1);
+        chain.Rows.Add(2);
+        chain.Rows.Add(3);
+        dataSet.Tables.Add(chain);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var result = queryEngine.QueryAsDataTable();
+
+        // Expect 3 rows (base table), not 1 row (CTE).
+        Assert.Equal(3, result.Rows.Count);
+        var ids = result.Rows.Cast<DataRow>().Select(r => r["id"].ToString()).OrderBy(s => s).ToList();
+        Assert.Equal(new[] { "1", "2", "3" }, ids);
+    }
+
+    [Fact]
+    public void Query_CteWithLowercaseName_ExactCaseMatchHitsCte()
+    {
+        // Given a CTE "chain" (body: SELECT id FROM Seed → 1 row) and a base table
+        // "Chain" (3 rows), SELECT id FROM chain (lowercase) must hit the CTE (1 row).
+        // This proves the executor still resolves CTE references on exact match.
+        const string databaseName = "MyDB";
+
+        // CTE body: SELECT id FROM Seed (1 row, id = 99)
+        var cteSelect = new SqlSelectDefinition();
+        SqlTable seedTable = new(databaseName, "Seed");
+        cteSelect.Table = seedTable;
+        cteSelect.Columns.Add(new SqlColumn(databaseName, "Seed", "id") { TableRef = seedTable });
+
+        // Main query: SELECT id FROM chain (lowercase — should hit CTE)
+        SqlSelectDefinition sqlSelect = new();
+        SqlTable mainTable = new(databaseName, "chain");
+        sqlSelect.Table = mainTable;
+        sqlSelect.Columns.Add(new SqlColumn(databaseName, "chain", "id") { TableRef = mainTable });
+
+        sqlSelect.Ctes.Add(new SqlCteDefinition("chain", cteSelect));
+
+        DataSet dataSet = new(databaseName);
+        DataTable seed = new("Seed");
+        seed.Columns.Add("id", typeof(int));
+        seed.Rows.Add(99);
+        dataSet.Tables.Add(seed);
+
+        DataTable chain = new("Chain");
+        chain.Columns.Add("id", typeof(int));
+        chain.Rows.Add(1);
+        chain.Rows.Add(2);
+        chain.Rows.Add(3);
+        dataSet.Tables.Add(chain);
+
+        QueryEngine queryEngine = new(new DataSet[] { dataSet }, sqlSelect);
+        var result = queryEngine.QueryAsDataTable();
+
+        // Expect 1 row (CTE), not 3 (base table).
+        Assert.Equal(1, result.Rows.Count);
+        Assert.Equal("99", result.Rows[0]["id"].ToString());
+    }
+
     [Fact]
     public void Query_WithUnion_DeduplicatesRows()
     {
@@ -3659,32 +3753,27 @@ public class QueryEngineTests
     [Fact]
     public void Query_WindowAggregate_RangeIntervalDayPreceding_ProducesWindowOverDateRange()
     {
-        // Issue #170: RANGE BETWEEN INTERVAL '1' DAY PRECEDING AND CURRENT ROW.
-        // The engine handles INTERVAL bounds; grammar-side parsing of
-        // `RANGE BETWEEN INTERVAL...` is a follow-up issue, so this test constructs the
-        // SqlSelectDefinition and SqlWindowSpecification programmatically.
+        // Issue #180 (was #170 placeholder): RANGE BETWEEN INTERVAL '1' DAY PRECEDING AND CURRENT ROW.
+        // This test now exercises the END-TO-END parsed path: SQL → grammar → SqlSelectDefinition →
+        // QueryEngine. Wave 14b lane A added INTERVAL-bound parsing to the core windowFrameBound rule;
+        // before that, this test had to hand-build the SqlSelectDefinition because the parser couldn't
+        // reach it.
         const string databaseName = "MyDB";
-        SqlSelectDefinition sqlSelect = new();
-        SqlTable table = new(databaseName, "Events");
 
-        SqlColumn dateCol = new(databaseName, "Events", "EventDate") { ColumnType = typeof(DateTime), TableRef = table };
-        SqlColumn amountCol = new(databaseName, "Events", "Amount") { ColumnType = typeof(int), TableRef = table };
-        sqlSelect.Columns.Add(dateCol);
+        // The shared SelectStmtTests.TestGrammar is case-sensitive (Grammar default), so
+        // aggregate function names use their literal mixed-case form ("Sum", not "SUM");
+        // see the aggregateName rule in src/Core/SelectStmt.cs.
+        SelectStmtTests.TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "SELECT EventDate, " +
+            "Sum(Amount) OVER (ORDER BY EventDate RANGE BETWEEN INTERVAL '1' DAY PRECEDING AND CURRENT ROW) AS rolling " +
+            "FROM Events");
 
-        var agg = new SqlAggregate("SUM", new SqlExpression(new SqlColumnRef(null, null, "Amount") { Column = amountCol }))
-        {
-            ColumnAlias = "rolling",
-            WindowSpecification = new SqlWindowSpecification
-            {
-                OrderBy = { new SqlOrderByColumn("EventDate") },
-                Frame = new SqlWindowFrame(
-                    WindowFrameMode.Range,
-                    new SqlWindowFrameBound(WindowFrameBoundType.Preceding, new IntervalLiteral(1, IntervalQualifier.Day)),
-                    new SqlWindowFrameBound(WindowFrameBoundType.CurrentRow))
-            }
-        };
-        sqlSelect.Columns.Add(agg);
-        sqlSelect.Table = table;
+        FakeDatabaseConnectionProvider dbProvider = new() { DefaultDatabase = databaseName };
+        EventsSchemaProvider schemaProvider = new();
+        var sqlSelect = grammar.Create(node, dbProvider, schemaProvider);
+        Assert.False(sqlSelect.InvalidReferences,
+            $"Reference resolution failed: {sqlSelect.InvalidReferenceReason}");
 
         DataSet dataSet = new(databaseName);
         DataTable events = new("Events");
@@ -3714,6 +3803,25 @@ public class QueryEngineTests
         Assert.Equal(50, Convert.ToInt32(result.Rows[2]["rolling"]));
         Assert.Equal(40, Convert.ToInt32(result.Rows[3]["rolling"]));
         Assert.Equal(90, Convert.ToInt32(result.Rows[4]["rolling"]));
+    }
+
+    /// <summary>
+    /// Minimal local schema provider that knows the <c>Events</c> table used by the INTERVAL
+    /// window-frame parsed-path test. Inlining keeps the test self-describing without polluting
+    /// the shared <see cref="TableSchemaProvider"/> with one-off tables.
+    /// </summary>
+    private sealed class EventsSchemaProvider : ITableSchemaProvider
+    {
+        public IEnumerable<DataColumn> GetColumns(SqlTable table)
+        {
+            if (string.Equals(table.TableName, "Events", StringComparison.OrdinalIgnoreCase))
+            {
+                yield return new DataColumn("EventDate", typeof(DateTime));
+                yield return new DataColumn("Amount", typeof(int));
+                yield break;
+            }
+            throw new KeyNotFoundException($"Unknown table '{table.TableName}'.");
+        }
     }
 
     [Fact]

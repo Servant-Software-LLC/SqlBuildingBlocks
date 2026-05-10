@@ -20,6 +20,8 @@ public class SelectStmt : NonTerminal
     private const string sWindowOrderByOpt = "windowOrderByOpt";
     private const string sWindowFrameOpt = "windowFrameOpt";
     private const string sWindowFrameBound = "windowFrameBound";
+    private const string sIntervalFrameLiteral = "intervalFrameLiteral";
+    private const string sIntervalQualifier = "intervalQualifier";
     private const string sGroupClauseOpt = "groupClauseOpt";
     private const string sGroupingSetSpec = "groupingSetSpec";
     private const string sGroupingSetElement = "groupingSetElement";
@@ -121,12 +123,29 @@ public class SelectStmt : NonTerminal
 
         var frameOffset = new NumberLiteral("frameOffset");
 
+        // SQL:2003 single-field INTERVAL literal for RANGE-mode window frame bounds:
+        //   INTERVAL '<magnitude>' <qualifier>   e.g. INTERVAL '1' DAY
+        // The magnitude is a single-quoted decimal string; the qualifier is a single-field
+        // unit (YEAR/MONTH/DAY/HOUR/MINUTE/SECOND). This is parsed only inside windowFrameBound
+        // so it does NOT collide with any general-Expr INTERVAL extension a dialect may add
+        // (e.g. MySQL's DATE_ADD-style intervalExpr in src/Grammars/MySQL/Expr.cs).
+        var INTERVAL = grammar.ToTerm("INTERVAL");
+        var intervalMagnitude = new StringLiteral("intervalMagnitude", "'", StringOptions.AllowsDoubledQuote);
+
+        var intervalQualifier = new NonTerminal(sIntervalQualifier);
+        intervalQualifier.Rule = grammar.ToTerm("YEAR") | "MONTH" | "DAY" | "HOUR" | "MINUTE" | "SECOND";
+
+        var intervalFrameLiteral = new NonTerminal(sIntervalFrameLiteral);
+        intervalFrameLiteral.Rule = INTERVAL + intervalMagnitude + intervalQualifier;
+
         var windowFrameBound = new NonTerminal(sWindowFrameBound);
         windowFrameBound.Rule = UNBOUNDED + PRECEDING
                               | UNBOUNDED + FOLLOWING
                               | CURRENT + ROW
                               | frameOffset + PRECEDING
-                              | frameOffset + FOLLOWING;
+                              | frameOffset + FOLLOWING
+                              | intervalFrameLiteral + PRECEDING
+                              | intervalFrameLiteral + FOLLOWING;
 
         var windowFrameMode = new NonTerminal("windowFrameMode");
         windowFrameMode.Rule = ROWS | RANGE | GROUPS;
@@ -724,6 +743,8 @@ public class SelectStmt : NonTerminal
 
     /// <summary>
     /// Creates a <see cref="SqlWindowFrameBound"/> from a windowFrameBound parse tree node.
+    /// Recognizes UNBOUNDED PRECEDING/FOLLOWING, CURRENT ROW, numeric (row-count) offsets, and
+    /// SQL:2003 INTERVAL-literal offsets (RANGE-mode only — see issue #180).
     /// </summary>
     protected virtual SqlWindowFrameBound CreateWindowFrameBound(ParseTreeNode boundNode)
     {
@@ -733,6 +754,16 @@ public class SelectStmt : NonTerminal
         // Determine the bound type from child tokens
         var firstChild = boundNode.ChildNodes[0];
         var secondChild = boundNode.ChildNodes.Count > 1 ? boundNode.ChildNodes[1] : null;
+
+        // INTERVAL-literal bound: firstChild is the intervalFrameLiteral NonTerminal
+        if (firstChild.Term.Name == sIntervalFrameLiteral)
+        {
+            var interval = CreateIntervalLiteral(firstChild);
+            var direction = secondChild?.Token?.Text?.ToUpperInvariant() ?? secondChild?.Term.Name.ToUpperInvariant();
+            return direction == "PRECEDING"
+                ? new SqlWindowFrameBound(WindowFrameBoundType.Preceding, interval)
+                : new SqlWindowFrameBound(WindowFrameBoundType.Following, interval);
+        }
 
         var firstText = firstChild.Token?.Text?.ToUpperInvariant() ?? firstChild.Term.Name.ToUpperInvariant();
 
@@ -749,9 +780,60 @@ public class SelectStmt : NonTerminal
 
         // Numeric offset: frameOffset + PRECEDING/FOLLOWING
         var offset = Convert.ToInt32(firstChild.Token!.Value);
-        var direction = secondChild?.Token?.Text?.ToUpperInvariant() ?? secondChild?.Term.Name.ToUpperInvariant();
-        return direction == "PRECEDING"
+        var direction2 = secondChild?.Token?.Text?.ToUpperInvariant() ?? secondChild?.Term.Name.ToUpperInvariant();
+        return direction2 == "PRECEDING"
             ? new SqlWindowFrameBound(WindowFrameBoundType.Preceding, offset)
             : new SqlWindowFrameBound(WindowFrameBoundType.Following, offset);
+    }
+
+    /// <summary>
+    /// Materializes an <see cref="IntervalLiteral"/> from an <c>intervalFrameLiteral</c> parse-tree
+    /// node. The grammar rule is <c>INTERVAL + magnitude-string-literal + intervalQualifier</c>.
+    /// Children are located by name rather than index because some dialects (e.g. MySQL) call
+    /// <c>grammar.MarkPunctuation("INTERVAL")</c> on the shared INTERVAL token which strips it
+    /// from the child list — so the index of the magnitude can be 0 (MySQL) or 1 (AnsiSQL,
+    /// PostgreSQL, SQL Server). Issue #180.
+    /// </summary>
+    private static IntervalLiteral CreateIntervalLiteral(ParseTreeNode intervalNode)
+    {
+        ParseTreeNode? magnitudeNode = null;
+        ParseTreeNode? qualifierNode = null;
+        foreach (var child in intervalNode.ChildNodes)
+        {
+            if (child.Term.Name == sIntervalQualifier)
+                qualifierNode = child;
+            else if (child.Token != null && child.Token.Value is string)
+                magnitudeNode = child;
+        }
+
+        if (magnitudeNode is null)
+            throw new ArgumentException("INTERVAL frame-bound is missing the magnitude string literal.", nameof(intervalNode));
+        if (qualifierNode is null)
+            throw new ArgumentException("INTERVAL frame-bound is missing the qualifier (YEAR/MONTH/DAY/HOUR/MINUTE/SECOND).", nameof(intervalNode));
+
+        var magnitudeText = (string)magnitudeNode.Token.Value;
+        if (!long.TryParse(magnitudeText, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out long magnitude))
+        {
+            throw new ArgumentException(
+                $"INTERVAL frame-bound magnitude must be a non-negative integer string; got '{magnitudeText}'.",
+                nameof(intervalNode));
+        }
+
+        var qualifierToken = qualifierNode.ChildNodes[0].Token?.Text
+                             ?? qualifierNode.ChildNodes[0].Term.Name;
+        var qualifier = qualifierToken.ToUpperInvariant() switch
+        {
+            "YEAR" => IntervalQualifier.Year,
+            "MONTH" => IntervalQualifier.Month,
+            "DAY" => IntervalQualifier.Day,
+            "HOUR" => IntervalQualifier.Hour,
+            "MINUTE" => IntervalQualifier.Minute,
+            "SECOND" => IntervalQualifier.Second,
+            _ => throw new ArgumentException(
+                $"Unsupported INTERVAL qualifier '{qualifierToken}'. Expected YEAR/MONTH/DAY/HOUR/MINUTE/SECOND.",
+                nameof(intervalNode))
+        };
+
+        return new IntervalLiteral(magnitude, qualifier);
     }
 }

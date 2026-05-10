@@ -321,4 +321,201 @@ public class AnsiSqlScenarioTests
             "Malformed SQL should produce parse errors but did not.");
         Assert.NotEmpty(parseTree.ParserMessages);
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Issue #187 — Non-recursive CTE bodies that use UNION/INTERSECT/EXCEPT
+    // must have their right-hand SetOperation SELECTs resolved at resolution
+    // time (previously only recursive-CTE recursive terms were resolved).
+    // Without the fix, an end-to-end run starting from parsed SQL fails because
+    // the right-side SELECT has no resolved column→table refs by the time the
+    // QueryEngine tries to execute it.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private static InMemoryDatabase BuildPeopleDatabase()
+    {
+        var db = new InMemoryDatabase("People");
+
+        var employees = db.AddTable("Employees",
+            ("ID", typeof(int)),
+            ("Name", typeof(string)));
+        employees.Rows.Add(1, "Alice");
+        employees.Rows.Add(2, "Bob");
+        employees.Rows.Add(3, "Carol");
+
+        var contractors = db.AddTable("Contractors",
+            ("ID", typeof(int)),
+            ("Name", typeof(string)));
+        contractors.Rows.Add(10, "Bob");    // overlaps with Employees by Name
+        contractors.Rows.Add(11, "Dan");
+        contractors.Rows.Add(12, "Carol");  // overlaps with Employees by Name
+
+        return db;
+    }
+
+    [Fact]
+    public void Scenario_NonRecursiveCte_UnionAllBody_ResolvesAndExecutes()
+    {
+        // Issue #187: CTE body uses UNION ALL; right-hand SELECT must be resolved.
+        var db = BuildPeopleDatabase();
+
+        var result = Run(
+            "WITH AllPeople AS (SELECT Name FROM Employees UNION ALL SELECT Name FROM Contractors) " +
+            "SELECT Name FROM AllPeople",
+            db);
+
+        // 3 employees + 3 contractors = 6 rows, with duplicates kept (Bob, Carol appear twice).
+        Assert.Equal(6, result.Rows.Count);
+        var names = result.Rows.Cast<DataRow>().Select(r => (string)r["Name"]).ToList();
+        Assert.Equal(2, names.Count(n => n == "Bob"));
+        Assert.Equal(2, names.Count(n => n == "Carol"));
+    }
+
+    [Fact]
+    public void Scenario_NonRecursiveCte_UnionBody_DeduplicatesAndExecutes()
+    {
+        // Issue #187: CTE body uses UNION (deduplicating).
+        var db = BuildPeopleDatabase();
+
+        var result = Run(
+            "WITH AllPeople AS (SELECT Name FROM Employees UNION SELECT Name FROM Contractors) " +
+            "SELECT Name FROM AllPeople",
+            db);
+
+        // {Alice, Bob, Carol} ∪ {Bob, Dan, Carol} = {Alice, Bob, Carol, Dan} → 4 rows.
+        Assert.Equal(4, result.Rows.Count);
+        var names = result.Rows.Cast<DataRow>().Select(r => (string)r["Name"]).OrderBy(n => n).ToArray();
+        Assert.Equal(new[] { "Alice", "Bob", "Carol", "Dan" }, names);
+    }
+
+    [Fact]
+    public void Scenario_NonRecursiveCte_IntersectBody_ResolvesAndExecutes()
+    {
+        // Issue #187: CTE body uses INTERSECT.
+        var db = BuildPeopleDatabase();
+
+        var result = Run(
+            "WITH Common AS (SELECT Name FROM Employees INTERSECT SELECT Name FROM Contractors) " +
+            "SELECT Name FROM Common",
+            db);
+
+        // {Alice, Bob, Carol} ∩ {Bob, Dan, Carol} = {Bob, Carol}.
+        Assert.Equal(2, result.Rows.Count);
+        var names = result.Rows.Cast<DataRow>().Select(r => (string)r["Name"]).OrderBy(n => n).ToArray();
+        Assert.Equal(new[] { "Bob", "Carol" }, names);
+    }
+
+    [Fact]
+    public void Scenario_NonRecursiveCte_ExceptBody_ResolvesAndExecutes()
+    {
+        // Issue #187: CTE body uses EXCEPT.
+        var db = BuildPeopleDatabase();
+
+        var result = Run(
+            "WITH OnlyEmployees AS (SELECT Name FROM Employees EXCEPT SELECT Name FROM Contractors) " +
+            "SELECT Name FROM OnlyEmployees",
+            db);
+
+        // {Alice, Bob, Carol} − {Bob, Dan, Carol} = {Alice}.
+        Assert.Single(result.Rows);
+        Assert.Equal("Alice", (string)result.Rows[0]["Name"]);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Issue #182 — Derived-table outer-scope leak. ResolveDerivedTables must
+    // pass the parent's outer scope (and the parent's siblings in FROM/JOIN)
+    // into the derived table's inner ResolveReferences so a derived table can
+    // reference a correlated outer column.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Scenario_CorrelatedDerivedTable_ReferencesOuterColumn()
+    {
+        // Issue #182: derived table's WHERE clause references an outer column (c.ID).
+        // Without the fix, the inner SELECT resolves with no outer scope and reports
+        // c.ID as not found.
+        var db = BuildSampleDatabase();
+        var grammar = new AnsiSqlGrammar();
+
+        var node = ParseHelper.Parse(grammar,
+            "SELECT c.CustomerName, dt.Amount FROM Customers c " +
+            "INNER JOIN (SELECT CustomerID, Amount FROM Orders WHERE Orders.CustomerID = c.ID) AS dt " +
+            "ON c.ID = dt.CustomerID");
+        var selectDefinition = grammar.CreateSelect(node, db, db);
+
+        // Resolution must succeed — the outer alias `c` is now visible inside the derived table.
+        Assert.False(selectDefinition.InvalidReferences,
+            $"Reference resolution failed: {selectDefinition.InvalidReferenceReason}");
+    }
+
+    [Fact]
+    public void Scenario_NestedDerivedTables_InnerReferencesOutermostColumn()
+    {
+        // Issue #182: nested derived tables (3-deep) — the innermost SELECT references a
+        // column from the outermost FROM. Each layer must propagate its own outer scope
+        // (parent's outer + parent's siblings) into the next layer's resolver.
+        var db = BuildSampleDatabase();
+        var grammar = new AnsiSqlGrammar();
+
+        var node = ParseHelper.Parse(grammar,
+            "SELECT outer_t.CustomerName FROM Customers AS outer_t " +
+            "INNER JOIN (" +
+            "  SELECT mid.CustomerID FROM (" +
+            "    SELECT inner_t.CustomerID FROM Orders AS inner_t WHERE inner_t.CustomerID = outer_t.ID" +
+            "  ) AS mid" +
+            ") AS dt ON outer_t.ID = dt.CustomerID");
+        var selectDefinition = grammar.CreateSelect(node, db, db);
+
+        Assert.False(selectDefinition.InvalidReferences,
+            $"Reference resolution failed: {selectDefinition.InvalidReferenceReason}");
+    }
+
+    [Fact]
+    public void Scenario_NonCorrelatedDerivedTable_StillResolves()
+    {
+        // Issue #182 regression guard: a non-correlated derived table (the existing case)
+        // must still resolve cleanly after the outer-scope threading change. Resolution-
+        // only check — the in-memory QueryEngine does not currently materialize derived
+        // tables for execution, but the resolver path is what this issue is about.
+        var db = BuildSampleDatabase();
+        var grammar = new AnsiSqlGrammar();
+
+        var node = ParseHelper.Parse(grammar,
+            "SELECT dt.CustomerID, dt.Amount FROM (SELECT CustomerID, Amount FROM Orders) AS dt " +
+            "WHERE dt.Amount > 25");
+        var selectDefinition = grammar.CreateSelect(node, db, db);
+
+        Assert.False(selectDefinition.InvalidReferences,
+            $"Non-correlated derived-table resolution failed: {selectDefinition.InvalidReferenceReason}");
+        Assert.IsType<SqlBuildingBlocks.LogicalEntities.SqlDerivedTable>(selectDefinition.Table);
+    }
+
+    [Fact]
+    public void Scenario_DerivedTable_AmbiguousOuterAndInnerColumn_ProducesClearError()
+    {
+        // Issue #182: when an unqualified column name appears in BOTH the inner derived
+        // table's FROM and the threaded outer scope, the resolver flags it as ambiguous.
+        // (Same behavior as today's EXISTS/scalar-subquery scope; surfaced via the
+        // existing TableFinder concat-scope flow.)
+        //
+        // Customers and Orders both have an ID column. Both tables are aliased so the
+        // unqualified `ID` cannot be matched by the alias-shortcut in GetMatchedTable —
+        // the resolver falls through to HuntForPossibleTable, which sees ID in both
+        // schemas (inner Orders + threaded outer Customers) and reports the column as
+        // ambiguous.
+        var db = BuildSampleDatabase();
+        var grammar = new AnsiSqlGrammar();
+
+        var node = ParseHelper.Parse(grammar,
+            "SELECT c.CustomerName FROM Customers c " +
+            "INNER JOIN (SELECT o.CustomerID FROM Orders o WHERE ID > 0) AS dt " +
+            "ON c.ID = dt.CustomerID");
+        var selectDefinition = grammar.CreateSelect(node, db, db);
+
+        Assert.True(selectDefinition.InvalidReferences,
+            $"Resolver should report the unqualified ID inside the derived table as ambiguous. Reason was: {selectDefinition.InvalidReferenceReason ?? "<none>"}");
+        // The existing resolver uses a misspelled "amibiguous" in its error string; assert
+        // on that token explicitly so a future spell-fix shows up here as a deliberate change.
+        Assert.Contains("amibiguous", selectDefinition.InvalidReferenceReason!,
+            StringComparison.OrdinalIgnoreCase);
+    }
 }

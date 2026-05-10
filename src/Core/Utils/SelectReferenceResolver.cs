@@ -443,11 +443,45 @@ class SelectReferenceResolver
         }
     }
 
+    /// <summary>
+    /// Resolves the inner <see cref="SqlSelectDefinition"/> of each derived table in the
+    /// FROM/JOIN list. The inner SELECT's outer scope is the union of this query's outer
+    /// scope and this query's other FROM/JOIN tables (excluding the derived table itself —
+    /// a derived table cannot reference its own alias from inside its own body).
+    /// </summary>
+    /// <remarks>
+    /// Issue #182: previously the inner SELECT was resolved with no outer scope at all, so
+    /// a derived table could not reference a correlated outer column. Threading the parent's
+    /// scope here treats every derived table as effectively LATERAL — pragmatic for an
+    /// in-memory query engine and consistent with how subqueries (EXISTS / scalar) propagate
+    /// scope. If a column name appears in both the inner FROM and the threaded outer scope,
+    /// the resolver flags it as ambiguous (the existing TableFinder concat-scope behavior),
+    /// which surfaces as an InvalidReferences error.
+    /// </remarks>
     private void ResolveDerivedTables()
     {
-        foreach (var table in sqlSelectDefinition.TablesInSelect.OfType<SqlDerivedTable>())
+        var derivedTables = sqlSelectDefinition.TablesInSelect.OfType<SqlDerivedTable>().ToList();
+        if (derivedTables.Count == 0)
+            return;
+
+        var parentTablesInSelect = sqlSelectDefinition.TablesInSelect;
+
+        foreach (var table in derivedTables)
         {
-            table.SelectDefinition.ResolveReferences(databaseConnectionProvider, tableSchemaProvider, functionProvider);
+            // Outer scope for this derived table: parent's outer scope + parent's other
+            // FROM/JOIN tables. Exclude the derived table itself so it cannot reference
+            // its own alias from inside its own body.
+            var derivedOuterScope = outerTablesInScope
+                .Concat(parentTablesInSelect.Where(t => !ReferenceEquals(t, table)))
+                .ToList();
+
+            table.SelectDefinition.ResolveReferences(databaseConnectionProvider, tableSchemaProvider, functionProvider, derivedOuterScope);
+
+            if (table.SelectDefinition.InvalidReferences)
+            {
+                sqlSelectDefinition.InvalidReferenceReason = table.SelectDefinition.InvalidReferenceReason;
+                return;
+            }
         }
     }
 
@@ -482,9 +516,10 @@ class SelectReferenceResolver
 
             // Resolve the anchor body against the running outer scope plus prior CTEs so
             // subqueries inside the body can also reference earlier CTEs. (The body's
-            // SetOperations are not resolved here; for non-recursive CTEs the resolver
-            // treats them as not-yet-resolved set operations; for recursive CTEs we
-            // resolve them below with the CTE itself in scope.)
+            // SetOperations are not resolved here; for non-recursive CTEs we resolve them
+            // immediately below against the same outer scope; for recursive CTEs we
+            // resolve them after the CTE itself is registered so the recursive term can
+            // reference the CTE by name.)
             var innerOuterScope = outerTablesInScope.Concat(cteTables.Values).ToList();
             cte.SelectDefinition.ResolveReferences(databaseConnectionProvider, tableSchemaProvider, functionProvider, innerOuterScope);
 
@@ -492,6 +527,18 @@ class SelectReferenceResolver
             {
                 sqlSelectDefinition.InvalidReferenceReason = cte.SelectDefinition.InvalidReferenceReason;
                 return;
+            }
+
+            // Non-recursive CTE — resolve any SetOperations (UNION/UNION ALL/INTERSECT/EXCEPT)
+            // on the body against the same outer scope as the primary body. The CTE itself
+            // is NOT in scope here (a non-recursive CTE cannot reference itself).
+            // Issue #187: previously these right-hand SELECTs went unresolved at this stage
+            // and only worked if execution-time resolution kicked in.
+            if (!cte.IsRecursive)
+            {
+                ResolveNonRecursiveSetOperationTerms(cte, innerOuterScope);
+                if (sqlSelectDefinition.InvalidReferences)
+                    return;
             }
 
             // Surface this CTE so subsequent CTEs and the main SELECT can resolve to it.
@@ -519,6 +566,33 @@ class SelectReferenceResolver
         foreach (var cteTable in cteTables.Values)
         {
             outerTablesInScope.Add(cteTable);
+        }
+    }
+
+    /// <summary>
+    /// Resolves each <see cref="SqlSetOperation"/> on a non-recursive CTE's body. The right
+    /// side of every set operation (UNION / UNION ALL / INTERSECT / EXCEPT) is itself a
+    /// <see cref="SqlSelectDefinition"/> that needs its own column / table references
+    /// resolved against the same outer scope as the primary body (i.e. the surrounding
+    /// outer-scope plus prior CTEs declared in the same WITH). The CTE itself is NOT in
+    /// scope — a non-recursive CTE cannot reference itself.
+    /// </summary>
+    /// <remarks>
+    /// Issue #187: prior to this, only <see cref="ResolveRecursiveTerms"/> resolved
+    /// SetOperation right-hand sides; non-recursive CTE bodies that used UNION/INTERSECT/EXCEPT
+    /// were left with unresolved column references that only "worked" by execution-time chance.
+    /// </remarks>
+    private void ResolveNonRecursiveSetOperationTerms(SqlCteDefinition cte, List<SqlTable> outerScopeWithPriorCtes)
+    {
+        foreach (var setOp in cte.SelectDefinition.SetOperations)
+        {
+            setOp.Right.ResolveReferences(databaseConnectionProvider, tableSchemaProvider, functionProvider, outerScopeWithPriorCtes);
+
+            if (setOp.Right.InvalidReferences)
+            {
+                sqlSelectDefinition.InvalidReferenceReason = setOp.Right.InvalidReferenceReason;
+                return;
+            }
         }
     }
 

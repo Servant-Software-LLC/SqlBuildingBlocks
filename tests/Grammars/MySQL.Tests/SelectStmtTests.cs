@@ -829,4 +829,31 @@ public class SelectStmtTests
         Assert.Equal("QUARTER", intervalArg.Function.Arguments[1].Value?.Value?.ToString());
     }
 
+    [Fact]
+    public void Select_WindowFrame_RangeIntervalDayPreceding_ParsesAlongsideMySqlExprInterval()
+    {
+        // Issue #180: MySQL inherits SQL:2003 INTERVAL window-frame bounds from the core grammar.
+        // This test exercises the parser to confirm the new windowFrameBound rule does NOT
+        // collide with MySQL's existing DATE_ADD-style INTERVAL expression (intervalExpr in
+        // src/Grammars/MySQL/Expr.cs). Both INTERVAL forms must coexist in the same grammar.
+        //
+        // Note: this MySQL.Tests TestGrammar is case-sensitive (Grammar default), so we use
+        // mixed-case "Sum" / "Count" to match the aggregateName rule literals. Cross-dialect
+        // parity (CrossCutting.Tests.CrossDialectParityTests) covers the case-insensitive
+        // wiring (`: base(false)`) that production grammars use.
+        TestGrammar grammar = new();
+        var node = GrammarParser.Parse(grammar,
+            "SELECT EventDate, " +
+            "Sum(Amount) OVER (ORDER BY EventDate RANGE BETWEEN INTERVAL '1' DAY PRECEDING AND CURRENT ROW) AS rolling " +
+            "FROM Events");
+
+        var selectStmt = grammar.Create(node);
+        var aggregate = Assert.IsType<SqlAggregate>(selectStmt.Columns[1]);
+        var frame = aggregate.WindowSpecification!.Frame!;
+        Assert.Equal(WindowFrameMode.Range, frame.Mode);
+        Assert.Equal(SqlWindowFrameBoundOffsetKind.Interval, frame.Start.Offset!.Kind);
+        Assert.Equal(1L, frame.Start.Offset.Interval!.Magnitude);
+        Assert.Equal(IntervalQualifier.Day, frame.Start.Offset.Interval.Qualifier);
+        Assert.Equal(WindowFrameBoundType.CurrentRow, frame.End!.Type);
+    }
 }

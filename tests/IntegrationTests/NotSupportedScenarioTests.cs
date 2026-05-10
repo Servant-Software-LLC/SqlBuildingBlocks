@@ -89,12 +89,44 @@ public class NotSupportedScenarioTests
         Assert.Equal(new[] { 1, 2, 3, 4, 5 }, ids);
     }
 
-    [Fact(Skip = "FINDING: QueryEngine has no support for RANGE-mode frames with INTERVAL bounds. " +
-                  "FROM Wave 2: WindowFrameMode.Range exists but GetFrameBoundIndex treats the offset " +
-                  "as a row count regardless of mode. End-to-end consumer scenario stays skipped " +
-                  "until INTERVAL-bounded RANGE frames are implemented.")]
-    public void Scenario_RangeIntervalWindowFrame_NotImplemented()
+    [Fact]
+    public void Scenario_RangeIntervalWindowFrame_ProducesRollingSumOverDateRange()
     {
-        // Placeholder for the INTERVAL-bounded RANGE frame scenario (FINDING from Wave 2).
+        // Issue #180 (Wave 14b lane A): the previously-skipped FINDING placeholder now executes
+        // end-to-end. Wave 8 closed the engine + logical-entity layer for INTERVAL frame bounds;
+        // Wave 14b adds the grammar layer so a consumer SQL string of the form
+        //   RANGE BETWEEN INTERVAL '1' DAY PRECEDING AND CURRENT ROW
+        // parses, resolves, and executes. This is the consumer-facing oracle.
+        var db = new InMemoryDatabase("Sales");
+        var events = db.AddTable("Events",
+            ("EventDate", typeof(DateTime)),
+            ("Amount", typeof(int)));
+        events.Rows.Add(new DateTime(2026, 1, 1), 10);
+        events.Rows.Add(new DateTime(2026, 1, 2), 20);
+        events.Rows.Add(new DateTime(2026, 1, 3), 30);
+        // Boundary check: skip Jan 4, so the Jan 5 row's window is just itself.
+        events.Rows.Add(new DateTime(2026, 1, 5), 40);
+        events.Rows.Add(new DateTime(2026, 1, 6), 50);
+
+        var grammar = new AnsiSqlGrammar();
+        var node = ParseHelper.Parse(grammar,
+            "SELECT EventDate, " +
+            "SUM(Amount) OVER (ORDER BY EventDate RANGE BETWEEN INTERVAL '1' DAY PRECEDING AND CURRENT ROW) AS rolling " +
+            "FROM Events");
+        var selectDefinition = grammar.CreateSelect(node, db, db);
+        Assert.False(selectDefinition.InvalidReferences,
+            $"Reference resolution failed: {selectDefinition.InvalidReferenceReason}");
+
+        var allTableProvider = new AllTableDataProvider(new[] { (SqlBuildingBlocks.Interfaces.ITableDataProvider)db });
+        var engine = new QueryEngine(allTableProvider, selectDefinition);
+        var result = engine.QueryAsDataTable();
+
+        Assert.Equal(5, result.Rows.Count);
+        // The rolling-sum window is "rows within 1 day previous, plus current".
+        Assert.Equal(10, Convert.ToInt32(result.Rows[0]["rolling"]));  // Jan 1: itself.
+        Assert.Equal(30, Convert.ToInt32(result.Rows[1]["rolling"]));  // Jan 2: 10 + 20.
+        Assert.Equal(50, Convert.ToInt32(result.Rows[2]["rolling"]));  // Jan 3: 20 + 30.
+        Assert.Equal(40, Convert.ToInt32(result.Rows[3]["rolling"]));  // Jan 5: itself (Jan 4 missing).
+        Assert.Equal(90, Convert.ToInt32(result.Rows[4]["rolling"]));  // Jan 6: 40 + 50.
     }
 }

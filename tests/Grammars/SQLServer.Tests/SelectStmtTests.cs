@@ -275,4 +275,26 @@ public class SelectStmtTests
         var firstColumn = selectStmt.Columns[0] as SqlColumn;
         Assert.Equal("CustomerName", firstColumn.ColumnName);
     }
+
+    [Fact]
+    public void Select_WindowFrame_RangeIntervalDayPreceding_ThrowsNotSupported()
+    {
+        // Issue #180: SQL Server does NOT support INTERVAL-literal bounds in window frames.
+        // The core grammar accepts the SQL:2003 form so consumers can move freely between
+        // dialects, but the SQL Server-specific SelectStmt override surfaces a clear failure
+        // during AST construction rather than silently producing a logical entity that
+        // cannot be translated to SQL Server syntax.
+        TestGrammar grammar = new();
+
+        // The grammar layer accepts the input — Irony will not produce a parse error here.
+        var node = GrammarParser.Parse(grammar,
+            "SELECT EventDate, " +
+            "SUM(Amount) OVER (ORDER BY EventDate RANGE BETWEEN INTERVAL '1' DAY PRECEDING AND CURRENT ROW) AS rolling " +
+            "FROM Events");
+
+        // ...but the SQL Server CreateWindowFrameBound override rejects it with a clear message.
+        var ex = Assert.Throws<NotSupportedException>(() => grammar.Create(node));
+        Assert.Contains("INTERVAL", ex.Message);
+        Assert.Contains("SQL Server", ex.Message);
+    }
 }
