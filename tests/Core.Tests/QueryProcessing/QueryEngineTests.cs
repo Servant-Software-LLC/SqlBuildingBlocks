@@ -1942,6 +1942,38 @@ public class QueryEngineTests
         Assert.Equal(155000m, Convert.ToDecimal(salesRow["total"]));
     }
 
+    [Fact]
+    public void Query_CountDistinct_ReturnsDistinctCount_Issue196()
+    {
+        // COUNT(DISTINCT CustomerID) on 6 rows with 3 distinct values should return 3.
+        const string db = "TestDB";
+        DataSet dataSet = new(db);
+        DataTable orders = new("Orders");
+        orders.Columns.Add("CustomerID", typeof(int));
+        dataSet.Tables.Add(orders);
+        orders.Rows.Add(1); orders.Rows.Add(1);
+        orders.Rows.Add(2); orders.Rows.Add(2);
+        orders.Rows.Add(3); orders.Rows.Add(3);
+
+        SqlTable ordTable = new(db, "Orders");
+        var custIdCol = new SqlColumn(db, "Orders", "CustomerID") { ColumnType = typeof(int), TableRef = ordTable };
+        var custIdArg = new SqlColumnRef(db, "Orders", "CustomerID") { Column = custIdCol };
+        var countDistinctAgg = new SqlAggregate("COUNT", new SqlExpression(custIdArg))
+        {
+            IsDistinct = true,
+            ColumnAlias = "cnt"
+        };
+
+        SqlSelectDefinition sqlSelect = new();
+        sqlSelect.Columns.Add(countDistinctAgg);
+        sqlSelect.Table = ordTable;
+
+        var result = new QueryEngine(new DataSet[] { dataSet }, sqlSelect).QueryAsDataTable();
+
+        Assert.Single(result.Rows);
+        Assert.Equal(3, Convert.ToInt32(result.Rows[0]["cnt"]));
+    }
+
     #endregion
 
     #region HAVING Tests
@@ -2044,6 +2076,60 @@ public class QueryEngineTests
         Assert.Equal(1, resultset.Rows.Count);
         Assert.Equal("Engineering", resultset.Rows[0]["department"]);
         Assert.Equal(3, resultset.Rows[0]["cnt"]);
+    }
+
+    [Fact]
+    public void Query_Having_AndCondition_BothArmsEvaluated_Issue194()
+    {
+        // HAVING COUNT(*) > 1 AND CustomerID > 1 — both arms must be evaluated.
+        // Bug #194: AND arm recursion was broken, AND the column lookup didn't strip table prefix.
+        const string db = "TestDB";
+        DataSet dataSet = new(db);
+        DataTable orders = new("Orders");
+        orders.Columns.Add("CustomerID", typeof(int));
+        orders.Columns.Add("Amount", typeof(decimal));
+        dataSet.Tables.Add(orders);
+        orders.Rows.Add(1, 10m); // CustomerID=1: 1 order — does not satisfy COUNT(*) > 1
+        orders.Rows.Add(2, 20m); // CustomerID=2: 2 orders — satisfies both conditions
+        orders.Rows.Add(2, 30m);
+        orders.Rows.Add(3, 40m); // CustomerID=3: 1 order — does not satisfy COUNT(*) > 1
+
+        SqlTable ordTable = new(db, "Orders");
+        var custIdCol = new SqlColumn(db, "Orders", "CustomerID") { ColumnType = typeof(int), TableRef = ordTable };
+        var countAgg = new SqlAggregate("COUNT") { ColumnAlias = "cnt" };
+
+        SqlSelectDefinition sqlSelect = new();
+        sqlSelect.Columns.Add(custIdCol);
+        sqlSelect.Columns.Add(countAgg);
+        sqlSelect.Table = ordTable;
+        sqlSelect.GroupBy = new SqlGroupByClause();
+        sqlSelect.GroupBy.Columns.Add("CustomerID");
+
+        // HAVING COUNT(*) > 1 AND CustomerID > 1
+        var countFunc = new SqlFunction("COUNT");
+        var countGt1 = new SqlBinaryExpression(
+            new SqlExpression(countFunc),
+            SqlBinaryOperator.GreaterThan,
+            new SqlExpression(new SqlLiteralValue(1)));
+
+        var custIdRef = new SqlColumnRef(db, "Orders", "CustomerID") { Column = custIdCol };
+        var custIdGt1 = new SqlBinaryExpression(
+            new SqlExpression(custIdRef),
+            SqlBinaryOperator.GreaterThan,
+            new SqlExpression(new SqlLiteralValue(1)));
+
+        var andExpr = new SqlBinaryExpression(
+            new SqlExpression(countGt1),
+            SqlBinaryOperator.And,
+            new SqlExpression(custIdGt1));
+
+        sqlSelect.HavingClause = new SqlExpression(andExpr);
+
+        var result = new QueryEngine(new DataSet[] { dataSet }, sqlSelect).QueryAsDataTable();
+
+        // Only CustomerID=2 satisfies both COUNT(*) > 1 AND CustomerID > 1
+        Assert.Single(result.Rows);
+        Assert.Equal(2, Convert.ToInt32(result.Rows[0]["CustomerID"]));
     }
 
     #endregion
@@ -2300,6 +2386,77 @@ public class QueryEngineTests
 
         // Only 3 matched rows (Alice×2, Bob×1). No Charlie, no Orphan.
         Assert.Equal(3, result.Rows.Count);
+    }
+
+    [Fact]
+    public void Query_DerivedTable_InRightOuterJoin_DuplicateRowsTrackedCorrectly_Issue199()
+    {
+        // Derived table with duplicate rows in RIGHT OUTER JOIN.
+        // Bug #199: double-materialization of the derived table caused MarkRowMatched to always
+        // mark the first duplicate row (value equality), leaving the second one "unmatched" and
+        // producing a spurious null-padded row.
+        // Fix: cache the materialized rows and use reference equality as the fast path.
+        const string db = "TestDB";
+        DataSet dataSet = new(db);
+
+        DataTable left = new("Left");
+        left.Columns.Add("ID", typeof(int));
+        dataSet.Tables.Add(left);
+        left.Rows.Add(1);
+        left.Rows.Add(2); // no match in derived table
+
+        DataTable right = new("Right");
+        right.Columns.Add("ID", typeof(int));
+        right.Columns.Add("Val", typeof(int));
+        dataSet.Tables.Add(right);
+        right.Rows.Add(1, 100);
+        right.Rows.Add(1, 100); // duplicate row — both should match ID=1 on left
+
+        // Build the derived table: SELECT ID, Val FROM Right
+        SqlTable leftTable = new(db, "Left");
+        SqlTable rightTable = new(db, "Right");
+        SqlColumn leftIdCol = new(db, "Left", "ID") { ColumnType = typeof(int), TableRef = leftTable };
+        SqlColumn rightIdCol = new(db, "Right", "ID") { ColumnType = typeof(int), TableRef = rightTable };
+        SqlColumn rightValCol = new(db, "Right", "Val") { ColumnType = typeof(int), TableRef = rightTable };
+
+        var innerSelect = new SqlSelectDefinition();
+        innerSelect.Table = rightTable;
+        innerSelect.Columns.Add(rightIdCol);
+        innerSelect.Columns.Add(rightValCol);
+
+        var derivedTable = new SqlDerivedTable(innerSelect, "dt");
+
+        // Outer SELECT columns reference the derived table alias
+        var dtIdCol = new SqlColumn(null, "dt", "ID") { ColumnType = typeof(int), TableRef = derivedTable };
+        var dtValCol = new SqlColumn(null, "dt", "Val") { ColumnType = typeof(int), TableRef = derivedTable };
+
+        // JOIN ON Left.ID = dt.ID
+        var leftIdRef = new SqlColumnRef(db, "Left", "ID") { Column = leftIdCol };
+        var dtIdRef = new SqlColumnRef(null, "dt", "ID") { Column = dtIdCol };
+
+        var outerSelect = new SqlSelectDefinition();
+        outerSelect.Table = leftTable;
+        outerSelect.Columns.Add(leftIdCol);
+        outerSelect.Columns.Add(dtIdCol);  // must be in SELECT so the join key is projected into TablesProjections[derivedTable]
+        outerSelect.Columns.Add(dtValCol);
+
+        var joinCondition = new SqlBinaryExpression(
+            new SqlExpression(leftIdRef),
+            SqlBinaryOperator.Equal,
+            new SqlExpression(dtIdRef));
+        var join = new SqlJoin(derivedTable, joinCondition) { JoinKind = SqlJoinKind.Right };
+        outerSelect.Joins.Add(join);
+
+        var result = new QueryEngine(new DataSet[] { dataSet }, outerSelect).QueryAsDataTable();
+
+        // Left.ID=1 matches both derived table rows (ID=1,Val=100) and (ID=1,Val=100) → 2 matched rows.
+        // Left.ID=2 has no match on the right — no null-padded row because it's the LEFT side in a RIGHT JOIN.
+        // All 2 derived table rows are matched → no unmatched null-padded rows.
+        // Total: 2 rows, no DBNull values for Val.
+        Assert.Equal(2, result.Rows.Count);
+        Assert.All(result.Rows.Cast<DataRow>(), r => Assert.NotEqual(DBNull.Value, r["Val"]));
+        // Without the fix, the second duplicate derived-table row is considered unmatched → 3 rows total
+        // (2 matched + 1 null-padded). The fix ensures reference equality catches both duplicates.
     }
 
     #endregion
@@ -3081,6 +3238,69 @@ public class QueryEngineTests
         Assert.Equal(50000m, result.Rows[0]["running_sum"]);  // Alice
         Assert.Equal(110000m, result.Rows[1]["running_sum"]); // Bob
         Assert.Equal(180000m, result.Rows[2]["running_sum"]); // Carol
+    }
+
+    [Fact]
+    public void Query_WindowFunction_WithInnerJoin_ReturnsJoinedRows_Issue193()
+    {
+        // Window function query with INNER JOIN — JOIN must be processed before window values computed.
+        // Bug #193: without the fix, all FROM-table rows are returned unjoined (Charlie included);
+        // with the fix, only rows matching the INNER JOIN appear (Charlie excluded).
+        const string db = "TestDB";
+        DataSet dataSet = new(db);
+
+        DataTable customers = new("Customers");
+        customers.Columns.Add("ID", typeof(int));
+        customers.Columns.Add("Name", typeof(string));
+        dataSet.Tables.Add(customers);
+        customers.Rows.Add(1, "Alice");
+        customers.Rows.Add(2, "Bob");
+        customers.Rows.Add(3, "Charlie"); // no orders — must NOT appear in INNER JOIN result
+
+        DataTable orders = new("Orders");
+        orders.Columns.Add("CustomerID", typeof(int));
+        orders.Columns.Add("Amount", typeof(decimal));
+        dataSet.Tables.Add(orders);
+        orders.Rows.Add(1, 100m);
+        orders.Rows.Add(1, 200m);
+        orders.Rows.Add(2, 150m);
+        // 3 orders → 3 result rows after INNER JOIN (Charlie excluded)
+
+        SqlTable custTable = new(db, "Customers") { TableAlias = "c" };
+        SqlTable ordTable = new(db, "Orders") { TableAlias = "o" };
+
+        SqlColumn nameCol = new(null, "c", "Name") { ColumnType = typeof(string), TableRef = custTable };
+        SqlColumn amtCol = new(null, "o", "Amount") { ColumnType = typeof(decimal), TableRef = ordTable };
+
+        SqlColumn custIdHidden = new(db, "Customers", "ID") { ColumnType = typeof(int), TableRef = custTable };
+        SqlColumn ordCustIdHidden = new(db, "Orders", "CustomerID") { ColumnType = typeof(int), TableRef = ordTable };
+        SqlColumnRef custIdRef = new(null, "c", "ID") { Column = custIdHidden };
+        SqlColumnRef ordCustIdRef = new(null, "o", "CustomerID") { Column = ordCustIdHidden };
+
+        // ROW_NUMBER() OVER (ORDER BY Amount)
+        var winSpec = new SqlWindowSpecification();
+        winSpec.OrderBy.Add(new SqlOrderByColumn("Amount"));
+        var rnFunc = new SqlFunction("ROW_NUMBER") { ValueType = typeof(int) };
+        rnFunc.WindowSpecification = winSpec;
+        var rnCol = new SqlFunctionColumn(rnFunc) { ColumnAlias = "rn" };
+
+        SqlSelectDefinition sqlSelect = new();
+        sqlSelect.Columns.Add(nameCol);
+        sqlSelect.Columns.Add(amtCol);
+        sqlSelect.Columns.Add(rnCol);
+        sqlSelect.Table = custTable;
+        sqlSelect.Joins.Add(new SqlJoin(ordTable, new SqlBinaryExpression(
+            new SqlExpression(custIdRef),
+            SqlBinaryOperator.Equal,
+            new SqlExpression(ordCustIdRef))));
+
+        var result = new QueryEngine(new DataSet[] { dataSet }, sqlSelect).QueryAsDataTable();
+
+        // INNER JOIN: 3 orders match → 3 rows. Charlie (no orders) excluded.
+        Assert.Equal(3, result.Rows.Count);
+        Assert.DoesNotContain(result.Rows.Cast<DataRow>(), r => "Charlie".Equals(r["Name"]));
+        // rn column must exist and be populated
+        Assert.Contains(result.Columns.Cast<DataColumn>(), c => c.ColumnName == "rn");
     }
 
     #endregion

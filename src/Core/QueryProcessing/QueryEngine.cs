@@ -113,8 +113,15 @@ public class QueryEngine : IQueryEngine
         }
 
         //If window functions are present, materialize source rows and compute window values.
+        //For queries with JOINs, materialize the full joined row set first so the window
+        //function sees all join-side columns and the multi-table WHERE predicate is applied.
         if (processingState.HasWindowFunctions)
-            return EvaluateWindowFunctions(processingState, fromDataRows);
+        {
+            IEnumerable<DataRow> windowSource = sqlSelectDefinition.Joins?.Count > 0
+                ? ResolveSelectColumns(processingState, fromDataRows)
+                : fromDataRows;
+            return EvaluateWindowFunctions(processingState, windowSource);
+        }
 
         //If only a FROM with no JOINs.
         var onlyFromWithNoJoins = sqlSelectDefinition.Joins == null || sqlSelectDefinition.Joins.Count == 0;
@@ -286,16 +293,14 @@ public class QueryEngine : IQueryEngine
     {
         if (expr.Operator == SqlBinaryOperator.And)
         {
-            var left = expr.Left.BinExpr != null && EvaluateHavingPredicate(row, expr.Left.BinExpr, selectColumns);
-            var right = expr.Right?.BinExpr != null && EvaluateHavingPredicate(row, expr.Right.BinExpr, selectColumns);
-            return left && right;
+            return EvalHavingArm(row, expr.Left, selectColumns)
+                && EvalHavingArm(row, expr.Right, selectColumns);
         }
 
         if (expr.Operator == SqlBinaryOperator.Or)
         {
-            var left = expr.Left.BinExpr != null && EvaluateHavingPredicate(row, expr.Left.BinExpr, selectColumns);
-            var right = expr.Right?.BinExpr != null && EvaluateHavingPredicate(row, expr.Right.BinExpr, selectColumns);
-            return left || right;
+            return EvalHavingArm(row, expr.Left, selectColumns)
+                || EvalHavingArm(row, expr.Right, selectColumns);
         }
 
         // Get left and right values
@@ -305,6 +310,13 @@ public class QueryEngine : IQueryEngine
         return CompareHavingValues(leftValue, rightValue, expr.Operator);
     }
 
+    private static bool EvalHavingArm(DataRow row, SqlExpression? arm, IList<ISqlColumn> selectColumns)
+    {
+        if (arm?.BinExpr != null)
+            return EvaluateHavingPredicate(row, arm.BinExpr, selectColumns);
+        return false;
+    }
+
     private static object? ResolveHavingValue(DataRow row, SqlExpression expr, IList<ISqlColumn> selectColumns)
     {
         if (expr.Value != null)
@@ -312,7 +324,7 @@ public class QueryEngine : IQueryEngine
 
         if (expr.Column != null)
         {
-            var colName = expr.Column.ColumnName;
+            var colName = GetColumnName(expr.Column.ColumnName);  // strip "table." prefix if present
             if (row.Table.Columns.Contains(colName))
                 return row[colName];
         }
@@ -361,19 +373,43 @@ public class QueryEngine : IQueryEngine
         if (left == null || left == DBNull.Value || right == null || right == DBNull.Value)
             return false;
 
-        var leftDecimal = Convert.ToDecimal(left);
-        var rightDecimal = Convert.ToDecimal(right);
+        // Try numeric comparison first
+        bool leftIsDecimal = TryConvertDecimal(left, out var ld);
+        bool rightIsDecimal = TryConvertDecimal(right, out var rd);
+        if (leftIsDecimal && rightIsDecimal)
+        {
+            return op switch
+            {
+                SqlBinaryOperator.Equal => ld == rd,
+                SqlBinaryOperator.NotEqualTo => ld != rd,
+                SqlBinaryOperator.LessThan => ld < rd,
+                SqlBinaryOperator.LessThanEqual => ld <= rd,
+                SqlBinaryOperator.GreaterThan => ld > rd,
+                SqlBinaryOperator.GreaterThanEqual => ld >= rd,
+                _ => throw new NotSupportedException($"HAVING operator '{op}' is not supported.")
+            };
+        }
 
+        // Fall back to string comparison
+        var ls = left.ToString() ?? "";
+        var rs = right.ToString() ?? "";
+        var cmp = string.Compare(ls, rs, StringComparison.OrdinalIgnoreCase);
         return op switch
         {
-            SqlBinaryOperator.Equal => leftDecimal == rightDecimal,
-            SqlBinaryOperator.NotEqualTo => leftDecimal != rightDecimal,
-            SqlBinaryOperator.LessThan => leftDecimal < rightDecimal,
-            SqlBinaryOperator.LessThanEqual => leftDecimal <= rightDecimal,
-            SqlBinaryOperator.GreaterThan => leftDecimal > rightDecimal,
-            SqlBinaryOperator.GreaterThanEqual => leftDecimal >= rightDecimal,
-            _ => false
+            SqlBinaryOperator.Equal => cmp == 0,
+            SqlBinaryOperator.NotEqualTo => cmp != 0,
+            SqlBinaryOperator.LessThan => cmp < 0,
+            SqlBinaryOperator.LessThanEqual => cmp <= 0,
+            SqlBinaryOperator.GreaterThan => cmp > 0,
+            SqlBinaryOperator.GreaterThanEqual => cmp >= 0,
+            _ => throw new NotSupportedException($"HAVING operator '{op}' is not supported.")
         };
+    }
+
+    private static bool TryConvertDecimal(object value, out decimal result)
+    {
+        try { result = Convert.ToDecimal(value); return true; }
+        catch { result = 0; return false; }
     }
 
     /// <summary>
@@ -419,7 +455,12 @@ public class QueryEngine : IQueryEngine
                 return rows.Count;
 
             var countColName = aggregate.Argument.Column.ColumnName;
-            return rows.Count(r => r.Table.Columns.Contains(countColName) && r[countColName] != DBNull.Value);
+            var countValues = rows
+                .Where(r => r.Table.Columns.Contains(countColName) && r[countColName] != DBNull.Value)
+                .Select(r => r[countColName]);
+            if (aggregate.IsDistinct)
+                countValues = countValues.Distinct();
+            return countValues.Count();
         }
 
         var colName = GetAggregateColumnName(aggregate);
@@ -438,9 +479,15 @@ public class QueryEngine : IQueryEngine
             case "MIN":
                 return nonNullValues.Cast<IComparable>().Min();
             case "SUM":
-                return nonNullValues.Select(v => Convert.ToDecimal(v)).Sum();
+            {
+                var sumVals = aggregate.IsDistinct ? nonNullValues.Distinct().ToList() : nonNullValues;
+                return sumVals.Select(v => Convert.ToDecimal(v)).Sum();
+            }
             case "AVG":
-                return nonNullValues.Select(v => Convert.ToDecimal(v)).Average();
+            {
+                var avgVals = aggregate.IsDistinct ? nonNullValues.Distinct().ToList() : nonNullValues;
+                return avgVals.Select(v => Convert.ToDecimal(v)).Average();
+            }
             default:
                 throw new NotSupportedException($"Aggregate '{aggregate.AggregateName}' is not supported.");
         }
@@ -785,9 +832,18 @@ public class QueryEngine : IQueryEngine
         IQueryable joinTableQueryable;
         if (join.Table is SqlDerivedTable joinDerivedTable)
         {
-            var innerEngine = new QueryEngine(tableDataProvider, joinDerivedTable.SelectDefinition, dataRowType, options);
-            var innerResult = innerEngine.Query().ToDataTable();
-            joinTableQueryable = innerResult.Rows.Cast<DataRow>().AsQueryable();
+            // Reuse pre-materialized rows from GetAllRowsInJoinTable (RIGHT/FULL OUTER JOIN pre-materialization)
+            // so both code paths share the same DataRow instances — enabling reference-based matching in MarkRowMatched.
+            if (processingState.AllJoinTableRows.TryGetValue(join.Table, out var cachedDerivedRows))
+            {
+                joinTableQueryable = cachedDerivedRows.AsQueryable();
+            }
+            else
+            {
+                var innerEngine = new QueryEngine(tableDataProvider, joinDerivedTable.SelectDefinition, dataRowType, options);
+                var innerResult = innerEngine.Query().ToDataTable();
+                joinTableQueryable = innerResult.Rows.Cast<DataRow>().AsQueryable();
+            }
         }
         else
         {
@@ -916,16 +972,28 @@ public class QueryEngine : IQueryEngine
     }
 
     /// <summary>
-    /// Marks a matched join row in the tracking array by finding it via value comparison.
+    /// Marks a matched join row in the tracking array. Uses reference equality as a fast path
+    /// (works for derived tables that share cached row instances), then falls back to value equality
+    /// for real tables where rows are independently fetched from the data provider.
     /// </summary>
     private static void MarkRowMatched(DataRow matchedRow, List<DataRow> allRows, bool[] matchedFlags)
     {
+        // Reference equality fast path: works for derived tables that share cached row instances.
+        for (int i = 0; i < allRows.Count; i++)
+        {
+            if (!matchedFlags[i] && ReferenceEquals(matchedRow, allRows[i]))
+            {
+                matchedFlags[i] = true;
+                return;
+            }
+        }
+        // Value equality fallback: for real tables where rows are independently fetched.
         for (int i = 0; i < allRows.Count; i++)
         {
             if (!matchedFlags[i] && RowValuesEqual(matchedRow, allRows[i]))
             {
                 matchedFlags[i] = true;
-                break;
+                return;
             }
         }
     }
@@ -2171,11 +2239,21 @@ public class QueryEngine : IQueryEngine
 
     /// <summary>
     /// Adds a column to the source table projection so it's available in FROM rows.
+    /// Skips if the column is already projected by any join table — projecting it into the FROM
+    /// table as well would cause an "does not belong to table" error when the FROM table rows are
+    /// evaluated (e.g., a window ORDER BY column that belongs to a JOIN table, not the FROM table).
     /// </summary>
     private void ProjectHiddenColumnByName(ProcessingState processingState, string columnName)
     {
         var table = sqlSelectDefinition.Table;
         if (table is null) return;
+
+        // If the column is already projected in a join table's projection, do not also add it to
+        // the FROM table — it belongs there, not here.
+        if (processingState.TablesProjections.Any(kv =>
+                !SqlTableOccurrenceComparer.Instance.Equals(kv.Key, table) &&
+                kv.Value.Columns.Cast<DataColumn>().Any(c => c.ColumnName == columnName)))
+            return;
 
         if (!processingState.TablesProjections.TryGetValue(table, out DataTable? dataTable))
         {
