@@ -601,4 +601,89 @@ public class AnsiSqlScenarioTests
         Assert.Contains("ambiguous", selectDefinition.InvalidReferenceReason!,
             StringComparison.OrdinalIgnoreCase);
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Issue #205 — LEFT / RIGHT / FULL OUTER JOIN integration tests through
+    // the full parse-to-execute stack. Each test exercises outer-join semantics:
+    // null-padded rows appear for unmatched sides.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Scenario_LeftJoin_UnmatchedRowsReturnNull()
+    {
+        // Dan (CustomerID=4) has no orders; he appears as a null-padded row in LEFT JOIN.
+        var db = BuildSampleDatabase();
+
+        var result = Run(
+            "SELECT c.CustomerName, o.Amount FROM Customers c LEFT JOIN Orders o ON c.ID = o.CustomerID",
+            db);
+
+        // 6 matched rows + 1 null row for Dan = 7 total
+        Assert.Equal(7, result.Rows.Count);
+
+        // Dan row has NULL Amount
+        var danRows = result.Rows.Cast<DataRow>().Where(r => "Dan".Equals(r["CustomerName"])).ToList();
+        Assert.Single(danRows);
+        Assert.Equal(DBNull.Value, danRows[0]["Amount"]);
+
+        // Alice has 2 rows, Carol has 3 rows
+        Assert.Equal(2, result.Rows.Cast<DataRow>().Count(r => "Alice".Equals(r["CustomerName"])));
+        Assert.Equal(3, result.Rows.Cast<DataRow>().Count(r => "Carol".Equals(r["CustomerName"])));
+    }
+
+    [Fact]
+    public void Scenario_RightJoin_UnmatchedRowsReturnNull()
+    {
+        // Orphan order (CustomerID=99) has no matching Customer — appears with NULL CustomerName.
+        var db = new InMemoryDatabase("Sales");
+        var customers = db.AddTable("Customers", ("ID", typeof(int)), ("CustomerName", typeof(string)));
+        customers.Rows.Add(1, "Alice");
+        customers.Rows.Add(2, "Bob");
+        var orders = db.AddTable("Orders", ("ID", typeof(int)), ("CustomerID", typeof(int)), ("Amount", typeof(decimal)));
+        orders.Rows.Add(101, 1, 50.00m);   // matched to Alice
+        orders.Rows.Add(102, 99, 25.00m);  // orphan — no customer
+
+        var result = Run(
+            "SELECT c.CustomerName, o.Amount FROM Customers c RIGHT JOIN Orders o ON c.ID = o.CustomerID",
+            db);
+
+        // 1 matched row (Alice+101) + 1 null row (orphan 102) = 2 rows
+        Assert.Equal(2, result.Rows.Count);
+
+        var orphanRows = result.Rows.Cast<DataRow>().Where(r => 25.00m.Equals(r["Amount"])).ToList();
+        Assert.Single(orphanRows);
+        Assert.Equal(DBNull.Value, orphanRows[0]["CustomerName"]);
+
+        var aliceRows = result.Rows.Cast<DataRow>().Where(r => "Alice".Equals(r["CustomerName"])).ToList();
+        Assert.Single(aliceRows);
+        Assert.Equal(50.00m, (decimal)aliceRows[0]["Amount"]);
+    }
+
+    [Fact]
+    public void Scenario_FullOuterJoin_BothSidesUnmatched()
+    {
+        // Charlie has no orders (left unmatched) and orphan order has no customer (right unmatched).
+        var db = new InMemoryDatabase("Sales");
+        var customers = db.AddTable("Customers", ("ID", typeof(int)), ("CustomerName", typeof(string)));
+        customers.Rows.Add(1, "Alice");
+        customers.Rows.Add(3, "Charlie");  // no orders
+        var orders = db.AddTable("Orders", ("ID", typeof(int)), ("CustomerID", typeof(int)), ("Amount", typeof(decimal)));
+        orders.Rows.Add(101, 1, 50.00m);   // matched to Alice
+        orders.Rows.Add(102, 99, 25.00m);  // orphan — no customer
+
+        var result = Run(
+            "SELECT c.CustomerName, o.Amount FROM Customers c FULL JOIN Orders o ON c.ID = o.CustomerID",
+            db);
+
+        // 1 matched (Alice+101) + 1 left-only (Charlie, NULL amount) + 1 right-only (orphan, NULL name) = 3
+        Assert.Equal(3, result.Rows.Count);
+
+        var charlieRows = result.Rows.Cast<DataRow>().Where(r => "Charlie".Equals(r["CustomerName"])).ToList();
+        Assert.Single(charlieRows);
+        Assert.Equal(DBNull.Value, charlieRows[0]["Amount"]);
+
+        var orphanRows = result.Rows.Cast<DataRow>().Where(r => 25.00m.Equals(r["Amount"])).ToList();
+        Assert.Single(orphanRows);
+        Assert.Equal(DBNull.Value, orphanRows[0]["CustomerName"]);
+    }
 }
