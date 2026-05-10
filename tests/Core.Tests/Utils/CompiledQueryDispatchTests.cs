@@ -51,22 +51,32 @@ public class CompiledQueryDispatchTests
     public void ApplyFilter_RepeatedCallsForSameElementType_ReuseCachedDelegate()
     {
         // Force the cache to a known state, then call ApplyFilter twice for the same
-        // element type and confirm the cache count grew by exactly 1.
+        // element type and confirm the per-element-type cache grew by exactly 1.
+        //
+        // Issue #188: ApplyFilter has two element-type caches now — the legacy
+        // ApplyFilterCacheCount (used for non-cacheable shapes like BETWEEN/CASE/IN) and
+        // the new ApplyFilterCachedPredicateCacheCount (Wave 14 fast path for cacheable
+        // shapes like simple binary comparisons). The simple-equality filter built here
+        // is a cacheable shape, so the new cache is the one to assert against.
         CompiledQueryDispatch.ClearForTests();
         Assert.Equal(0, CompiledQueryDispatch.ApplyFilterCacheCount);
+        Assert.Equal(0, CompiledQueryDispatch.ApplyFilterCachedPredicateCacheCount);
 
         var (dataSets, sqlSelect) = BuildSelectWithSimpleEqualityFilter("Customers", "ID", 1);
 
-        // First call → compiles a delegate for IQueryable<DataRow>.
+        // First call → compiles a delegate for IQueryable<DataRow> on the fast path.
         new QueryEngine(dataSets, sqlSelect).QueryAsDataTable();
-        var afterFirstCall = CompiledQueryDispatch.ApplyFilterCacheCount;
+        var afterFirstCall = CompiledQueryDispatch.ApplyFilterCachedPredicateCacheCount;
 
         // Second call → should hit the cache, no new compile.
         new QueryEngine(dataSets, sqlSelect).QueryAsDataTable();
-        var afterSecondCall = CompiledQueryDispatch.ApplyFilterCacheCount;
+        var afterSecondCall = CompiledQueryDispatch.ApplyFilterCachedPredicateCacheCount;
 
         Assert.Equal(1, afterFirstCall);
         Assert.Equal(afterFirstCall, afterSecondCall);
+
+        // The legacy cache is untouched because the predicate is a cacheable shape.
+        Assert.Equal(0, CompiledQueryDispatch.ApplyFilterCacheCount);
     }
 
     [Fact]

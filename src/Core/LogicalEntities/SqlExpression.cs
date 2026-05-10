@@ -235,20 +235,35 @@ public class SqlExpression
 
     }
 
-    public Expression GetExpression(Dictionary<SqlTable, DataRow> substituteValues, SqlTable tableDataRow, ParameterExpression param, SqlExpression companionOfBinExpr)
+    public Expression GetExpression(Dictionary<SqlTable, DataRow>? substituteValues, SqlTable tableDataRow, ParameterExpression param, SqlExpression companionOfBinExpr)
+        => GetExpression(substituteValues, tableDataRow, param, companionOfBinExpr, substituteValuesParam: null);
+
+    /// <summary>
+    /// Issue #188: when <paramref name="substituteValuesParam"/> is non-null, substitute-table
+    /// column reads emit runtime dictionary-lookup IL (cached-compile path used by
+    /// <see cref="SqlBinaryExpression.BuildCompiledPredicate{TDataRow}"/>). When it is null, the
+    /// historical behavior bakes constants from <paramref name="substituteValues"/>.
+    /// </summary>
+    internal Expression GetExpression(Dictionary<SqlTable, DataRow>? substituteValues, SqlTable tableDataRow, ParameterExpression param, SqlExpression companionOfBinExpr, ParameterExpression? substituteValuesParam)
     {
         // Switch on Kind so the precedence is explicit instead of an implicit null-check ladder.
         // Cases below preserve the historical precedence and behavior of the prior null-check chain.
         switch (Kind)
         {
             case SqlExpressionKind.BinExpr:
-                return BinExpr!.GetExpression(substituteValues, tableDataRow, param);
+                return BinExpr!.GetExpression(substituteValues, tableDataRow, param, substituteValuesParam);
 
             case SqlExpressionKind.BetweenExpr:
-                return BetweenExpr!.GetExpression(substituteValues, tableDataRow, param);
+                // BetweenExpr does not yet thread substituteValuesParam — IsCacheableShape()
+                // returns false when this arm is present so we never reach here from the cached
+                // path. Null-forgive substituteValues because the legacy call sites always pass a
+                // non-null dictionary; the cached path is gated by IsCacheableShape and never
+                // dispatches into BetweenExpr.
+                return BetweenExpr!.GetExpression(substituteValues!, tableDataRow, param);
 
             case SqlExpressionKind.CaseExpr:
-                return CaseExpr!.GetExpression(substituteValues, tableDataRow, param);
+                // Same rationale as BetweenExpr above.
+                return CaseExpr!.GetExpression(substituteValues!, tableDataRow, param);
 
             case SqlExpressionKind.Value:
             {
@@ -272,14 +287,14 @@ public class SqlExpression
                 throw new NotSupportedException("Scalar subqueries are not supported by LINQ expression generation.");
 
             case SqlExpressionKind.Column:
-                return GetColumnExpression(substituteValues, tableDataRow, param, companionOfBinExpr);
+                return GetColumnExpression(substituteValues, tableDataRow, param, companionOfBinExpr, substituteValuesParam);
 
             default:
                 throw new NotSupportedException($"Generating a LINQ expression for a {nameof(SqlExpression)} of {nameof(Kind)}={Kind} is not supported.");
         }
     }
 
-    private Expression GetColumnExpression(Dictionary<SqlTable, DataRow> substituteValues, SqlTable tableDataRow, ParameterExpression param, SqlExpression companionOfBinExpr)
+    private Expression GetColumnExpression(Dictionary<SqlTable, DataRow>? substituteValues, SqlTable tableDataRow, ParameterExpression param, SqlExpression companionOfBinExpr, ParameterExpression? substituteValuesParam)
     {
         if (Column == null)
             throw new Exception("Operand wasn't a Column as expected.");
@@ -289,6 +304,18 @@ public class SqlExpression
 
         if (columnOfOperand.TableRef is null)
             throw new ArgumentNullException(nameof(columnOfOperand.TableRef), $"{nameof(columnOfOperand)}.{nameof(columnOfOperand.TableRef)} cannot be null.");
+
+        // Issue #188: cached-compile path (substituteValuesParam non-null) emits IL that reads the
+        // substitute row at runtime instead of baking the value as a constant. The decision of
+        // whether this column belongs to the substitute side is made on tableDataRow occurrence
+        // alone (no runtime dictionary inspection at build time). Any KeyNotFoundException at
+        // execution time correctly surfaces the same misuse the legacy throw at line ~331 would
+        // have caught at build time.
+        if (substituteValuesParam != null &&
+            !SqlTableOccurrenceComparer.Instance.Equals(columnOfOperand.TableRef, tableDataRow))
+        {
+            return BuildSubstituteRowAccessExpression(columnOfOperand, substituteValuesParam);
+        }
 
         //Look for table rows that are providing substitute values.
         // Issue #183: use SqlTableOccurrenceComparer so a self-join's two occurrences of the same
@@ -338,7 +365,65 @@ public class SqlExpression
         return Expression.Property(param, columnOfOperand.ColumnName);
     }
 
-    private Expression GetBuiltInFunctionExpression(SqlFunction function, Dictionary<SqlTable, DataRow> substituteValues, SqlTable tableDataRow, ParameterExpression param)
+    /// <summary>
+    /// Issue #188: emits the runtime equivalent of the legacy build-time substitute-value constant
+    /// emission. Produces an expression that, at runtime, indexes
+    /// <paramref name="substituteValuesParam"/> by the column's TableRef, reads the named column
+    /// from that DataRow, handles DBNull/null by returning a typed null (<see cref="Nullable{T}"/>
+    /// for value types, the declared reference type or <see cref="object"/> otherwise), and
+    /// returns a typed value matching what the build-time constant emission produced. Mirrors the
+    /// constant-emission branches in <see cref="GetColumnExpression"/> and the runtime DBNull
+    /// handling in <see cref="GetExpressionForDataRow"/>.
+    /// </summary>
+    private Expression BuildSubstituteRowAccessExpression(SqlColumn columnOfOperand, ParameterExpression substituteValuesParam)
+    {
+        // dict[tableRef] — Dictionary<SqlTable, DataRow> indexer. The dictionary uses
+        // SqlTableOccurrenceComparer (set by ProcessingState.DataRowsOfOtherTables ctor), so
+        // baking the SqlTable reference as a constant is safe — the comparer compares structural
+        // identity, not object identity.
+        var dictIndexer = typeof(Dictionary<SqlTable, DataRow>).GetProperty("Item")
+            ?? throw new InvalidOperationException("Could not resolve Dictionary<SqlTable, DataRow>.Item indexer.");
+        var tableRefConst = Expression.Constant(columnOfOperand.TableRef, typeof(SqlTable));
+        var rowExpr = Expression.MakeIndex(substituteValuesParam, dictIndexer, new[] { tableRefConst });
+
+        // dataRow[columnName] — DataRow.Item(string) indexer; returns object.
+        var dataRowIndexer = typeof(DataRow).GetProperty("Item", new[] { typeof(string) })
+            ?? throw new InvalidOperationException("Could not resolve DataRow.Item(string) indexer.");
+        var columnNameConst = Expression.Constant(columnOfOperand.ColumnName, typeof(string));
+        var rawValue = Expression.MakeIndex(rowExpr, dataRowIndexer, new[] { columnNameConst });
+
+        var declaredType = columnOfOperand.ColumnType;
+
+        // Value type: produce Nullable<T> with runtime DBNull/null handling. The downstream
+        // nullable-aware GetBinaryExpression path enforces SQL three-valued logic for NULL operands.
+        if (declaredType != null && declaredType.IsValueType &&
+            !(declaredType.IsGenericType && declaredType.GetGenericTypeDefinition() == typeof(Nullable<>)))
+        {
+            var nullableType = typeof(Nullable<>).MakeGenericType(declaredType);
+            var dbNullConst = Expression.Constant(DBNull.Value, typeof(object));
+            var isDbNullOrNull = Expression.OrElse(
+                Expression.Equal(rawValue, Expression.Constant(null, typeof(object))),
+                Expression.Equal(rawValue, dbNullConst));
+            var typedNull = Expression.Constant(null, nullableType);
+            // (T?)((T)rawValue) — promote the typed value into Nullable<T>.
+            var typedValue = Expression.Convert(Expression.Convert(rawValue, declaredType), nullableType);
+            return Expression.Condition(isDbNullOrNull, typedNull, typedValue);
+        }
+
+        // Reference type or unknown declared type: substitute null when DBNull is observed.
+        var fallbackType = declaredType ?? typeof(object);
+        var fallbackDbNull = Expression.Constant(DBNull.Value, typeof(object));
+        var fallbackIsDbNull = Expression.Equal(rawValue, fallbackDbNull);
+        var fallbackNull = Expression.Constant(null, fallbackType);
+
+        Expression typedRefValue = fallbackType == typeof(object)
+            ? (Expression)rawValue
+            : Expression.Convert(rawValue, fallbackType);
+
+        return Expression.Condition(fallbackIsDbNull, fallbackNull, typedRefValue);
+    }
+
+    private Expression GetBuiltInFunctionExpression(SqlFunction function, Dictionary<SqlTable, DataRow>? substituteValues, SqlTable tableDataRow, ParameterExpression param)
     {
         var funcName = function.FunctionName.ToUpperInvariant();
 
@@ -378,7 +463,7 @@ public class SqlExpression
         }
     }
 
-    private Expression GetFunctionArgumentExpression(SqlExpression arg, Dictionary<SqlTable, DataRow> substituteValues, SqlTable tableDataRow, ParameterExpression param)
+    private Expression GetFunctionArgumentExpression(SqlExpression arg, Dictionary<SqlTable, DataRow>? substituteValues, SqlTable tableDataRow, ParameterExpression param)
     {
         if (arg.Value != null)
             return Expression.Constant(arg.Value.Value, arg.Value.Value?.GetType() ?? typeof(object));

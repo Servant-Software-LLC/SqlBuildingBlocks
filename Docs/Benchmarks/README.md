@@ -141,6 +141,66 @@ captures the post-refactor numbers on the same machine and `--job short` config.
 Source JSON: [`baseline-2026-05-09-wave12-QueryEngineBenchmarks.json`](baseline-2026-05-09-wave12-QueryEngineBenchmarks.json) and
 [`baseline-2026-05-09-wave12-QueryEngineBenchmarks.md`](baseline-2026-05-09-wave12-QueryEngineBenchmarks.md).
 
+## Post-Wave-14 baseline — 2026-05-10 (#188 resolved)
+
+Wave 14 lane D of `/uber-report 2026-05-10` added the per-(predicate-shape, TDataRow,
+tableDataRow) compiled-delegate cache in `SqlBuildingBlocks.Utils.CompiledPredicateCache`.
+The cached lambda accepts the substitute-values dictionary as a runtime parameter
+(rather than baking constants per call) and the dispatch site invokes it via
+`Enumerable.Where(IEnumerable<T>, Func<T, bool>)` instead of
+`Queryable.Where(IQueryable<T>, Expression<>)` — the latter re-compiles the supplied
+expression on every call when the underlying provider is the default LINQ-to-Objects
+`EnumerableQuery<T>`.
+
+### QueryEngine benchmarks (100-row tables) — post-Wave-14
+
+| Method              | Mean        | Allocated    | vs Wave-12 baseline | vs original baseline |
+|-------------------- |------------:|-------------:|--------------------:|---------------------:|
+| ExecuteSimpleSelect |   815.0 us  |    207.3 KB  | unchanged           | 2.4x faster          |
+| ExecuteJoinedSelect |     7.46 ms |   7113.9 KB  | **32x faster**, alloc up 2.7x | **48x faster** |
+
+Source JSON: [`baseline-2026-05-10-wave14-QueryEngineBenchmarks.json`](baseline-2026-05-10-wave14-QueryEngineBenchmarks.json) and
+[`baseline-2026-05-10-wave14-QueryEngineBenchmarks.md`](baseline-2026-05-10-wave14-QueryEngineBenchmarks.md).
+
+### Parser benchmarks — post-Wave-14
+
+| Method                              | Mean       | Allocated   |
+|------------------------------------ |-----------:|------------:|
+| ParseSimpleSelect_Ansi              |   4.01 us  |     ~7.6 KB |
+| ParseSimpleSelect_MySql             |   4.48 us  |     ~7.6 KB |
+| ParseComplexSelect_Ansi             |  57.26 us  |    ~65.1 KB |
+| ParseComplexSelect_MySql            |  61.37 us  |    ~65.8 KB |
+| ParseDeeplyNestedExpression_Ansi    |   3.66 us  |     ~8.5 KB |
+| ParseCte_Ansi                       |  12.82 us  |    ~18.1 KB |
+| ParseAndCreate_ComplexSelect_Ansi   |  98.71 us  |    ~82.6 KB |
+
+Source JSON: [`baseline-2026-05-10-wave14-ParseBenchmarks.json`](baseline-2026-05-10-wave14-ParseBenchmarks.json) and
+[`baseline-2026-05-10-wave14-ParseBenchmarks.md`](baseline-2026-05-10-wave14-ParseBenchmarks.md).
+
+### Findings — post-Wave-14
+
+1. **`ExecuteJoinedSelect` improved by ~32x (240 ms → 7.46 ms).** The fix exceeds the
+   <100 ms target from issue #188's acceptance criteria by an order of magnitude. Two
+   wins compound here: (a) the predicate compile happens exactly once per
+   (shape, TDataRow, tableDataRow) tuple instead of once per FROM-row iteration
+   (100x fewer `Lambda.Compile()` calls for the 100x100 cross product), and
+   (b) the dispatch path now uses `Enumerable.Where(Func<T,bool>)` rather than
+   `Queryable.Where(Expression<...>)` — the latter incurred an additional internal
+   compile per call when the provider was the default `EnumerableQuery<T>`.
+2. **`ExecuteSimpleSelect` is essentially unchanged (~810 us).** The simple SELECT
+   has no JOIN cross product, so it only built the predicate ONCE in the Wave-12
+   path; there was no per-row recompile to amortize away. Confirms the Wave-14 win
+   is concentrated in the join hot path where it was profiled to live.
+3. **Allocated bytes for `ExecuteJoinedSelect` rose from 2.6 MB to 7.1 MB (~2.7x).**
+   The cached predicate captures the substitute-values dictionary in a per-call
+   closure (the `row => predicate(row, substituteValues)` lambda inside
+   `CompiledQueryDispatch.BuildApplyFilterCachedPredicateDelegate`) — that closure
+   is allocated per FROM-row iteration. A future PR can hoist the closure to a
+   single allocation per call (or use a struct-based capture) if allocation
+   pressure becomes a concern. For now the 32x speed win dominates.
+4. **Parse benchmarks are unchanged from Wave-12.** Issue #188 only touched the
+   query-execution path; parse-time numbers should not move and they don't.
+
 ### Parser benchmarks — post-Wave-12
 
 | Method                              | Mean       | Allocated  |

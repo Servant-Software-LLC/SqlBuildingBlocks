@@ -36,20 +36,113 @@ public class SqlBinaryExpression
         return lambdaExpression;
     }
 
-    public Expression GetExpression(Dictionary<SqlTable, DataRow> substituteValues, SqlTable tableDataRow, ParameterExpression param)
+    /// <summary>
+    /// Returns a cached compiled predicate that closes over the given <paramref name="tableDataRow"/>
+    /// (the SqlTable being filtered on) and accepts the substitute-values dictionary at runtime.
+    ///
+    /// Issue #188: <see cref="BuildExpression{TDataRow}"/> baked substitute-value constants into a
+    /// fresh <see cref="Expression{TDelegate}"/> per call and re-compiled every time. For a 100-row
+    /// JOIN that meant 100 compiles for the same structural predicate. This method amortizes the
+    /// compile across all calls with the same predicate shape + <typeparamref name="TDataRow"/> +
+    /// <paramref name="tableDataRow"/> tuple by computing a structural hash, looking up
+    /// <see cref="CompiledPredicateCache"/>, and on miss building a lambda that emits
+    /// dictionary-lookup IL for substitute reads (instead of constants), then compiling once.
+    ///
+    /// The returned delegate is invoked as <c>predicate(row, substituteValues)</c> where the
+    /// dictionary may be <c>null</c> (e.g., a top-level WHERE with no JOIN context).
+    ///
+    /// Predicates whose tree contains arms not handled by the cached path (BETWEEN, CASE, IN, etc.)
+    /// would silently bake constants from a <c>null</c> substituteValues. Callers must check
+    /// <see cref="IsCacheableShape"/> first and fall back to <see cref="BuildExpression{TDataRow}"/>
+    /// when it returns false. This keeps the cache implementation surgical — it does not need to
+    /// thread the runtime-substitute-parameter through every <see cref="SqlExpression"/> arm.
+    /// </summary>
+    public Func<TDataRow, Dictionary<SqlTable, DataRow>?, bool> BuildCompiledPredicate<TDataRow>(SqlTable tableDataRow)
+    {
+        return CompiledPredicateCache.GetOrAdd<TDataRow>(this, tableDataRow, () =>
+        {
+            var rowParam = Expression.Parameter(typeof(TDataRow), "dataRow");
+            var substituteParam = Expression.Parameter(typeof(Dictionary<SqlTable, DataRow>), "subst");
+
+            // GetExpression with a non-null substituteValuesParam emits dictionary-lookup IL for
+            // substitute-table column reads instead of baking literal constants. The other arms
+            // (literal values, function calls, column reads on the local row) are unchanged.
+            var body = GetExpression(substituteValues: null, tableDataRow, rowParam, substituteParam);
+
+            var lambda = Expression.Lambda<Func<TDataRow, Dictionary<SqlTable, DataRow>?, bool>>(body, rowParam, substituteParam);
+            return lambda.Compile();
+        });
+    }
+
+    /// <summary>
+    /// Issue #188: returns true when this binary-expression tree consists solely of arms whose
+    /// <c>GetExpression</c> emission paths thread <paramref name="substituteValuesParam"/> through
+    /// to <see cref="SqlExpression.GetColumnExpression"/>. False for any tree containing BETWEEN,
+    /// CASE, IN, NOT IN, function calls, or other arms whose <c>GetExpression</c> overloads in
+    /// other logical-entity files do not yet accept the runtime-substitute parameter — those must
+    /// fall back to the legacy per-call <see cref="BuildExpression{TDataRow}"/> compile path.
+    ///
+    /// The conservative default for any unrecognized arm is "not cacheable", which means new arm
+    /// types automatically use the slow path until they are explicitly opted into the cache.
+    /// </summary>
+    public bool IsCacheableShape()
+    {
+        // IS NULL / IS NOT NULL: only the Left is consulted, and only via column-or-DataRow access
+        // (the GetIsNullExpression DataRow short-circuit is value-and-substitute-independent).
+        if (Operator == SqlBinaryOperator.IsNull || Operator == SqlBinaryOperator.IsNotNull)
+            return IsCacheableArm(Left);
+
+        // IN / NOT IN: GetInExpression iterates through Right.InList without threading the
+        // substitute parameter — disable caching to avoid silently dropping substitute reads.
+        if (Operator == SqlBinaryOperator.In || Operator == SqlBinaryOperator.NotIn)
+            return false;
+
+        // Standard binary: both arms must be cacheable.
+        return IsCacheableArm(Left) && (Right == null || IsCacheableArm(Right));
+    }
+
+    private static bool IsCacheableArm(SqlExpression expression)
+    {
+        switch (expression.Kind)
+        {
+            case SqlExpressionKind.Column:
+            case SqlExpressionKind.Value:
+                return true;
+
+            case SqlExpressionKind.BinExpr:
+                return expression.BinExpr!.IsCacheableShape();
+
+            // BetweenExpr, CaseExpr, Function, InList, Parameter, ExistsExpr, ScalarSubqueryExpr,
+            // CastExpr, ArrayConstructor, ArraySubscript, JsonExpr — none of these flow the
+            // substituteValuesParam through their GetExpression overloads in other files, so a
+            // cached compile would silently bake null-dictionary constants. Stay on the legacy path.
+            default:
+                return false;
+        }
+    }
+
+    public Expression GetExpression(Dictionary<SqlTable, DataRow>? substituteValues, SqlTable tableDataRow, ParameterExpression param)
+        => GetExpression(substituteValues, tableDataRow, param, substituteValuesParam: null);
+
+    /// <summary>
+    /// Issue #188: when <paramref name="substituteValuesParam"/> is non-null, substitute-table
+    /// column reads emit runtime dictionary-lookup IL (cached-compile path). When it is null, the
+    /// historical behavior bakes constants from <paramref name="substituteValues"/>.
+    /// </summary>
+    internal Expression GetExpression(Dictionary<SqlTable, DataRow>? substituteValues, SqlTable tableDataRow, ParameterExpression param, ParameterExpression? substituteValuesParam)
     {
         // IS NULL and IS NOT NULL are unary postfix predicates — no right operand needed.
         if (Operator == SqlBinaryOperator.IsNull || Operator == SqlBinaryOperator.IsNotNull)
-            return GetIsNullExpression(substituteValues, tableDataRow, param);
+            return GetIsNullExpression(substituteValues, tableDataRow, param, substituteValuesParam);
 
         // IN / NOT IN: the right-hand side is an InList, not a simple expression.
         if (Operator == SqlBinaryOperator.In)
-            return GetInExpression(substituteValues, tableDataRow, param);
+            return GetInExpression(substituteValues, tableDataRow, param, substituteValuesParam);
         if (Operator == SqlBinaryOperator.NotIn)
-            return Expression.Not(GetInExpression(substituteValues, tableDataRow, param));
+            return Expression.Not(GetInExpression(substituteValues, tableDataRow, param, substituteValuesParam));
 
-        var leftProperty = Left.GetExpression(substituteValues, tableDataRow, param, Right!);
-        var rightProperty = Right!.GetExpression(substituteValues, tableDataRow, param, Left);
+        var leftProperty = Left.GetExpression(substituteValues, tableDataRow, param, Right!, substituteValuesParam);
+        var rightProperty = Right!.GetExpression(substituteValues, tableDataRow, param, Left, substituteValuesParam);
 
         return Operator switch
         {
@@ -67,20 +160,20 @@ public class SqlBinaryExpression
         };
     }
 
-    private Expression GetInExpression(Dictionary<SqlTable, DataRow> substituteValues, SqlTable tableDataRow, ParameterExpression param)
+    private Expression GetInExpression(Dictionary<SqlTable, DataRow>? substituteValues, SqlTable tableDataRow, ParameterExpression param, ParameterExpression? substituteValuesParam)
     {
         if (Right?.InList == null)
             throw new InvalidOperationException("IN / NOT IN requires an InList on the right-hand side.");
 
         // Build the left-hand expression using a dummy companion for type inference
         var dummyCompanion = Right.InList.Items.Count > 0 ? Right.InList.Items[0] : new SqlExpression(new SqlLiteralValue());
-        var leftExpr = Left.GetExpression(substituteValues, tableDataRow, param, dummyCompanion);
+        var leftExpr = Left.GetExpression(substituteValues, tableDataRow, param, dummyCompanion, substituteValuesParam);
 
         // Build an OR chain: left == item1 || left == item2 || ...
         Expression? result = null;
         foreach (var item in Right.InList.Items)
         {
-            var itemExpr = item.GetExpression(substituteValues, tableDataRow, param, Left);
+            var itemExpr = item.GetExpression(substituteValues, tableDataRow, param, Left, substituteValuesParam);
 
             // Align types for comparison
             Expression leftAligned = leftExpr;
@@ -113,7 +206,7 @@ public class SqlBinaryExpression
         return result ?? Expression.Constant(false);
     }
 
-    private Expression GetIsNullExpression(Dictionary<SqlTable, DataRow> substituteValues, SqlTable tableDataRow, ParameterExpression param)
+    private Expression GetIsNullExpression(Dictionary<SqlTable, DataRow>? substituteValues, SqlTable tableDataRow, ParameterExpression param, ParameterExpression? substituteValuesParam)
     {
         // For DataRow parameters, check for DBNull.Value directly on the raw object
         // without type-converting the value (which would throw on DBNull).
@@ -128,7 +221,7 @@ public class SqlBinaryExpression
 
         // Use a dummy companion expression (null literal) to satisfy the GetExpression signature
         var nullCompanion = new SqlExpression(new SqlLiteralValue());
-        var leftProperty = Left.GetExpression(substituteValues, tableDataRow, param, nullCompanion);
+        var leftProperty = Left.GetExpression(substituteValues, tableDataRow, param, nullCompanion, substituteValuesParam);
 
         Expression isNullCheckExpr;
         if (leftProperty.Type.IsValueType && !(leftProperty.Type.IsGenericType && leftProperty.Type.GetGenericTypeDefinition() == typeof(Nullable<>)))
