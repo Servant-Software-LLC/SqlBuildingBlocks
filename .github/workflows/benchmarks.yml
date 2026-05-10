@@ -1,0 +1,101 @@
+name: Benchmarks
+
+# Runs the BenchmarkDotNet suite on PRs that touch the parser, grammars, query engine,
+# or the benchmark project itself, then compares the output against the committed
+# baseline JSON files in `Docs/Benchmarks/`. Fails the check on the regression rule
+# documented in `Docs/Benchmarks/README.md` (mean +10% or allocated +20%).
+#
+# Runner choice: windows-latest. The committed baselines were captured on Windows
+# (i7-1185G7, .NET 10) and absolute BenchmarkDotNet numbers vary across runner
+# OS/CPU classes. Switching to ubuntu-latest requires re-recording the baselines
+# on Linux (run the benchmark project there and commit the new JSON files).
+#
+# Note: GitHub-hosted runners are shared VMs and noisier than dedicated hardware,
+# so we use `--job short` (3 warmups, 3 iterations) to keep the run under 5 minutes
+# and accept wider confidence intervals. The 10/20 threshold is conservative enough
+# to ride out that noise; if false positives accumulate, raise the thresholds via
+# the workflow inputs rather than tightening the job.
+
+on:
+  pull_request:
+    paths:
+      - 'src/Core/**'
+      - 'src/Grammars/**'
+      - 'benchmarks/**'
+      - 'Docs/Benchmarks/**'
+      - '.github/workflows/benchmarks.yml'
+      - '.github/scripts/compare-benchmarks.ps1'
+  workflow_dispatch:
+    inputs:
+      mean_threshold:
+        description: 'Mean regression threshold (fraction, e.g. 0.10 = 10%)'
+        required: false
+        default: '0.10'
+      alloc_threshold:
+        description: 'Allocation regression threshold (fraction, e.g. 0.20 = 20%)'
+        required: false
+        default: '0.20'
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  bench:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Build benchmarks
+        shell: pwsh
+        run: dotnet build --configuration Release benchmarks/SqlBuildingBlocks.Benchmarks/SqlBuildingBlocks.Benchmarks.csproj
+
+      - name: Run benchmarks (--job short --exporters json)
+        shell: pwsh
+        run: dotnet run --configuration Release --no-build --project benchmarks/SqlBuildingBlocks.Benchmarks/SqlBuildingBlocks.Benchmarks.csproj -- --filter "*" --job short --exporters json
+
+      - name: Upload BenchmarkDotNet artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: benchmarks/SqlBuildingBlocks.Benchmarks/BenchmarkDotNet.Artifacts/**
+
+      - name: Compare against committed baseline
+        id: compare
+        shell: pwsh
+        run: |
+          $meanThreshold = '${{ github.event.inputs.mean_threshold }}'
+          if (-not $meanThreshold) { $meanThreshold = '0.10' }
+          $allocThreshold = '${{ github.event.inputs.alloc_threshold }}'
+          if (-not $allocThreshold) { $allocThreshold = '0.20' }
+
+          $summaryPath = Join-Path $env:RUNNER_TEMP 'benchmark-summary.md'
+          pwsh -NoProfile -File .github/scripts/compare-benchmarks.ps1 `
+            -ResultsDir 'benchmarks/SqlBuildingBlocks.Benchmarks/BenchmarkDotNet.Artifacts/results' `
+            -BaselineDir 'Docs/Benchmarks' `
+            -MeanThreshold ([double]$meanThreshold) `
+            -AllocThreshold ([double]$allocThreshold) `
+            -SummaryPath $summaryPath
+          $exitCode = $LASTEXITCODE
+
+          if (Test-Path $summaryPath) {
+            Get-Content $summaryPath | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            "summary_path=$summaryPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          }
+
+          exit $exitCode
+
+      - name: Post benchmark report as PR comment
+        if: always() && github.event_name == 'pull_request' && steps.compare.outputs.summary_path != ''
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: benchmarks
+          recreate: true
+          path: ${{ steps.compare.outputs.summary_path }}

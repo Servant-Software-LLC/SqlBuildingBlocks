@@ -227,6 +227,21 @@ These represent the semantic meaning of parsed SQL:
 - `SqlDropTableDefinition`, `SqlRenameTableDefinition`
 - `SqlCreateIndexDefinition`, `SqlDropIndexDefinition`
 
+### Adding a Public Property to a Logical Entity (Issue #177 Coverage Rule)
+
+When you add a new public property to any logical-entity type that is **reachable from `SqlSelectDefinition`** (i.e., participates in SELECT execution), the architectural rule from [`Docs/Architectural/logical-entity-coverage-rule.md`](../../../Docs/Architectural/logical-entity-coverage-rule.md) requires that the property is either consumed by the engine OR explicitly rejected. Pick **one**:
+
+1. **Wire engine consumption** if the property is meant to affect execution. Read it in `QueryEngine` (`src/Core/QueryProcessing/QueryEngine.cs`) or in one of the engine-path helpers under `src/Core/Utils/`, `src/Core/Visitors/`, or a sibling logical-entity file. Most properties on SELECT-reachable types take this path.
+2. **Add a guard** in `QueryEngine.ThrowIfUnsupportedFeatures()` if the engine does not yet honor the property. Use a `NotSupportedException` whose message names the unsupported combination — e.g., `"TOP PERCENT is not supported by the QueryEngine."` This is the "explicit raise-site" branch of the rule and is what `Top.Percent`, `Top.WithTies`, and (wave 15) the `SqlWindowFrame.Mode` GROUPS / RANGE-numeric combinations all use today.
+3. **Allow-list the property** in `tests/Core.Tests/Architecture/LogicalEntityCoverageTests.cs` (`IsAllowListed` method) with a comment explaining why it is not consumed. Reserve this for round-trip metadata, derived diagnostic helpers, and consumer-facing convenience accessors. The allow-list is the rule's escape hatch — every entry should be a deliberate decision, not a workaround.
+
+Then run:
+```powershell
+dotnet test --configuration Release --filter "FullyQualifiedName~LogicalEntityCoverageTests"
+```
+
+The test fails with a list of `TypeName.PropertyName` for any uncovered property and points at the ADR for the rule. DML/DDL-only types (`SqlInsertDefinition`, `SqlAlter*`, etc.) are out of scope — they are consumed by downstream packages (FileBased.DataProviders, MockDB), not by the in-memory `QueryEngine`.
+
 ## Grammar Dialects
 
 ### AnsiSQL (base grammar)
