@@ -122,7 +122,7 @@ internal static class CompiledQueryDispatch
         // loop because we keyed on structural shape, not the enclosing object identity (the JOIN
         // wrapper SqlBinaryExpression is recreated per iteration when WHERE is folded with ON;
         // see QueryEngine.GetQueryableRowsInJoinTable line ~747).
-        if (filteringClause.IsCacheableShape())
+        if (filteringClause.IsCacheableShape(tableDataRow))
         {
             var fastPath = _applyFilterCachedPredicateCache.GetOrAdd(elementType, BuildApplyFilterCachedPredicateDelegate);
             return fastPath(dataRows, filteringClause, substituteValues, tableDataRow, tableWithColumnsToProjectOnto);

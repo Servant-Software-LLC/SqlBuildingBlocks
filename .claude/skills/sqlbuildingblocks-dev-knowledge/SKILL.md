@@ -540,11 +540,19 @@ Key changes:
   returns a `Func<TDataRow, Dictionary<SqlTable, DataRow>?, bool>` whose body
   reads substitute-table column values from the dictionary at runtime instead of
   baking them as `Expression.Constant`.
-- `SqlBinaryExpression.IsCacheableShape()` — gates the cache. Returns true only
-  for trees built from `Column`, `Value`, and nested `BinExpr` arms (the only
-  arms that thread the runtime-substitute parameter through their `GetExpression`
-  overloads). BETWEEN/CASE/IN/NOT IN/Function fall back to the legacy
-  `BuildExpression<TDataRow>` path.
+- `SqlBinaryExpression.IsCacheableShape(SqlTable? tableDataRow = null)` — gates
+  the cache. Returns true only for trees built from `Column`, `Value`, and nested
+  `BinExpr` arms (the only arms that thread the runtime-substitute parameter
+  through their `GetExpression` overloads). BETWEEN/CASE/IN/NOT IN/Function fall
+  back to the legacy `BuildExpression<TDataRow>` path. **Issue #225 extension**: when
+  `tableDataRow` is non-null, any `Column` arm whose `SqlColumn.TableRef` is a
+  different table (cross-table column reference) also returns false — forcing the
+  legacy path. This prevents `ArgumentException` when `BuildCompiledPredicate`
+  wraps substitute-row int values in `Nullable<int>` but `CastExpression` then
+  tries `Expression.Constant(null, typeof(int))` (invalid for non-nullable value
+  types). `CompiledQueryDispatch.ApplyFilter` now passes `tableDataRow` to
+  `IsCacheableShape(tableDataRow)` so all JOIN ON predicates with value-type key
+  columns automatically fall back.
 - `SqlExpression.GetExpression(..., ParameterExpression? substituteValuesParam)`
   internal overload — when the param is non-null, `GetColumnExpression` emits IL
   that does `dict[tableRef][columnName]` with runtime DBNull/null handling
@@ -557,7 +565,7 @@ Key changes:
   values hit different slots because the cached lambda still bakes the literal as
   `Expression.Constant` (Approach 2 from the issue plan).
 - `CompiledQueryDispatch.ApplyFilter` — now branches on
-  `filteringClause.IsCacheableShape()`. Cacheable shapes route through
+  `filteringClause.IsCacheableShape(tableDataRow)`. Cacheable shapes route through
   `_applyFilterCachedPredicateCache` and use
   `Enumerable.Where(IEnumerable<T>, Func<T, bool>)` instead of
   `Queryable.Where(IQueryable<T>, Expression<Func<T,bool>>)` — the latter

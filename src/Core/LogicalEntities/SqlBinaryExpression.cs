@@ -84,13 +84,22 @@ public class SqlBinaryExpression
     ///
     /// The conservative default for any unrecognized arm is "not cacheable", which means new arm
     /// types automatically use the slow path until they are explicitly opted into the cache.
+    ///
+    /// Issue #225: when <paramref name="tableDataRow"/> is non-null, column arms that reference a
+    /// different table (cross-table references, e.g. JOIN ON conditions) are treated as
+    /// non-cacheable because <see cref="BuildCompiledPredicate{TDataRow}"/> wraps substitute values
+    /// in <c>Nullable&lt;T&gt;</c> but <see cref="CastExpression"/> cannot create
+    /// <c>Expression.Constant(null, typeof(int))</c> for non-nullable value types. Falling back to
+    /// the legacy <see cref="BuildExpression{TDataRow}"/> path for cross-table predicates avoids
+    /// the <see cref="ArgumentException"/> that propagated as 0-row or exception results in JOIN ON
+    /// conditions.
     /// </summary>
-    public bool IsCacheableShape()
+    public bool IsCacheableShape(SqlTable? tableDataRow = null)
     {
         // IS NULL / IS NOT NULL: only the Left is consulted, and only via column-or-DataRow access
         // (the GetIsNullExpression DataRow short-circuit is value-and-substitute-independent).
         if (Operator == SqlBinaryOperator.IsNull || Operator == SqlBinaryOperator.IsNotNull)
-            return IsCacheableArm(Left);
+            return IsCacheableArm(Left, tableDataRow);
 
         // IN / NOT IN: GetInExpression iterates through Right.InList without threading the
         // substitute parameter — disable caching to avoid silently dropping substitute reads.
@@ -98,19 +107,35 @@ public class SqlBinaryExpression
             return false;
 
         // Standard binary: both arms must be cacheable.
-        return IsCacheableArm(Left) && (Right == null || IsCacheableArm(Right));
+        return IsCacheableArm(Left, tableDataRow) && (Right == null || IsCacheableArm(Right, tableDataRow));
     }
 
-    private static bool IsCacheableArm(SqlExpression expression)
+    private static bool IsCacheableArm(SqlExpression expression, SqlTable? tableDataRow)
     {
         switch (expression.Kind)
         {
             case SqlExpressionKind.Column:
+                // Issue #225: a column arm whose TableRef resolves to a different table than
+                // tableDataRow is a cross-table reference (e.g. the right-hand side of a JOIN ON
+                // condition). BuildCompiledPredicate wraps substitute DataRow values in Nullable<T>
+                // for value-type columns, but CastExpression then tries to create
+                // Expression.Constant(null, typeof(int)) for a non-nullable int target — which
+                // throws ArgumentException. Returning false here forces the predicate to the
+                // legacy BuildExpression path that bakes the actual value as Expression.Constant.
+                if (tableDataRow is not null)
+                {
+                    var sqlColumn = expression.Column!.Column as SqlColumn;
+                    if (sqlColumn?.TableRef is SqlTable columnTableRef &&
+                        !SqlTableOccurrenceComparer.Instance.Equals(columnTableRef, tableDataRow))
+                        return false;
+                }
+                return true;
+
             case SqlExpressionKind.Value:
                 return true;
 
             case SqlExpressionKind.BinExpr:
-                return expression.BinExpr!.IsCacheableShape();
+                return expression.BinExpr!.IsCacheableShape(tableDataRow);
 
             // BetweenExpr, CaseExpr, Function, InList, Parameter, ExistsExpr, ScalarSubqueryExpr,
             // CastExpr, ArrayConstructor, ArraySubscript, JsonExpr — none of these flow the

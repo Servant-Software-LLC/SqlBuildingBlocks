@@ -5357,4 +5357,252 @@ public class QueryEngineTests
     }
 
     #endregion
+
+    // ======================================================================
+    // Issue #225 — IsCacheableShape must exclude cross-table column refs
+    //
+    // BuildCompiledPredicate wraps substitute DataRow values in Nullable<T>
+    // for value-type columns. The companion column on the local table is a
+    // plain int. GetBinaryExpression calls GetCommonType(Nullable<int>, int)
+    // → returns int, then CastExpression tries Expression.Constant(null, int)
+    // which throws ArgumentException because int is not a reference type.
+    //
+    // Fix: IsCacheableShape(tableDataRow) returns false for any Column arm
+    // whose TableRef is a different table, redirecting to the legacy
+    // BuildExpression path that bakes the actual DataRow value as a constant.
+    // ======================================================================
+    #region Issue #225 — Cross-table column refs in IsCacheableShape
+
+    /// <summary>
+    /// JOIN ON condition with int key columns (Users.ID = Logins.UserID).
+    /// Before the fix, BuildCompiledPredicate threw ArgumentException
+    /// (Expression.Constant(null, typeof(int)) fails for non-nullable value types)
+    /// when the substitute-value path wrapped the int column in Nullable&lt;int&gt;
+    /// and CastExpression then tried to cast it back to plain int with a null constant.
+    /// </summary>
+    [Fact]
+    public void Query_InnerJoin_IntKeyColumns_CrossTableRef_Issue225()
+    {
+        const string databaseName = "StoreDB";
+
+        DataTable customers = new("Customers");
+        customers.Columns.Add("ID", typeof(int));
+        customers.Columns.Add("Name", typeof(string));
+        customers.Rows.Add(1, "Alice");
+        customers.Rows.Add(2, "Bob");
+        customers.Rows.Add(3, "Charlie");
+
+        DataTable orders = new("Orders");
+        orders.Columns.Add("OrderID", typeof(int));
+        orders.Columns.Add("CustomerID", typeof(int));
+        orders.Columns.Add("Amount", typeof(decimal));
+        orders.Rows.Add(101, 1, 50.00m);
+        orders.Rows.Add(102, 1, 75.00m);
+        orders.Rows.Add(103, 2, 30.00m);
+        orders.Rows.Add(104, 3, 20.00m);
+        orders.Rows.Add(105, 3, 10.00m);
+
+        DataSet dataSet = new(databaseName);
+        dataSet.Tables.Add(customers);
+        dataSet.Tables.Add(orders);
+
+        SqlTable custTable = new(databaseName, "Customers") { TableAlias = "c" };
+        SqlTable ordTable  = new(databaseName, "Orders")    { TableAlias = "o" };
+
+        // SELECT c.Name, o.Amount
+        SqlColumn nameCol   = new(null, "c", "Name")   { ColumnType = typeof(string),  TableRef = custTable };
+        SqlColumn amtCol    = new(null, "o", "Amount")  { ColumnType = typeof(decimal), TableRef = ordTable  };
+
+        // JOIN ON c.ID = o.CustomerID  (int = int — the cross-table int key case)
+        SqlColumn custIdHidden = new(databaseName, "Customers", "ID")
+        {
+            ColumnType = typeof(int),
+            TableRef   = custTable
+        };
+        SqlColumn ordCustIdHidden = new(databaseName, "Orders", "CustomerID")
+        {
+            ColumnType = typeof(int),
+            TableRef   = ordTable
+        };
+        SqlColumnRef custIdRef    = new(null, "c", "ID")         { Column = custIdHidden    };
+        SqlColumnRef ordCustIdRef = new(null, "o", "CustomerID") { Column = ordCustIdHidden };
+
+        SqlSelectDefinition sqlSelect = new();
+        sqlSelect.Columns.Add(nameCol);
+        sqlSelect.Columns.Add(amtCol);
+        sqlSelect.Table = custTable;
+        sqlSelect.Joins.Add(new SqlJoin(ordTable, new SqlBinaryExpression(
+            new SqlExpression(custIdRef),
+            SqlBinaryOperator.Equal,
+            new SqlExpression(ordCustIdRef))));
+
+        CompiledQueryDispatch.ClearForTests();
+        QueryEngine engine = new(new[] { dataSet }, sqlSelect);
+        var result = engine.QueryAsDataTable();
+
+        // 5 orders across 3 customers → 5 rows
+        Assert.Equal(5, result.Rows.Count);
+
+        // Alice has 2 orders (101, 102)
+        var aliceRows = result.Rows.Cast<DataRow>().Count(r => "Alice".Equals(r["Name"]));
+        Assert.Equal(2, aliceRows);
+
+        // Bob has 1 order (103)
+        var bobRows = result.Rows.Cast<DataRow>().Count(r => "Bob".Equals(r["Name"]));
+        Assert.Equal(1, bobRows);
+
+        // Charlie has 2 orders (104, 105)
+        var charlieRows = result.Rows.Cast<DataRow>().Count(r => "Charlie".Equals(r["Name"]));
+        Assert.Equal(2, charlieRows);
+    }
+
+    /// <summary>
+    /// Verifies that the fast path (IsCacheableShape returning true) still works for a simple
+    /// WHERE clause with a literal value — the fix must not regress single-table queries.
+    /// </summary>
+    [Fact]
+    public void Query_SimpleWhere_IntLiteral_FastPathUnaffected_Issue225()
+    {
+        const string databaseName = "ShopDB";
+
+        DataTable items = new("Items");
+        items.Columns.Add("ID", typeof(int));
+        items.Columns.Add("Name", typeof(string));
+        for (int i = 1; i <= 10; i++)
+            items.Rows.Add(i, $"Item{i}");
+
+        DataSet dataSet = new(databaseName);
+        dataSet.Tables.Add(items);
+
+        SqlTable itemsTable = new(databaseName, "Items");
+        SqlColumn idCol   = new(databaseName, "Items", "ID")   { ColumnType = typeof(int),    TableRef = itemsTable };
+        SqlColumn nameCol = new(databaseName, "Items", "Name") { ColumnType = typeof(string), TableRef = itemsTable };
+        SqlColumnRef idRef = new(null, null, "ID") { Column = idCol };
+
+        SqlSelectDefinition sqlSelect = new();
+        sqlSelect.Columns.Add(idCol);
+        sqlSelect.Columns.Add(nameCol);
+        sqlSelect.Table = itemsTable;
+        sqlSelect.WhereClause = new SqlExpression(
+            new SqlBinaryExpression(
+                new SqlExpression(idRef),
+                SqlBinaryOperator.Equal,
+                new SqlExpression(new SqlLiteralValue(5))));
+
+        CompiledQueryDispatch.ClearForTests();
+        QueryEngine engine = new(new[] { dataSet }, sqlSelect);
+        var result = engine.QueryAsDataTable();
+
+        Assert.Equal(1, result.Rows.Count);
+        Assert.Equal(5, result.Rows[0]["ID"]);
+        Assert.Equal("Item5", result.Rows[0]["Name"]);
+    }
+
+    /// <summary>
+    /// Two sequential queries with different WHERE predicates on the same table must each
+    /// return the rows matching their own predicate — verifies separate cache slots are
+    /// correctly keyed by the structural fingerprint.
+    /// </summary>
+    [Fact]
+    public void Query_SequentialDifferentPredicates_EachReturnsCorrectRows_Issue225()
+    {
+        const string databaseName = "AppDB";
+
+        DataTable users = new("Users");
+        users.Columns.Add("ID", typeof(int));
+        users.Columns.Add("Name", typeof(string));
+        users.Rows.Add(1, "Alice");
+        users.Rows.Add(2, "Bob");
+        users.Rows.Add(3, "Aaron");
+        users.Rows.Add(4, "Carol");
+
+        DataSet dataSet = new(databaseName);
+        dataSet.Tables.Add(users);
+
+        SqlTable usersTable = new(databaseName, "Users");
+        SqlColumn idCol   = new(databaseName, "Users", "ID")   { ColumnType = typeof(int),    TableRef = usersTable };
+        SqlColumn nameCol = new(databaseName, "Users", "Name") { ColumnType = typeof(string), TableRef = usersTable };
+        SqlColumnRef idRef = new(null, null, "ID") { Column = idCol };
+
+        // Query 1: WHERE ID <= 3
+        SqlSelectDefinition select1 = new();
+        select1.Columns.Add(idCol);
+        select1.Columns.Add(nameCol);
+        select1.Table = usersTable;
+        select1.WhereClause = new SqlExpression(
+            new SqlBinaryExpression(
+                new SqlExpression(idRef),
+                SqlBinaryOperator.LessThanEqual,
+                new SqlExpression(new SqlLiteralValue(3))));
+
+        CompiledQueryDispatch.ClearForTests();
+        var result1 = new QueryEngine(new[] { dataSet }, select1).QueryAsDataTable();
+        Assert.Equal(3, result1.Rows.Count); // Alice, Bob, Aaron
+
+        // Query 2: WHERE ID = 4 (different literal — different cache slot)
+        SqlSelectDefinition select2 = new();
+        select2.Columns.Add(idCol);
+        select2.Columns.Add(nameCol);
+        select2.Table = usersTable;
+        select2.WhereClause = new SqlExpression(
+            new SqlBinaryExpression(
+                new SqlExpression(idRef),
+                SqlBinaryOperator.Equal,
+                new SqlExpression(new SqlLiteralValue(4))));
+
+        var result2 = new QueryEngine(new[] { dataSet }, select2).QueryAsDataTable();
+        Assert.Equal(1, result2.Rows.Count);
+        Assert.Equal("Carol", result2.Rows[0]["Name"]);
+    }
+
+    /// <summary>
+    /// Directly verifies the IsCacheableShape(tableDataRow) gate introduced by issue #225.
+    /// A predicate "c.ID = o.CustomerID" must be non-cacheable when tableDataRow = ordTable
+    /// (because c.ID is a cross-table reference) but cacheable when tableDataRow = null
+    /// (backward-compat: null means "don't filter by table").
+    /// </summary>
+    [Fact]
+    public void IsCacheableShape_CrossTableColumnRef_ReturnsFalse_Issue225()
+    {
+        const string databaseName = "StoreDB";
+
+        SqlTable custTable = new(databaseName, "Customers") { TableAlias = "c" };
+        SqlTable ordTable  = new(databaseName, "Orders")    { TableAlias = "o" };
+
+        SqlColumn custIdCol = new(databaseName, "Customers", "ID")
+        {
+            ColumnType = typeof(int),
+            TableRef   = custTable
+        };
+        SqlColumn ordCustIdCol = new(databaseName, "Orders", "CustomerID")
+        {
+            ColumnType = typeof(int),
+            TableRef   = ordTable
+        };
+
+        // c.ID = o.CustomerID
+        var binExpr = new SqlBinaryExpression(
+            new SqlExpression(new SqlColumnRef(null, "c", "ID")         { Column = custIdCol    }),
+            SqlBinaryOperator.Equal,
+            new SqlExpression(new SqlColumnRef(null, "o", "CustomerID") { Column = ordCustIdCol }));
+
+        // tableDataRow = ordTable: c.ID is a cross-table reference → not cacheable
+        Assert.False(binExpr.IsCacheableShape(ordTable));
+
+        // tableDataRow = custTable: o.CustomerID is a cross-table reference → not cacheable
+        Assert.False(binExpr.IsCacheableShape(custTable));
+
+        // tableDataRow = null: backward-compat — both Column arms pass, so cacheable
+        Assert.True(binExpr.IsCacheableShape(null));
+
+        // Pure local-column predicate "o.CustomerID = literal" with tableDataRow = ordTable
+        // must still be cacheable (single-table fast path must not be broken).
+        var localExpr = new SqlBinaryExpression(
+            new SqlExpression(new SqlColumnRef(null, "o", "CustomerID") { Column = ordCustIdCol }),
+            SqlBinaryOperator.Equal,
+            new SqlExpression(new SqlLiteralValue(42)));
+        Assert.True(localExpr.IsCacheableShape(ordTable));
+    }
+
+    #endregion
 }
