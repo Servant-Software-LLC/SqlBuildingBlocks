@@ -20,6 +20,10 @@ jobs:
   build:
 
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write       # OIDC token for NuGet Trusted Publishing
+      pull-requests: write  # coverage PR comment (marocchino/sticky-pull-request-comment)
 
     steps:
     - uses: actions/checkout@v6
@@ -70,25 +74,32 @@ jobs:
         name: Nuget Packages
         path: ${{github.workspace}}/src/**/*.nupkg
 
+    - name: NuGet login (OIDC → short-lived API key)
+      if: github.ref == 'refs/heads/main'
+      uses: NuGet/login@v1
+      id: login
+      with:
+        user: ${{ secrets.NUGET_USER }}
+
     - name: Push to nuget.org (Core)
       if: github.ref == 'refs/heads/main'
-      run: dotnet nuget push ${{github.workspace}}/src/bin/$BuildConfiguration/$CoreId.$PackageVersion.nupkg -s https://api.nuget.org/v3/index.json -k ${{ secrets.NUGET_ORG_API_KEY }} --skip-duplicate
+      run: dotnet nuget push ${{github.workspace}}/src/bin/$BuildConfiguration/$CoreId.$PackageVersion.nupkg -s https://api.nuget.org/v3/index.json -k ${{ steps.login.outputs.NUGET_API_KEY }} --skip-duplicate
 
     - name: Push to nuget.org (Grammars.AnsiSQL)
       if: github.ref == 'refs/heads/main'
-      run: dotnet nuget push ${{github.workspace}}/src/bin/$BuildConfiguration/$GrammarsAnsiSQLId.$PackageVersion.nupkg -s https://api.nuget.org/v3/index.json -k ${{ secrets.NUGET_ORG_API_KEY }} --skip-duplicate
+      run: dotnet nuget push ${{github.workspace}}/src/bin/$BuildConfiguration/$GrammarsAnsiSQLId.$PackageVersion.nupkg -s https://api.nuget.org/v3/index.json -k ${{ steps.login.outputs.NUGET_API_KEY }} --skip-duplicate
 
     - name: Push to nuget.org (Grammars.MySQL)
       if: github.ref == 'refs/heads/main'
-      run: dotnet nuget push ${{github.workspace}}/src/bin/$BuildConfiguration/$GrammarsMySQLId.$PackageVersion.nupkg -s https://api.nuget.org/v3/index.json -k ${{ secrets.NUGET_ORG_API_KEY }} --skip-duplicate
+      run: dotnet nuget push ${{github.workspace}}/src/bin/$BuildConfiguration/$GrammarsMySQLId.$PackageVersion.nupkg -s https://api.nuget.org/v3/index.json -k ${{ steps.login.outputs.NUGET_API_KEY }} --skip-duplicate
 
     - name: Push to nuget.org (Grammars.PostgreSQL)
       if: github.ref == 'refs/heads/main'
-      run: dotnet nuget push ${{github.workspace}}/src/bin/$BuildConfiguration/$GrammarsPostgreSQLId.$PackageVersion.nupkg -s https://api.nuget.org/v3/index.json -k ${{ secrets.NUGET_ORG_API_KEY }} --skip-duplicate
+      run: dotnet nuget push ${{github.workspace}}/src/bin/$BuildConfiguration/$GrammarsPostgreSQLId.$PackageVersion.nupkg -s https://api.nuget.org/v3/index.json -k ${{ steps.login.outputs.NUGET_API_KEY }} --skip-duplicate
 
     - name: Push to nuget.org (Grammars.SQLServer)
       if: github.ref == 'refs/heads/main'
-      run: dotnet nuget push ${{github.workspace}}/src/bin/$BuildConfiguration/$GrammarsSQLServerId.$PackageVersion.nupkg -s https://api.nuget.org/v3/index.json -k ${{ secrets.NUGET_ORG_API_KEY }} --skip-duplicate
+      run: dotnet nuget push ${{github.workspace}}/src/bin/$BuildConfiguration/$GrammarsSQLServerId.$PackageVersion.nupkg -s https://api.nuget.org/v3/index.json -k ${{ steps.login.outputs.NUGET_API_KEY }} --skip-duplicate
     
     - name: Install ReportGenerator
       run: dotnet tool install -g dotnet-reportgenerator-globaltool
