@@ -1,5 +1,8 @@
 name: Build
 
+# Continuous integration: build + test + coverage on every push and PR.
+# Publishing to NuGet lives in release.yml (push a vX.Y.Z tag).
+
 on:
   push:
     branches: [ main ]
@@ -9,20 +12,13 @@ on:
 
 env:
   BuildConfiguration: Release
-  CoreId: SqlBuildingBlocks.Core
-  GrammarsAnsiSQLId: SqlBuildingBlocks.Grammars.AnsiSQL
-  GrammarsMySQLId: SqlBuildingBlocks.Grammars.MySQL
-  GrammarsPostgreSQLId: SqlBuildingBlocks.Grammars.PostgreSQL
-  GrammarsSQLServerId: SqlBuildingBlocks.Grammars.SQLServer
-  PackageVersion: 1.0.0.${{github.run_number}}
-  
+
 jobs:
   build:
 
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write       # OIDC token for NuGet Trusted Publishing
       pull-requests: write  # coverage PR comment (marocchino/sticky-pull-request-comment)
 
     steps:
@@ -65,42 +61,15 @@ jobs:
 
     - name: Test
       run: dotnet test --configuration $BuildConfiguration --no-build --verbosity normal --collect:"XPlat Code Coverage" --results-directory ./coverage
-      
+
     - name: Create nuget packages
-      run: dotnet pack --configuration $BuildConfiguration --no-build 
+      run: dotnet pack --configuration $BuildConfiguration --no-build
 
     - uses: actions/upload-artifact@v7
       with:
         name: Nuget Packages
         path: ${{github.workspace}}/src/**/*.nupkg
 
-    - name: NuGet login (OIDC → short-lived API key)
-      if: github.ref == 'refs/heads/main'
-      uses: NuGet/login@v1
-      id: login
-      with:
-        user: ${{ secrets.NUGET_USER }}
-
-    - name: Push to nuget.org (Core)
-      if: github.ref == 'refs/heads/main'
-      run: dotnet nuget push ${{github.workspace}}/src/bin/$BuildConfiguration/$CoreId.$PackageVersion.nupkg -s https://api.nuget.org/v3/index.json -k ${{ steps.login.outputs.NUGET_API_KEY }} --skip-duplicate
-
-    - name: Push to nuget.org (Grammars.AnsiSQL)
-      if: github.ref == 'refs/heads/main'
-      run: dotnet nuget push ${{github.workspace}}/src/bin/$BuildConfiguration/$GrammarsAnsiSQLId.$PackageVersion.nupkg -s https://api.nuget.org/v3/index.json -k ${{ steps.login.outputs.NUGET_API_KEY }} --skip-duplicate
-
-    - name: Push to nuget.org (Grammars.MySQL)
-      if: github.ref == 'refs/heads/main'
-      run: dotnet nuget push ${{github.workspace}}/src/bin/$BuildConfiguration/$GrammarsMySQLId.$PackageVersion.nupkg -s https://api.nuget.org/v3/index.json -k ${{ steps.login.outputs.NUGET_API_KEY }} --skip-duplicate
-
-    - name: Push to nuget.org (Grammars.PostgreSQL)
-      if: github.ref == 'refs/heads/main'
-      run: dotnet nuget push ${{github.workspace}}/src/bin/$BuildConfiguration/$GrammarsPostgreSQLId.$PackageVersion.nupkg -s https://api.nuget.org/v3/index.json -k ${{ steps.login.outputs.NUGET_API_KEY }} --skip-duplicate
-
-    - name: Push to nuget.org (Grammars.SQLServer)
-      if: github.ref == 'refs/heads/main'
-      run: dotnet nuget push ${{github.workspace}}/src/bin/$BuildConfiguration/$GrammarsSQLServerId.$PackageVersion.nupkg -s https://api.nuget.org/v3/index.json -k ${{ steps.login.outputs.NUGET_API_KEY }} --skip-duplicate
-    
     - name: Install ReportGenerator
       run: dotnet tool install -g dotnet-reportgenerator-globaltool
 
@@ -124,5 +93,3 @@ jobs:
       with:
         recreate: true
         path: coverage/report/SummaryGithub.md
-
-
