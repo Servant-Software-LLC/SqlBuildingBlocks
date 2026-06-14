@@ -2,23 +2,23 @@
 name: uber-report
 description: |
   Run the SqlBuildingBlocks five-agent assessment team against the current GitHub issue
-  backlog and generate a unified status + readiness report with a lightweight local task
-  index. Use at the start of a work session to get the current readiness picture, or after
-  filing new issues to reassess sequencing and risks.
-  The GitHub issues are the single source of truth for task descriptions and rationale.
-  The local task index stores only execution metadata: filesExpected, dependsOn, status,
-  wave tracking — for use by `/execute-tasks`.
+  backlog and generate a unified status + readiness report with a lightweight local
+  findings index. Use at the start of a work session to get the current readiness picture,
+  or after filing new issues to reassess sequencing and risks.
+  The GitHub issues are the single source of truth for finding descriptions and rationale.
+  The local findings index stores only execution metadata: filesExpected, dependsOn,
+  status, wave tracking, route — for use by `/execute-tasks`.
 ---
 
 # SqlBuildingBlocks Uber Report
 
 Run the SqlBuildingBlocks agent team (Developer, QA, Architect, Devil's Advocate, Plan
 Reviewer) against the current state of open GitHub issues, synthesize their findings into
-a unified readiness report, and create a lightweight task index.
+a unified readiness report, and create a lightweight findings index.
 
 **Where things live:**
-- Task descriptions, acceptance criteria, rationale → GitHub issues (source of truth)
-- Execution metadata (filesExpected, dependsOn, wave tracking) → `.claude/tasks/*.tasks.json`
+- Finding descriptions, acceptance criteria, rationale → GitHub issues (source of truth)
+- Execution metadata (filesExpected, dependsOn, wave tracking, route) → `.claude/tasks/*.findings.json`
 - Reports → `.claude/tasks/*.md`
 
 **Repo coordinates:**
@@ -29,15 +29,15 @@ a unified readiness report, and create a lightweight task index.
 
 ## Step 1: Gather Prior Context
 
-1. Glob `.claude/tasks/*.tasks.json`, sort by path to find the latest (highest date, then
+1. Glob `.claude/tasks/*.findings.json`, sort by path to find the latest (highest date, then
    highest version within that date).
-2. If a prior tasks file exists, read it. Build two lists:
-   - **Closed issues**: any task whose `ghIssue` number is now closed — confirm with
+2. If a prior findings file exists, read it. Build two lists:
+   - **Closed issues**: any finding whose `ghIssue` number is now closed — confirm with
      `gh issue view <N> --json state --repo Servant-Software-LLC/SqlBuildingBlocks` and
      mark `status: "completed"` if `state` is `"CLOSED"`.
-   - **Still-open tasks**: `pending`, `in_progress`, or `blocked` — carry forward as
+   - **Still-open findings**: `pending`, `in_progress`, or `blocked` — carry forward as
      candidates for the new index.
-3. If no prior tasks file exists, start fresh.
+3. If no prior findings file exists, start fresh.
 
 ---
 
@@ -264,7 +264,7 @@ After all five agents return, produce one unified report:
 **Date**: [TODAY'S DATE]
 **Analyzed by**: SqlBuildingBlocks agent team (Developer, QA, Architect, Devil's Advocate, Plan Reviewer)
 **Prior report**: [path or "(none)"]
-**Task index**: [path to .tasks.json]
+**Findings index**: [path to .findings.json]
 **Changes since last report**: [issues opened or closed since last run]
 **WIP at start**: [one-line summary]
 
@@ -346,8 +346,8 @@ If no overlap blocks were emitted and the working tree was clean, skip to Step 4
 
 ### 4.25.3 Apply dispositions
 - **Land** — commit on `wip-land/<descriptor>`, post a comment on the overlapping issue,
-  mark task `in_progress` with branch reference.
-- **Fold** — add the WIP's files to the relevant task's `filesExpected`. Note in `notes`.
+  mark the finding `in_progress` with branch reference.
+- **Fold** — add the WIP's files to the relevant finding's `filesExpected`. Note in `notes`.
 - **Discard** — record the decision in Part 0; user reverts manually.
 - **Park** — move WIP to `wip/<descriptor>`, file tracking issue, record number in Part 0.
 
@@ -381,15 +381,15 @@ If `gh issue create` fails, log and continue.
 
 ### 4.5.4 Record newly filed issues
 Capture `{ ghIssue, title, priority, effort, filesExpected, dependsOn }` for each. These
-go in the task index in Step 5 and Part 7 of the report.
+go in the findings index in Step 5 and Part 7 of the report.
 
 ---
 
-## Step 5: Generate the Task Index
+## Step 5: Generate the Findings Index
 
-Create a `.tasks.json` alongside the report. Index covers P0 and P1 issues only.
+Create a `.findings.json` alongside the report. Index covers P0 and P1 issues only.
 
-**Naming**: `YYYY-MM-DD-uber-report-vN.tasks.json`
+**Naming**: `YYYY-MM-DD-uber-report-vN.findings.json`
 
 ### Schema
 
@@ -399,13 +399,15 @@ Create a `.tasks.json` alongside the report. Index covers P0 and P1 issues only.
   "indexVersion": 1,
   "milestone": "library-quality",
   "reportFile": "YYYY-MM-DD-uber-report-vN.md",
-  "tasksFile": "YYYY-MM-DD-uber-report-vN.tasks.json",
-  "priorTasksFile": "path/to/prior.tasks.json or null",
-  "tasks": [
+  "findingsFile": "YYYY-MM-DD-uber-report-vN.findings.json",
+  "priorFindingsFile": "path/to/prior.findings.json or null",
+  "sourceOfTruth": "github-issues",
+  "findings": [
     {
       "ghIssue": 155,
       "priority": "P0",
       "effort": "S",
+      "route": "direct",
       "status": "pending",
       "filesExpected": [
         "Packages.props",
@@ -431,6 +433,7 @@ Create a `.tasks.json` alongside the report. Index covers P0 and P1 issues only.
 | `ghIssue` | number | GitHub issue number — primary identifier |
 | `priority` | string | P0, P1, P2, P3 |
 | `effort` | string | S (< 1 day), M (1–3 days), L (1–2 weeks) |
+| `route` | string | `direct`, `execute-tasks`, `guardrails`, `decide` — the lane this finding is routed to (see Routing) |
 | `status` | string | `pending`, `in_progress`, `completed`, `skipped`, `blocked`, `manual_required` |
 | `filesExpected` | array | Files the implementation is expected to touch |
 | `dependsOn` | array | GH issue numbers that must be completed first |
@@ -438,6 +441,20 @@ Create a `.tasks.json` alongside the report. Index covers P0 and P1 issues only.
 | `completedCommit` | string/null | Git commit hash |
 | `completedWave` | number/null | Wave number that completed this |
 | `notes` | string | Implementation observations, blockers, partial-work details |
+
+### Routing
+
+The findings index is a **router** — not every finding earns the same lane. The
+orchestrator proposes a `route` per finding (from effort + risk + blast radius); the human
+confirms.
+
+- **`direct`** — trivial, self-evidently correct, low blast radius (rename a test, fix a
+  typo, bump a dep). Just do it: no plan, no ceremony.
+- **`execute-tasks`** — standard work an agent can implement under normal review. The
+  normal lane, and **most findings**.
+- **`guardrails`** — plan-worthy: multi-step, touches a contract/invariant/public API,
+  needs authored tests, or carries high regression cost. Graduates to `/plan-breakdown`.
+- **`decide`** — needs a human call or a research pass before it's actionable.
 
 ### Populating `filesExpected`
 
@@ -459,5 +476,5 @@ dependencies.
    - Glob `.claude/tasks/YYYY-MM-DD-uber-report-v*.md`
    - First report of the day: `N=1`. Subsequent: next available.
 3. Write report: `.claude/tasks/YYYY-MM-DD-uber-report-vN.md`
-4. Write index: `.claude/tasks/YYYY-MM-DD-uber-report-vN.tasks.json`
+4. Write index: `.claude/tasks/YYYY-MM-DD-uber-report-vN.findings.json`
 5. Report both file paths to the user.
